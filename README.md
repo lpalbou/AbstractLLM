@@ -14,6 +14,7 @@ A lightweight, unified interface for interacting with multiple Large Language Mo
 - 🔌 **Provider Agnostic**: Switch between providers with minimal code changes
 - 🎛️ **Configurable**: Flexible configuration at initialization or per-request
 - 📝 **System Prompts**: Standardized handling of system prompts across providers
+- 🖼️ **Vision Capabilities**: Support for multimodal models with image inputs
 - 📊 **Capabilities Inspection**: Query models for their capabilities
 - 📝 **Logging**: Built-in request and response logging
 - 🔤 **Type-Safe Parameters**: Enum-based parameters for enhanced IDE support and error prevention
@@ -190,6 +191,42 @@ response = llm.generate(
     system_prompt="You are a physics professor explaining to a high school student."
 )
 ```
+
+## Vision Capabilities
+
+AbstractLLM supports vision capabilities for models that can process images:
+
+```python
+from abstractllm import create_llm, ModelParameter, ModelCapability
+
+# Create an LLM instance with a vision-capable model
+llm = create_llm("openai", **{
+    ModelParameter.MODEL: "gpt-4o",  # Vision-capable model
+})
+
+# Check if vision is supported
+capabilities = llm.get_capabilities()
+if capabilities.get(ModelCapability.VISION):
+    # Use vision capabilities
+    image_url = "https://example.com/image.jpg"
+    response = llm.generate("What's in this image?", image=image_url)
+    print(response)
+    
+    # You can also use local image files
+    local_image = "/path/to/image.jpg"
+    response = llm.generate("Describe this image", image=local_image)
+    
+    # Or multiple images
+    images = ["https://example.com/image1.jpg", "/path/to/image2.jpg"]
+    response = llm.generate("Compare these images", images=images)
+```
+
+Supported vision models include:
+- OpenAI: `gpt-4-vision-preview`, `gpt-4-turbo`, `gpt-4o`
+- Anthropic: `claude-3-opus`, `claude-3-sonnet`, `claude-3-haiku`, `claude-3.5-sonnet`, `claude-3.5-haiku`
+- Ollama: `llama3.2-vision`, `deepseek-janus-pro`
+
+See the [Vision Capabilities Guide](docs/vision_guide.md) for more details.
 
 ## Capabilities
 

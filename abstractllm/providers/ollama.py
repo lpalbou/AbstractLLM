@@ -16,10 +16,17 @@ from abstractllm.utils.logging import (
     log_response,
     log_request_url
 )
+from abstractllm.utils.image import preprocess_image_inputs
 
 # Configure logger with specific class path
 logger = logging.getLogger("abstractllm.providers.ollama.OllamaProvider")
 
+# Models that support vision capabilities
+VISION_CAPABLE_MODELS = [
+    "llama3.2-vision",
+    "deepseek-janus-pro",
+    "erwan2/DeepSeek-Janus-Pro-7B"
+]
 
 class OllamaProvider(AbstractLLMInterface):
     """
@@ -57,6 +64,8 @@ class OllamaProvider(AbstractLLMInterface):
             system_prompt: Override the system prompt in the config
             stream: Whether to stream the response
             **kwargs: Additional parameters to override configuration
+                - image: A single image (URL, file path, base64 string, or dict)
+                - images: List of images (URLs, file paths, base64 strings, or dicts)
             
         Returns:
             The generated response or a generator if streaming
@@ -76,18 +85,30 @@ class OllamaProvider(AbstractLLMInterface):
         system_prompt = system_prompt or system_prompt_from_config
         max_tokens = params.get(ModelParameter.MAX_TOKENS, params.get("max_tokens"))
         top_p = params.get(ModelParameter.TOP_P, params.get("top_p", 1.0))
+        top_k = params.get(ModelParameter.TOP_K, params.get("top_k", 40))
         stop = params.get(ModelParameter.STOP, params.get("stop"))
         
         # Log at INFO level
         logger.info(f"Generating response with Ollama model: {model}")
         
         # Log detailed parameters at DEBUG level
-        logger.debug(f"Generation parameters: temperature={temperature}, max_tokens={max_tokens}, top_p={top_p}")
+        logger.debug(f"Generation parameters: temperature={temperature}, max_tokens={max_tokens}, top_p={top_p}, top_k={top_k}")
         logger.debug(f"Using Ollama instance at: {base_url}")
         if system_prompt:
             logger.debug("Using system prompt")
         if stop:
             logger.debug(f"Using stop sequences: {stop}")
+        
+        # Check if model supports vision
+        has_vision = any(vm in model.lower() for vm in VISION_CAPABLE_MODELS)
+        
+        # Process image inputs if any
+        image_request = False
+        if has_vision and (ModelParameter.IMAGE in params or "image" in params or 
+                          ModelParameter.IMAGES in params or "images" in params):
+            logger.info("Processing image inputs for vision request")
+            image_request = True
+            params = preprocess_image_inputs(params, "ollama")
         
         # Build the request
         request_data = {
@@ -95,6 +116,7 @@ class OllamaProvider(AbstractLLMInterface):
             "prompt": prompt,
             "temperature": temperature,
             "top_p": top_p,
+            "top_k": top_k,
             "stream": stream,
             "options": {}  # Additional options can go here
         }
@@ -110,6 +132,10 @@ class OllamaProvider(AbstractLLMInterface):
         # Add stop sequences if provided
         if stop:
             request_data["options"]["stop"] = stop if isinstance(stop, list) else [stop]
+            
+        # Include images if provided through preprocess_image_inputs
+        if "images" in params:
+            request_data["images"] = params["images"]
         
         # Log the request
         log_request("ollama", prompt, {
@@ -117,7 +143,8 @@ class OllamaProvider(AbstractLLMInterface):
             "temperature": temperature,
             "base_url": base_url,
             "has_system_prompt": system_prompt is not None,
-            "stream": stream
+            "stream": stream,
+            "image_request": image_request
         })
         
         # Log API request URL
@@ -177,6 +204,8 @@ class OllamaProvider(AbstractLLMInterface):
             system_prompt: Override the system prompt in the config
             stream: Whether to stream the response
             **kwargs: Additional parameters to override configuration
+                - image: A single image (URL, file path, base64 string, or dict)
+                - images: List of images (URLs, file paths, base64 strings, or dicts)
             
         Returns:
             The generated response or an async generator if streaming
@@ -196,18 +225,30 @@ class OllamaProvider(AbstractLLMInterface):
         system_prompt = system_prompt or system_prompt_from_config
         max_tokens = params.get(ModelParameter.MAX_TOKENS, params.get("max_tokens"))
         top_p = params.get(ModelParameter.TOP_P, params.get("top_p", 1.0))
+        top_k = params.get(ModelParameter.TOP_K, params.get("top_k", 40))
         stop = params.get(ModelParameter.STOP, params.get("stop"))
         
         # Log at INFO level
         logger.info(f"Generating async response with Ollama model: {model}")
         
         # Log detailed parameters at DEBUG level
-        logger.debug(f"Generation parameters: temperature={temperature}, max_tokens={max_tokens}, top_p={top_p}")
+        logger.debug(f"Generation parameters: temperature={temperature}, max_tokens={max_tokens}, top_p={top_p}, top_k={top_k}")
         logger.debug(f"Using Ollama instance at: {base_url}")
         if system_prompt:
             logger.debug("Using system prompt")
         if stop:
             logger.debug(f"Using stop sequences: {stop}")
+        
+        # Check if model supports vision
+        has_vision = any(vm in model.lower() for vm in VISION_CAPABLE_MODELS)
+        
+        # Process image inputs if any
+        image_request = False
+        if has_vision and (ModelParameter.IMAGE in params or "image" in params or 
+                          ModelParameter.IMAGES in params or "images" in params):
+            logger.info("Processing image inputs for vision request")
+            image_request = True
+            params = preprocess_image_inputs(params, "ollama")
         
         # Build the request
         request_data = {
@@ -215,6 +256,7 @@ class OllamaProvider(AbstractLLMInterface):
             "prompt": prompt,
             "temperature": temperature,
             "top_p": top_p,
+            "top_k": top_k,
             "stream": stream,
             "options": {}  # Additional options can go here
         }
@@ -230,6 +272,10 @@ class OllamaProvider(AbstractLLMInterface):
         # Add stop sequences if provided
         if stop:
             request_data["options"]["stop"] = stop if isinstance(stop, list) else [stop]
+            
+        # Include images if provided through preprocess_image_inputs
+        if "images" in params:
+            request_data["images"] = params["images"]
         
         # Log the request
         log_request("ollama", prompt, {
@@ -238,7 +284,7 @@ class OllamaProvider(AbstractLLMInterface):
             "base_url": base_url,
             "has_system_prompt": system_prompt is not None,
             "stream": stream,
-            "async": True
+            "image_request": image_request
         })
         
         # Log API request URL
@@ -294,11 +340,19 @@ class OllamaProvider(AbstractLLMInterface):
         Returns:
             Dictionary of capabilities
         """
+        # Get current model
+        model = self.config.get(ModelParameter.MODEL, self.config.get("model", "llama2"))
+        
+        # Check if model is vision-capable - ensure model is not None before checking
+        has_vision = False
+        if model:
+            has_vision = any(vm in model.lower() for vm in VISION_CAPABLE_MODELS)
+        
         return {
             ModelCapability.STREAMING: True,
             ModelCapability.MAX_TOKENS: None,  # Varies by model
             ModelCapability.SYSTEM_PROMPT: True,
             ModelCapability.ASYNC: True,
             ModelCapability.FUNCTION_CALLING: False,  # Not supported natively
-            ModelCapability.VISION: False  # Depends on model, assume False by default
+            ModelCapability.VISION: has_vision  # Depends on model
         } 

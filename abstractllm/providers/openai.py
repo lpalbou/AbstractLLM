@@ -6,6 +6,8 @@ from typing import Dict, Any, Optional, Union, Generator, AsyncGenerator
 import os
 import asyncio
 import logging
+import time
+import json
 
 from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability, create_config
 from abstractllm.utils.logging import (
@@ -15,10 +17,18 @@ from abstractllm.utils.logging import (
     log_api_key_missing,
     log_request_url
 )
+from abstractllm.utils.image import preprocess_image_inputs
 
 # Configure logger with specific class path
 logger = logging.getLogger("abstractllm.providers.openai.OpenAIProvider")
 
+# Models that support vision capabilities
+VISION_CAPABLE_MODELS = [
+    "gpt-4-vision-preview", 
+    "gpt-4-turbo", 
+    "gpt-4o",
+    "gpt-4o-2024-05-13"
+]
 
 class OpenAIProvider(AbstractLLMInterface):
     """
@@ -27,15 +37,18 @@ class OpenAIProvider(AbstractLLMInterface):
     
     def __init__(self, config: Optional[Dict[Union[str, ModelParameter], Any]] = None):
         """
-        Initialize the OpenAI provider.
-        
+        Initialize the OpenAI API provider with given configuration.
+
         Args:
-            config: Configuration dictionary
+            config: Configuration dictionary with required parameters.
         """
         super().__init__(config)
         
-        # Set default configuration
-        if ModelParameter.API_KEY not in self.config and "api_key" not in self.config:
+        # Get API key from config or environment
+        api_key = self.config.get(ModelParameter.API_KEY, self.config.get("api_key"))
+        
+        # Try getting the API key from environment if not in config
+        if not api_key:
             env_api_key = os.environ.get("OPENAI_API_KEY")
             if env_api_key:
                 self.config[ModelParameter.API_KEY] = env_api_key
@@ -61,6 +74,9 @@ class OpenAIProvider(AbstractLLMInterface):
             system_prompt: Override the system prompt in the config
             stream: Whether to stream the response
             **kwargs: Additional parameters to override configuration
+                - image: A single image (URL, file path, base64 string, or dict)
+                - images: List of images (URLs, file paths, base64 strings, or dicts)
+                - image_detail: Detail level for image analysis ('low', 'high', 'auto')
             
         Returns:
             The generated response or a generator if streaming
@@ -105,6 +121,9 @@ class OpenAIProvider(AbstractLLMInterface):
         presence_penalty = params.get(ModelParameter.PRESENCE_PENALTY, params.get("presence_penalty", 0.0))
         stop = params.get(ModelParameter.STOP, params.get("stop"))
         
+        # Handle image detail parameter for vision models
+        image_detail = params.get(ModelParameter.IMAGE_DETAIL, params.get("image_detail", "auto"))
+        
         # Log at INFO level
         logger.info(f"Generating response with OpenAI model: {model}")
         
@@ -123,12 +142,32 @@ class OpenAIProvider(AbstractLLMInterface):
                 "set the OPENAI_API_KEY environment variable."
             )
         
+        # Check if model supports vision
+        has_vision = any(model.startswith(vm) for vm in VISION_CAPABLE_MODELS)
+        
+        # Process image inputs if any, and if model supports vision
+        image_request = False
+        if has_vision and (ModelParameter.IMAGE in params or "image" in params or 
+                          ModelParameter.IMAGES in params or "images" in params):
+            logger.info("Processing image inputs for vision request")
+            image_request = True
+            params = preprocess_image_inputs(params, "openai")
+        
         # Prepare messages
-        messages = []
-        if system_prompt:
+        messages = params.get("messages", [])
+        
+        # Add system message if not already in messages
+        if system_prompt and not any(msg.get("role") == "system" for msg in messages):
             messages.append({"role": "system", "content": system_prompt})
         
-        messages.append({"role": "user", "content": prompt})
+        # Add user message if not already in messages and not an image request
+        # For image requests, the preprocess_image_inputs function already adds the user message
+        if not image_request and not any(msg.get("role") == "user" for msg in messages):
+            messages.append({"role": "user", "content": prompt})
+        
+        # For text-only requests, make sure messages exist
+        if not messages:
+            messages.append({"role": "user", "content": prompt})
         
         # Log the request
         log_request("openai", prompt, {
@@ -136,7 +175,8 @@ class OpenAIProvider(AbstractLLMInterface):
             "temperature": temperature,
             "max_tokens": max_tokens,
             "has_system_prompt": system_prompt is not None,
-            "stream": stream
+            "stream": stream,
+            "image_request": image_request
         })
         
         # Initialize client
@@ -196,6 +236,9 @@ class OpenAIProvider(AbstractLLMInterface):
             system_prompt: Override the system prompt in the config
             stream: Whether to stream the response
             **kwargs: Additional parameters to override configuration
+                - image: A single image (URL, file path, base64 string, or dict)
+                - images: List of images (URLs, file paths, base64 strings, or dicts)
+                - image_detail: Detail level for image analysis ('low', 'high', 'auto')
             
         Returns:
             The generated response or an async generator if streaming
@@ -240,6 +283,9 @@ class OpenAIProvider(AbstractLLMInterface):
         presence_penalty = params.get(ModelParameter.PRESENCE_PENALTY, params.get("presence_penalty", 0.0))
         stop = params.get(ModelParameter.STOP, params.get("stop"))
         
+        # Handle image detail parameter for vision models
+        image_detail = params.get(ModelParameter.IMAGE_DETAIL, params.get("image_detail", "auto"))
+        
         # Log at INFO level
         logger.info(f"Generating async response with OpenAI model: {model}")
         
@@ -258,12 +304,32 @@ class OpenAIProvider(AbstractLLMInterface):
                 "set the OPENAI_API_KEY environment variable."
             )
         
+        # Check if model supports vision
+        has_vision = any(model.startswith(vm) for vm in VISION_CAPABLE_MODELS)
+        
+        # Process image inputs if any
+        image_request = False
+        if has_vision and (ModelParameter.IMAGE in params or "image" in params or 
+                          ModelParameter.IMAGES in params or "images" in params):
+            logger.info("Processing image inputs for vision request")
+            image_request = True
+            params = preprocess_image_inputs(params, "openai")
+        
         # Prepare messages
-        messages = []
-        if system_prompt:
+        messages = params.get("messages", [])
+        
+        # Add system message if not already in messages
+        if system_prompt and not any(msg.get("role") == "system" for msg in messages):
             messages.append({"role": "system", "content": system_prompt})
         
-        messages.append({"role": "user", "content": prompt})
+        # Add user message if not already in messages and not an image request
+        # For image requests, the preprocess_image_inputs function already adds the user message
+        if not image_request and not any(msg.get("role") == "user" for msg in messages):
+            messages.append({"role": "user", "content": prompt})
+        
+        # For text-only requests, make sure messages exist
+        if not messages:
+            messages.append({"role": "user", "content": prompt})
         
         # Log the request
         log_request("openai", prompt, {
@@ -272,7 +338,7 @@ class OpenAIProvider(AbstractLLMInterface):
             "max_tokens": max_tokens,
             "has_system_prompt": system_prompt is not None,
             "stream": stream,
-            "async": True
+            "image_request": image_request
         })
         
         # Initialize async client
@@ -326,11 +392,19 @@ class OpenAIProvider(AbstractLLMInterface):
         Returns:
             Dictionary of capabilities
         """
+        # Get current model
+        model = self.config.get(ModelParameter.MODEL, self.config.get("model", "gpt-3.5-turbo"))
+        
+        # Check if model is vision-capable - ensure model is not None before checking
+        has_vision = False
+        if model:
+            has_vision = any(model.startswith(vm) for vm in VISION_CAPABLE_MODELS)
+        
         return {
             ModelCapability.STREAMING: True,
             ModelCapability.MAX_TOKENS: 4096,  # This varies by model
             ModelCapability.SYSTEM_PROMPT: True,
             ModelCapability.ASYNC: True,
             ModelCapability.FUNCTION_CALLING: True,
-            ModelCapability.VISION: True  # For models that support it like GPT-4 Vision
+            ModelCapability.VISION: has_vision  # Dynamic based on model
         } 

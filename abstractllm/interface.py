@@ -43,6 +43,11 @@ class ModelParameter(str, Enum):
     REQUEST_TIMEOUT = "request_timeout"  # Timeout specifically for HTTP requests
     MAX_RETRIES = "max_retries"  # Maximum number of retry attempts
     
+    # Vision support parameters
+    IMAGE = "image"  # Single image input (URL, path, or base64)
+    IMAGES = "images"  # Multiple image inputs (list of URLs, paths, or base64 strings)
+    IMAGE_DETAIL = "image_detail"  # Detail level for image processing (e.g., 'low', 'high')
+    
     # Security & compliance parameters
     CONTENT_FILTER = "content_filter"  # Content filtering level
     MODERATION = "moderation"  # Whether to perform moderation

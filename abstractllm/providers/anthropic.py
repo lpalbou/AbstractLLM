@@ -16,9 +16,20 @@ from abstractllm.utils.logging import (
     log_api_key_missing,
     log_request_url
 )
+from abstractllm.utils.image import preprocess_image_inputs
 
 # Configure logger with specific class path
 logger = logging.getLogger("abstractllm.providers.anthropic.AnthropicProvider")
+
+# Models that support vision capabilities
+VISION_CAPABLE_MODELS = [
+    "claude-3-opus", 
+    "claude-3-sonnet", 
+    "claude-3-haiku",
+    "claude-3.5-sonnet",
+    "claude-3.5-haiku",
+    "claude-3-7-sonnet"
+]
 
 # Try to import Anthropic API
 try:
@@ -84,6 +95,8 @@ class AnthropicProvider(AbstractLLMInterface):
             system_prompt: Override the system prompt in the config
             stream: Whether to stream the response
             **kwargs: Additional parameters to override configuration
+                - image: A single image (URL, file path, base64 string, or dict)
+                - images: List of images (URLs, file paths, base64 strings, or dicts)
             
         Returns:
             The generated response or a generator if streaming
@@ -130,13 +143,25 @@ class AnthropicProvider(AbstractLLMInterface):
                 "set the ANTHROPIC_API_KEY environment variable."
             )
         
+        # Check if model supports vision
+        has_vision = any(model.startswith(vm) for vm in VISION_CAPABLE_MODELS)
+        
+        # Process image inputs if any, and if model supports vision
+        image_request = False
+        if has_vision and (ModelParameter.IMAGE in params or "image" in params or 
+                          ModelParameter.IMAGES in params or "images" in params):
+            logger.info("Processing image inputs for vision request")
+            image_request = True
+            params = preprocess_image_inputs(params, "anthropic")
+        
         # Log the request
         log_request("anthropic", prompt, {
             "model": model,
             "temperature": temperature,
             "max_tokens": max_tokens,
             "has_system_prompt": system_prompt is not None,
-            "stream": stream
+            "stream": stream,
+            "image_request": image_request
         })
         
         # Initialize client
@@ -151,11 +176,17 @@ class AnthropicProvider(AbstractLLMInterface):
             "max_tokens": max_tokens,
             "temperature": temperature,
             "top_p": top_p,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
             "stream": stream
         }
+        
+        # Add messages if provided through the preprocess_image_inputs function
+        if "messages" in params:
+            message_params["messages"] = params["messages"]
+        else:
+            # Otherwise, create a simple user message
+            message_params["messages"] = [
+                {"role": "user", "content": prompt}
+            ]
         
         if system_prompt:
             message_params["system"] = system_prompt
@@ -203,6 +234,8 @@ class AnthropicProvider(AbstractLLMInterface):
             system_prompt: Override the system prompt in the config
             stream: Whether to stream the response
             **kwargs: Additional parameters to override configuration
+                - image: A single image (URL, file path, base64 string, or dict)
+                - images: List of images (URLs, file paths, base64 strings, or dicts)
             
         Returns:
             The generated response or an async generator if streaming
@@ -248,39 +281,30 @@ class AnthropicProvider(AbstractLLMInterface):
                 "Anthropic API key not provided. Pass it as a parameter in config or "
                 "set the ANTHROPIC_API_KEY environment variable."
             )
+            
+        # Check if model supports vision
+        has_vision = any(model.startswith(vm) for vm in VISION_CAPABLE_MODELS)
         
+        # Process image inputs if any, and if model supports vision
+        image_request = False
+        if has_vision and (ModelParameter.IMAGE in params or "image" in params or 
+                          ModelParameter.IMAGES in params or "images" in params):
+            logger.info("Processing image inputs for vision request")
+            image_request = True
+            params = preprocess_image_inputs(params, "anthropic")
+            
         # Log the request
         log_request("anthropic", prompt, {
             "model": model,
             "temperature": temperature,
             "max_tokens": max_tokens,
             "has_system_prompt": system_prompt is not None,
-            "stream": stream
+            "stream": stream,
+            "image_request": image_request
         })
         
         # Initialize client
-        try:
-            # Try to initialize AsyncAnthropic client for better performance
-            client = anthropic.AsyncAnthropic(api_key=api_key)
-        except (AttributeError, ImportError):
-            # Fallback to synchronous client with asyncio if AsyncAnthropic is not available
-            logger.warning("AsyncAnthropic not available, falling back to synchronous client")
-            client = anthropic.Anthropic(api_key=api_key)
-            
-            # If we're using the sync client, modify our approach for the non-streaming case
-            if not stream:
-                # Run the synchronous method in an executor
-                loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(
-                    None, 
-                    lambda: self.generate(
-                        prompt=prompt, 
-                        system_prompt=system_prompt, 
-                        stream=False, 
-                        **kwargs
-                    )
-                )
-                return result
+        client = anthropic.AsyncAnthropic(api_key=api_key) if hasattr(anthropic, "AsyncAnthropic") else None
         
         # Log API request (without exposing API key)
         log_request_url("anthropic", f"https://api.anthropic.com/v1/messages (model: {model})")
@@ -291,11 +315,17 @@ class AnthropicProvider(AbstractLLMInterface):
             "max_tokens": max_tokens,
             "temperature": temperature,
             "top_p": top_p,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
             "stream": stream
         }
+        
+        # Add messages if provided through the preprocess_image_inputs function
+        if "messages" in params:
+            message_params["messages"] = params["messages"]
+        else:
+            # Otherwise, create a simple user message
+            message_params["messages"] = [
+                {"role": "user", "content": prompt}
+            ]
         
         if system_prompt:
             message_params["system"] = system_prompt
@@ -307,39 +337,43 @@ class AnthropicProvider(AbstractLLMInterface):
         if stream:
             logger.info("Starting async streaming generation")
             
-            async def async_generator():
-                # Create a copy of message_params for streaming (without the 'stream' parameter)
-                streaming_params = message_params.copy()
-                if 'stream' in streaming_params:
-                    # Remove the 'stream' parameter as it's not needed for client.messages.stream()
-                    del streaming_params['stream']
-                
-                # Check if we're using the async client or the sync client
-                if hasattr(client, 'messages') and hasattr(client.messages, 'stream'):
-                    # Using AsyncAnthropic
+            if client and hasattr(client, 'messages') and hasattr(client.messages, 'stream'):
+                # Using AsyncAnthropic
+                async def async_generator():
+                    # Create a copy of message_params for streaming (without the 'stream' parameter)
+                    streaming_params = message_params.copy()
+                    if 'stream' in streaming_params:
+                        del streaming_params['stream']
+                    
                     async with client.messages.stream(**streaming_params) as stream:
                         async for text in stream.text_stream:
                             yield text
-                else:
-                    # Fallback to sync client with manual async wrapper
-                    logger.warning("Using synchronous streaming with async wrapper - not optimal")
-                    # Use the synchronous generate method with streaming
-                    sync_gen = self.generate(
+                
+                return async_generator()
+            else:
+                logger.warning("Async streaming not directly supported by Anthropic client, falling back to sync")
+                # Fallback to sync version in an asyncio executor
+                loop = asyncio.get_event_loop()
+                sync_generator = await loop.run_in_executor(
+                    None, 
+                    lambda: self.generate(
                         prompt=prompt, 
                         system_prompt=system_prompt, 
                         stream=True, 
                         **kwargs
                     )
-                    # Wrap the sync generator in an async generator
-                    for chunk in sync_gen:
+                )
+                
+                # Convert sync generator to async generator
+                async def async_wrapper():
+                    for chunk in sync_generator:
                         yield chunk
-                        await asyncio.sleep(0)  # Allow other tasks to run
-            
-            return async_generator()
+                
+                return async_wrapper()
         else:
             # Handle non-streaming case
             # Check if we're using the async client or the sync client
-            if hasattr(client, 'messages') and hasattr(client.messages, 'create'):
+            if client and hasattr(client, 'messages') and hasattr(client.messages, 'create'):
                 # Using AsyncAnthropic
                 # Call API
                 response = await client.messages.create(**message_params)
@@ -373,11 +407,19 @@ class AnthropicProvider(AbstractLLMInterface):
         Returns:
             Dictionary of capabilities
         """
+        # Get current model
+        model = self.config.get(ModelParameter.MODEL, self.config.get("model", "claude-3-5-haiku-20241022"))
+        
+        # Check if model is vision-capable - ensure model is not None before checking
+        has_vision = False
+        if model:
+            has_vision = any(model.startswith(vm) for vm in VISION_CAPABLE_MODELS)
+        
         return {
             ModelCapability.STREAMING: True,
             ModelCapability.MAX_TOKENS: 100000,  # This varies by model
             ModelCapability.SYSTEM_PROMPT: True,
             ModelCapability.ASYNC: True,
             ModelCapability.FUNCTION_CALLING: True,  # Claude 3 supports tool use
-            ModelCapability.VISION: True  # Claude 3 supports vision
+            ModelCapability.VISION: has_vision  # Dynamic based on model
         } 
