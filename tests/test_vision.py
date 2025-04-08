@@ -26,8 +26,8 @@ os.makedirs(RESOURCES_DIR, exist_ok=True)
 # Define test image paths and their keywords
 TEST_IMAGES = {
     "mountain_path.jpg": {
-        "path": os.path.join(RESOURCES_DIR, "mountain_path.jpg"),
-        "url": "https://storage.googleapis.com/abstractllm-test-images/mountain_path.jpg",  # Replace with actual URL
+        "path": os.path.join(RESOURCES_DIR, "test_image_1.jpg"),
+        "url": "https://raw.githubusercontent.com/lpalbou/abstractllm/refs/heads/main/tests/examples/test_image_1.jpg",
         "keywords": [
             "mountain", "mountains", "range", "dirt", "path", "trail", "wooden", "fence", 
             "sunlight", "sunny", "blue sky", "grass", "meadow", "hiking", 
@@ -36,8 +36,8 @@ TEST_IMAGES = {
         "prompt": "Describe what you see in this image in detail."
     },
     "city_park_sunset.jpg": {
-        "path": os.path.join(RESOURCES_DIR, "city_park_sunset.jpg"),
-        "url": "https://storage.googleapis.com/abstractllm-test-images/city_park_sunset.jpg",  # Replace with actual URL
+        "path": os.path.join(RESOURCES_DIR, "test_image_2.jpg"),
+        "url": "https://raw.githubusercontent.com/lpalbou/abstractllm/refs/heads/main/tests/examples/test_image_2.jpg",
         "keywords": [
             "lamppost", "street light", "sunset", "dusk", "pink", "orange", "sky",
             "pathway", "walkway", "park", "urban", "trees", "buildings", "benches",
@@ -46,8 +46,8 @@ TEST_IMAGES = {
         "prompt": "What's shown in this image? Give a detailed description."
     },
     "humpback_whale.jpg": {
-        "path": os.path.join(RESOURCES_DIR, "humpback_whale.jpg"),
-        "url": "https://storage.googleapis.com/abstractllm-test-images/humpback_whale.jpg",  # Replace with actual URL
+        "path": os.path.join(RESOURCES_DIR, "test_image_3.jpg"),
+        "url": "https://raw.githubusercontent.com/lpalbou/abstractllm/refs/heads/main/tests/examples/test_image_3.jpg",
         "keywords": [
             "whale", "humpback", "ocean", "sea", "breaching", "jumping", "splash",
             "marine", "mammal", "fins", "flipper", "gray", "waves", "wildlife",
@@ -56,8 +56,8 @@ TEST_IMAGES = {
         "prompt": "Describe the creature in this image and what it's doing."
     },
     "cat_carrier.jpg": {
-        "path": os.path.join(RESOURCES_DIR, "cat_carrier.jpg"),
-        "url": "https://storage.googleapis.com/abstractllm-test-images/cat_carrier.jpg",  # Replace with actual URL
+        "path": os.path.join(RESOURCES_DIR, "test_image_4.jpg"),
+        "url": "https://raw.githubusercontent.com/lpalbou/abstractllm/refs/heads/main/tests/examples/test_image_4.jpg",
         "keywords": [
             "cat", "pet", "carrier", "transport", "dome", "window", "plastic",
             "orange", "tabby", "fur", "eyes", "round", "opening", "white", "base",
