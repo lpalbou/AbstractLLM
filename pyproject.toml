@@ -30,4 +30,4 @@ Repository = "https://github.com/lpalbou/abstractllm.git"
 "Bug Tracker" = "https://github.com/lpalbou/abstractllm/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/abstractllm"] 
+packages = ["abstractllm"] 

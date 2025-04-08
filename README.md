@@ -16,8 +16,33 @@ A lightweight, unified interface for interacting with multiple Large Language Mo
 - 📝 **System Prompts**: Standardized handling of system prompts across providers
 - 📊 **Capabilities Inspection**: Query models for their capabilities
 - 📝 **Logging**: Built-in request and response logging
+- 🔤 **Type-Safe Parameters**: Enum-based parameters for enhanced IDE support and error prevention
 
 ## Installation
+
+### Setting up a Virtual Environment
+
+You can use either conda or venv to create a virtual environment:
+
+#### Using conda
+```bash
+# Create a new conda environment
+conda create -n abstractllm python=3.8
+# Activate the environment
+conda activate abstractllm
+```
+
+#### Using venv
+```bash
+# Create a new virtual environment
+python -m venv abstractllm-env
+# Activate the environment (Linux/Mac)
+source abstractllm-env/bin/activate
+# Activate the environment (Windows)
+.\abstractllm-env\Scripts\activate
+```
+
+### Installing the Package
 
 ```bash
 # Basic installation
@@ -45,37 +70,77 @@ response = llm.generate("Explain quantum computing in simple terms.")
 print(response)
 ```
 
+## Type-Safe Parameters with Enums
+
+AbstractLLM provides enums for type-safe parameter settings:
+
+```python
+from abstractllm import create_llm, ModelParameter, ModelCapability
+
+# Create LLM with enum parameters
+llm = create_llm("openai", 
+                **{
+                    ModelParameter.API_KEY: "your-api-key",
+                    ModelParameter.MODEL: "gpt-4",
+                    ModelParameter.TEMPERATURE: 0.7
+                })
+
+# Check capabilities with enums
+capabilities = llm.get_capabilities()
+if capabilities[ModelCapability.STREAMING]:
+    # Use streaming...
+    pass
+```
+
 ## Supported Providers
 
 ### OpenAI
 
 ```python
+from abstractllm import create_llm, ModelParameter
+
 llm = create_llm("openai", 
-                api_key="your-api-key",
-                model="gpt-4")
+                **{
+                    ModelParameter.API_KEY: "your-api-key",
+                    ModelParameter.MODEL: "gpt-4"
+                })
 ```
 
 ### Anthropic
 
 ```python
+from abstractllm import create_llm, ModelParameter
+
 llm = create_llm("anthropic", 
-                api_key="your-api-key",
-                model="claude-3-opus-20240229")
+                **{
+                    ModelParameter.API_KEY: "your-api-key",
+                    ModelParameter.MODEL: "claude-3-opus-20240229"
+                })
 ```
 
 ### Ollama
 
 ```python
+from abstractllm import create_llm, ModelParameter
+
 llm = create_llm("ollama", 
-                base_url="http://localhost:11434",
-                model="llama2")
+                **{
+                    ModelParameter.BASE_URL: "http://localhost:11434",
+                    ModelParameter.MODEL: "llama2"
+                })
 ```
 
 ### Hugging Face
 
 ```python
+from abstractllm import create_llm, ModelParameter
+
 llm = create_llm("huggingface", 
-                model="google/gemma-7b")
+                **{
+                    ModelParameter.MODEL: "google/gemma-7b",
+                    ModelParameter.LOAD_IN_8BIT: True,
+                    ModelParameter.DEVICE_MAP: "auto"
+                })
 ```
 
 ## Configuration
@@ -83,11 +148,22 @@ llm = create_llm("huggingface",
 You can configure the LLM's behavior in several ways:
 
 ```python
-# At initialization
+from abstractllm import create_llm, ModelParameter
+
+# Using string keys (backwards compatible)
 llm = create_llm("openai", temperature=0.7, system_prompt="You are a helpful assistant.")
 
-# Update later
-llm.set_config({"temperature": 0.5})
+# Using enum keys (type-safe)
+llm = create_llm("openai", **{
+    ModelParameter.TEMPERATURE: 0.5,
+    ModelParameter.SYSTEM_PROMPT: "You are a helpful assistant."
+})
+
+# Update later with enums
+llm.update_config({ModelParameter.TEMPERATURE: 0.5})
+
+# Update with kwargs
+llm.set_config(temperature=0.9)
 
 # Per-request
 response = llm.generate("Hello", temperature=0.9)
@@ -98,11 +174,21 @@ response = llm.generate("Hello", temperature=0.9)
 System prompts help shape the model's personality and behavior:
 
 ```python
+from abstractllm import create_llm, ModelParameter
+
+# Using string keys
 llm = create_llm("openai", system_prompt="You are a helpful scientific assistant.")
 
+# Using enum keys
+llm = create_llm("openai", **{
+    ModelParameter.SYSTEM_PROMPT: "You are a helpful scientific assistant."
+})
+
 # Or for a specific request
-response = llm.generate("What is quantum entanglement?", 
-                     system_prompt="You are a physics professor explaining to a high school student.")
+response = llm.generate(
+    "What is quantum entanglement?", 
+    system_prompt="You are a physics professor explaining to a high school student."
+)
 ```
 
 ## Capabilities
@@ -110,21 +196,102 @@ response = llm.generate("What is quantum entanglement?",
 Check what capabilities a provider supports:
 
 ```python
+from abstractllm import create_llm, ModelCapability
+
+llm = create_llm("openai")
 capabilities = llm.get_capabilities()
-print(capabilities)
-# Example: {'streaming': True, 'max_tokens': 4096, 'supports_system_prompt': True}
+
+# Check using string keys
+if capabilities["streaming"]:
+    print("Streaming is supported!")
+    
+# Check using enum keys (type-safe)
+if capabilities[ModelCapability.STREAMING]:
+    print("Streaming is supported!")
+    
+if capabilities[ModelCapability.VISION]:
+    print("Vision capabilities are supported!")
 ```
 
 ## Logging
 
-AbstractLLM includes built-in logging:
+AbstractLLM includes built-in logging with hierarchical configuration:
 
 ```python
 import logging
 from abstractllm.utils.logging import setup_logging
 
 # Set up logging with desired level
-setup_logging(level=logging.DEBUG)
+setup_logging(level=logging.INFO)
+
+# Set up logging with different levels for providers
+setup_logging(level=logging.INFO, provider_level=logging.DEBUG)
+
+# Now all requests and responses will be logged
+llm = create_llm("openai")
+response = llm.generate("Hello, world!")
+```
+
+The logging system provides:
+
+- **INFO level**: Basic operation logging (queries being made, generation starting/completing)
+- **DEBUG level**: Detailed information including parameters, prompts, URLs, and responses
+- **Provider-specific loggers**: Each provider class uses its own logger (e.g., `abstractllm.providers.openai.OpenAIProvider`)
+- **Security-conscious logging**: API keys are never logged, even at DEBUG level
+
+## Testing
+
+AbstractLLM includes a comprehensive test suite that tests all aspects of the library with real implementations (no mocks).
+
+### Development Setup
+
+For development and testing, it's recommended to install the package in development mode:
+
+```bash
+# Clone the repository
+git clone https://github.com/lpalbou/abstractllm.git
+cd abstractllm
+
+# Install the package in development mode
+pip install -e .
+
+# Install test dependencies
+pip install -r requirements-test.txt
+```
+
+This installs the package in "editable" mode, meaning changes to the source code will be immediately available without reinstalling.
+
+### Running Tests
+
+```bash
+# Run all tests
+pytest tests/
+
+# Run only tests for specific providers
+pytest tests/ -m openai
+pytest tests/ -m anthropic
+
+# Run tests with coverage report
+pytest tests/ --cov=abstractllm --cov-report=term
+```
+
+### Environment Variables for Testing
+
+The test suite uses these environment variables:
+
+- `OPENAI_API_KEY`: Your OpenAI API key
+- `ANTHROPIC_API_KEY`: Your Anthropic API key
+- `TEST_GPT4`: Set to "true" to enable GPT-4 tests
+- `TEST_CLAUDE3`: Set to "true" to enable Claude 3 tests
+- `TEST_VISION`: Set to "true" to enable vision capability tests
+- `TEST_HUGGINGFACE`: Set to "true" to enable HuggingFace-specific tests
+- `TEST_OLLAMA`: Set to "true" to enable Ollama-specific tests
+- `TEST_HF_CACHE`: Set to "true" to enable HuggingFace cache management tests
+
+To run the test script:
+
+```bash
+./run_tests.sh
 ```
 
 ## Advanced Usage
@@ -134,6 +301,8 @@ See the [Usage Guide](https://github.com/lpalbou/abstractllm/blob/main/docs/usag
 - Using multiple providers
 - Implementing fallback chains
 - Error handling
+- Streaming responses
+- Async generation
 - And more
 
 ## Contributing
