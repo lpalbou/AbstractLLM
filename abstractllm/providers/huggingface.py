@@ -473,8 +473,32 @@ class HuggingFaceProvider(AbstractLLMInterface):
         else:
             full_prompt = prompt
         
-        inputs = self._tokenizer(full_prompt, return_tensors="pt")
-        inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
+        # Get model's context size - default to 1024 if not available
+        context_size = getattr(self._model.config, "n_positions", 1024)
+        
+        # Tokenize with truncation to prevent index errors
+        try:
+            inputs = self._tokenizer(
+                full_prompt, 
+                return_tensors="pt", 
+                truncation=True, 
+                max_length=context_size - max_tokens
+            )
+            inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
+        except Exception as e:
+            logger.error(f"Tokenization error: {e}")
+            # Fall back to a simpler approach
+            try:
+                inputs = self._tokenizer(
+                    full_prompt,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=512  # Use a conservative value
+                )
+                inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
+            except Exception as fallback_error:
+                logger.error(f"Fallback tokenization failed: {fallback_error}")
+                return f"Error: Failed to process the input prompt. {str(e)}"
         
         # Set up generation config
         generation_config = {

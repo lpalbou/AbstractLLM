@@ -118,20 +118,20 @@ def huggingface_provider() -> Generator[HuggingFaceProvider, None, None]:
     Returns:
         HuggingFace provider instance
     """
-    try:
-        # Use the default model for testing
-        provider = create_llm("huggingface", **{
-            ModelParameter.MODEL: DEFAULT_MODEL,
-            ModelParameter.DEVICE: "cpu",      # Run on CPU to ensure it works everywhere
-            "auto_load": True,                 # Enable auto-loading
-            "auto_warmup": True,               # Enable auto-warmup
-            "load_timeout": 300,               # Longer timeout for initial load
-            "generation_timeout": 60,          # Reasonable timeout for generation
-            "trust_remote_code": True          # Allow trusted code execution if needed
-        })
-        yield provider
-    except Exception as e:
-        pytest.skip(f"Could not load HuggingFace model: {e}")
+    # Use distilgpt2 model for testing as it's small and reliable
+    provider = create_llm("huggingface", **{
+        ModelParameter.MODEL: "distilgpt2",  # Use a small, reliable model instead of DEFAULT_MODEL
+        ModelParameter.DEVICE: "cpu",        # Run on CPU to ensure it works everywhere
+        ModelParameter.MAX_TOKENS: 50,       # Keep generations short for testing
+        "auto_load": True,                   # Enable auto-loading
+        "auto_warmup": True,                 # Enable auto-warmup
+        "load_timeout": 300,                 # Longer timeout for initial load
+        "generation_timeout": 30,            # Shorter timeout for generation during tests
+        "trust_remote_code": True,           # Allow trusted code execution if needed
+        "temperature": 0.7,                  # Set a reasonable temperature
+        "top_p": 0.9                         # Set top_p for better test results
+    })
+    yield provider
 
 
 @pytest.fixture(params=["openai_provider", "anthropic_provider", "ollama_provider", "huggingface_provider"])
