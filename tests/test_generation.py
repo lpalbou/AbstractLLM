@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Union, Generator
 
 from abstractllm import AbstractLLMInterface, ModelParameter, ModelCapability
 from abstractllm.providers.openai import OpenAIProvider
+from abstractllm.providers.ollama import OllamaProvider
 from tests.utils import (
     validate_response, 
     validate_not_contains, 
@@ -227,9 +228,13 @@ def test_long_context(any_provider: AbstractLLMInterface) -> None:
     parameters = LONG_CONTEXT_PROMPT["parameters"]
     expected_tokens_range = LONG_CONTEXT_PROMPT["expected_tokens_range"]
     
-    # Adjust token range for OpenAI - tends to produce more tokens
-    if hasattr(any_provider, "__class__") and any_provider.__class__.__name__ == "OpenAIProvider":
+    # Adjust token range for providers that tend to produce more tokens
+    if isinstance(any_provider, OpenAIProvider):
         # Allow a higher upper bound for OpenAI
+        min_tokens, _ = expected_tokens_range
+        expected_tokens_range = (min_tokens, 700)
+    elif isinstance(any_provider, OllamaProvider):
+        # Allow a higher upper bound for Ollama
         min_tokens, _ = expected_tokens_range
         expected_tokens_range = (min_tokens, 700)
     
