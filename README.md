@@ -6,6 +6,8 @@
 
 A lightweight, unified interface for interacting with multiple Large Language Model providers.
 
+[THIS IS A WORK IN PROGRESS, STAY TUNED !]
+
 ## Features
 
 - 🔄 **Unified API**: Consistent interface for OpenAI, Anthropic, Ollama, and Hugging Face models
@@ -136,8 +138,10 @@ See the [Usage Guide](https://github.com/lpalbou/abstractllm/blob/main/docs/usag
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! 
+Read more about how to contribute in the [CONTRIBUTING](CONTRIBUTING.md) file.
+Please feel free to submit a [Pull Request](https://github.com/lpalbou/abstractllm/pulls).
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

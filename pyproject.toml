@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "abstractllm"
+version = "0.1.0"
+authors = [
+    { name = "lpalbou", email = "lpalbou@gmail.com" },
+]
+description = "A Python library for abstracting LLM interactions"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+keywords = ["llm", "ai", "abstraction"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+
+[project.urls]
+Homepage = "https://github.com/lpalbou/abstractllm"
+Repository = "https://github.com/lpalbou/abstractllm.git"
+"Bug Tracker" = "https://github.com/lpalbou/abstractllm/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/abstractllm"] 
