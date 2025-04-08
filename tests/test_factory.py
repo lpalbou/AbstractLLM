@@ -10,7 +10,7 @@ from abstractllm import create_llm, AbstractLLMInterface, ModelParameter
 from abstractllm.providers.openai import OpenAIProvider
 from abstractllm.providers.anthropic import AnthropicProvider
 from abstractllm.providers.ollama import OllamaProvider
-from abstractllm.providers.huggingface import HuggingFaceProvider
+from abstractllm.providers.huggingface import HuggingFaceProvider, DEFAULT_MODEL
 
 
 def test_factory_create_provider() -> None:
@@ -36,7 +36,7 @@ def test_factory_create_provider() -> None:
     # Test with Hugging Face provider - only if test environment flag is set
     if os.environ.get("TEST_HUGGINGFACE", "false").lower() == "true":
         provider = create_llm("huggingface", **{
-            ModelParameter.MODEL: "distilgpt2",
+            ModelParameter.MODEL: DEFAULT_MODEL,
             ModelParameter.DEVICE: "cpu"
         })
         assert isinstance(provider, HuggingFaceProvider)

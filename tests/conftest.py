@@ -10,7 +10,7 @@ from abstractllm import create_llm, ModelParameter
 from abstractllm.providers.openai import OpenAIProvider
 from abstractllm.providers.anthropic import AnthropicProvider
 from abstractllm.providers.ollama import OllamaProvider
-from abstractllm.providers.huggingface import HuggingFaceProvider
+from abstractllm.providers.huggingface import HuggingFaceProvider, DEFAULT_MODEL
 
 
 @pytest.fixture(scope="session")
@@ -72,7 +72,7 @@ def anthropic_provider(anthropic_api_key) -> Generator[AnthropicProvider, None, 
     """
     provider = create_llm("anthropic", **{
         ModelParameter.API_KEY: anthropic_api_key,
-        ModelParameter.MODEL: "claude-3-haiku-20240307"  # Use a currently supported model
+        ModelParameter.MODEL: "claude-3-5-haiku-20241022"  # Use the latest supported model
     })
     yield provider
 
@@ -119,10 +119,15 @@ def huggingface_provider() -> Generator[HuggingFaceProvider, None, None]:
         HuggingFace provider instance
     """
     try:
-        # Small model for quick testing
+        # Use the default model for testing
         provider = create_llm("huggingface", **{
-            ModelParameter.MODEL: "distilgpt2",  # Small model for testing
-            ModelParameter.DEVICE: "cpu"  # Run on CPU to ensure it works everywhere
+            ModelParameter.MODEL: DEFAULT_MODEL,
+            ModelParameter.DEVICE: "cpu",      # Run on CPU to ensure it works everywhere
+            "auto_load": True,                 # Enable auto-loading
+            "auto_warmup": True,               # Enable auto-warmup
+            "load_timeout": 300,               # Longer timeout for initial load
+            "generation_timeout": 60,          # Reasonable timeout for generation
+            "trust_remote_code": True          # Allow trusted code execution if needed
         })
         yield provider
     except Exception as e:

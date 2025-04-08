@@ -410,7 +410,7 @@ class AnthropicProvider(AbstractLLMInterface):
         api_key = params.pop("api_key")
         model = params.pop("model", "claude-3-opus-20240229")
         temperature = params.pop("temperature", 0.7)
-        max_tokens = params.pop("max_tokens", 1024)
+        max_tokens = params.pop("max_tokens", 2048)
         system_prompt = params.pop("system_prompt", None)
         
         # Log the request

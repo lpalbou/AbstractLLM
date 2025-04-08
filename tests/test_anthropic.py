@@ -15,7 +15,7 @@ def anthropic_llm():
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         return create_llm("anthropic", **{
             ModelParameter.API_KEY: api_key,
-            ModelParameter.MODEL: "claude-3-haiku-20240307"  # Use a currently supported model
+            ModelParameter.MODEL: "claude-3-5-haiku-20241022"  # Use the latest supported model
         })
     
     # Otherwise, create a mock provider

@@ -59,7 +59,7 @@ def main():
         
         # Create the LLM instance
         llm = create_llm("anthropic", **{
-            ModelParameter.MODEL: "claude-instant-1.2",
+            ModelParameter.MODEL: "claude-3-5-haiku-20241022",
             ModelParameter.TEMPERATURE: 0.7
         })
         
@@ -93,13 +93,12 @@ def main():
             if models:
                 print("\n=== Ollama Example ===")
                 
-                # Create the LLM instance with the first available model
-                model_name = models[0]["name"]
-                print(f"Using model: {model_name}")
+                # Create the LLM instance with phi4-mini model
+                print(f"Using model: phi4-mini:latest")
                 
                 llm = create_llm("ollama", **{
                     ModelParameter.BASE_URL: "http://localhost:11434",
-                    ModelParameter.MODEL: model_name
+                    ModelParameter.MODEL: "phi4-mini:latest"
                 })
                 
                 # Generate a response

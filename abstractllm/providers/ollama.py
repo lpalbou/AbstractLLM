@@ -42,7 +42,7 @@ class OllamaProvider(AbstractLLMInterface):
             )
         
         if ModelParameter.MODEL not in self.config and "model" not in self.config:
-            self.config[ModelParameter.MODEL] = "llama2"
+            self.config[ModelParameter.MODEL] = "phi4-mini:latest"
     
     def generate(self, 
                 prompt: str, 
@@ -70,7 +70,7 @@ class OllamaProvider(AbstractLLMInterface):
         
         # Extract parameters (using both string and enum keys for backwards compatibility)
         base_url = params.get(ModelParameter.BASE_URL, params.get("base_url", "http://localhost:11434"))
-        model = params.get(ModelParameter.MODEL, params.get("model", "llama2"))
+        model = params.get(ModelParameter.MODEL, params.get("model", "phi4-mini:latest"))
         temperature = params.get(ModelParameter.TEMPERATURE, params.get("temperature", 0.7))
         system_prompt_from_config = params.get(ModelParameter.SYSTEM_PROMPT, params.get("system_prompt"))
         system_prompt = system_prompt or system_prompt_from_config
@@ -190,7 +190,7 @@ class OllamaProvider(AbstractLLMInterface):
         
         # Extract parameters (using both string and enum keys for backwards compatibility)
         base_url = params.get(ModelParameter.BASE_URL, params.get("base_url", "http://localhost:11434"))
-        model = params.get(ModelParameter.MODEL, params.get("model", "llama2"))
+        model = params.get(ModelParameter.MODEL, params.get("model", "phi4-mini:latest"))
         temperature = params.get(ModelParameter.TEMPERATURE, params.get("temperature", 0.7))
         system_prompt_from_config = params.get(ModelParameter.SYSTEM_PROMPT, params.get("system_prompt"))
         system_prompt = system_prompt or system_prompt_from_config

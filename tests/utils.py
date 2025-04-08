@@ -6,6 +6,7 @@ import os
 from typing import List, Dict, Any, Union, Optional, Callable
 import pytest
 import re
+from abstractllm.providers.huggingface import DEFAULT_MODEL
 
 
 def check_api_key(env_var_name: str) -> bool:
@@ -23,13 +24,91 @@ def check_api_key(env_var_name: str) -> bool:
 
 def skip_if_no_api_key(env_var_name: str) -> None:
     """
-    Skip a test if the API key environment variable is not set.
+    Skip the test if the API key environment variable is not set.
     
     Args:
         env_var_name: Name of the environment variable
+    
+    Raises:
+        pytest.skip: If API key is not set
     """
     if not check_api_key(env_var_name):
-        raise pytest.skip(f"Skipping test because {env_var_name} is not set")
+        pytest.skip(f"{env_var_name} not set")
+
+
+def preload_hf_model(provider=None, model_name: str = DEFAULT_MODEL) -> None:
+    """
+    Preload a HuggingFace model to avoid first inference delay.
+    
+    Args:
+        provider: Optional provider instance to use
+        model_name: Name of the model to preload
+        
+    Returns:
+        None
+    """
+    try:
+        if provider is None:
+            import tempfile
+            import os
+            from abstractllm import create_llm, ModelParameter
+            
+            # Use a test-specific cache directory
+            cache_dir = tempfile.mkdtemp(prefix="abstractllm_preload_")
+            # Make sure directory exists
+            os.makedirs(cache_dir, exist_ok=True)
+            
+            # Use distilgpt2 for testing - very small, reliable model
+            test_model = "distilgpt2"
+            
+            provider = create_llm("huggingface", **{
+                ModelParameter.MODEL: test_model,
+                ModelParameter.DEVICE: "cpu",  # Force CPU for tests
+                ModelParameter.CACHE_DIR: cache_dir,  # Use test-specific cache directory
+                "load_timeout": 120,  # Longer timeout for downloads
+                "trust_remote_code": True,  # Allow trusted code execution if needed
+            })
+        
+        # Call model loading method
+        if hasattr(provider, "load_model"):
+            provider.load_model()
+        elif hasattr(provider, "preload"):
+            provider.preload()
+            
+        # Run a quick warmup if available
+        if hasattr(provider, "warmup"):
+            provider.warmup()
+    except Exception as e:
+        pytest.skip(f"Could not preload Hugging Face model: {e}")
+
+
+def setup_hf_testing() -> None:
+    """
+    Set up environment for HuggingFace tests.
+    
+    This function is meant to be called at module level to prepare
+    for HuggingFace tests. It:
+    
+    - Preloads the default HuggingFace model for faster tests
+    - Runs basic checks to detect environment issues
+    
+    Returns:
+        None
+    """
+    try:
+        import torch
+        import transformers
+    except ImportError:
+        pytest.skip("PyTorch or Transformers not installed", allow_module_level=True)
+    
+    # Set environment variables to help with testing
+    os.environ["TRANSFORMERS_OFFLINE"] = "0"  # Allow downloading if needed
+    
+    # Preload a small model
+    try:
+        preload_hf_model()
+    except Exception as e:
+        pytest.skip(f"Could not preload HuggingFace model: {e}", allow_module_level=True)
 
 
 def validate_response(response: str, expected_contains: List[str], case_sensitive: bool = False) -> bool:

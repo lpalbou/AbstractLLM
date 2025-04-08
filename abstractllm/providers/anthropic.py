@@ -2,9 +2,11 @@
 Anthropic API implementation for AbstractLLM.
 """
 
-from typing import Dict, Any, Optional, Union, Generator, AsyncGenerator
+from typing import Dict, Any, Optional, Union, Generator, AsyncGenerator, List
 import os
 import logging
+import time
+import asyncio
 
 from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability, create_config
 from abstractllm.utils.logging import (
@@ -18,30 +20,56 @@ from abstractllm.utils.logging import (
 # Configure logger with specific class path
 logger = logging.getLogger("abstractllm.providers.anthropic.AnthropicProvider")
 
+# Try to import Anthropic API
+try:
+    import anthropic
+    from anthropic import (
+        AI_PROMPT,
+        HUMAN_PROMPT,
+        APIError,
+        APIConnectionError,
+        APITimeoutError,
+        RateLimitError,
+    )
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+
 
 class AnthropicProvider(AbstractLLMInterface):
     """
     Anthropic API implementation.
     """
     
-    def __init__(self, config: Optional[Dict[Union[str, ModelParameter], Any]] = None):
+    def __init__(self, config: Dict[str, Any]) -> None:
         """
-        Initialize the Anthropic provider.
-        
+        Initialize the Anthropic API provider with given configuration.
+
         Args:
-            config: Configuration dictionary
+            config: Configuration dictionary with required parameters.
         """
         super().__init__(config)
         
-        # Set default configuration
-        if ModelParameter.API_KEY not in self.config and "api_key" not in self.config:
-            env_api_key = os.environ.get("ANTHROPIC_API_KEY")
-            if env_api_key:
-                self.config[ModelParameter.API_KEY] = env_api_key
-                log_api_key_from_env("Anthropic", "ANTHROPIC_API_KEY")
+        # Check if Anthropic package is available
+        if not ANTHROPIC_AVAILABLE:
+            raise ImportError("Anthropic package not found. Install it with: pip install anthropic")
+            
+        self.model = config.get(ModelParameter.MODEL.value, "claude-3-5-haiku-20241022")
+
+        # Get API key from config or environment
+        api_key = config.get(ModelParameter.API_KEY.value)
+        env_var_name = "ANTHROPIC_API_KEY"
+
+        if not api_key:
+            api_key = os.getenv(env_var_name)
+            if api_key:
+                log_api_key_from_env("anthropic", env_var_name)
+
+        self.client = anthropic.Anthropic(api_key=api_key)
+        logger.info(f"Initialized {self.__class__.__name__} with model {self.model}")
         
         if ModelParameter.MODEL not in self.config and "model" not in self.config:
-            self.config[ModelParameter.MODEL] = "claude-3-opus-20240229"
+            self.config[ModelParameter.MODEL] = "claude-3-5-haiku-20241022"
     
     def generate(self, 
                 prompt: str, 
@@ -76,9 +104,9 @@ class AnthropicProvider(AbstractLLMInterface):
         
         # Extract parameters (using both string and enum keys for backwards compatibility)
         api_key = params.get(ModelParameter.API_KEY, params.get("api_key"))
-        model = params.get(ModelParameter.MODEL, params.get("model", "claude-3-opus-20240229"))
+        model = params.get(ModelParameter.MODEL, params.get("model", "claude-3-5-haiku-20241022"))
         temperature = params.get(ModelParameter.TEMPERATURE, params.get("temperature", 0.7))
-        max_tokens = params.get(ModelParameter.MAX_TOKENS, params.get("max_tokens", 1024))
+        max_tokens = params.get(ModelParameter.MAX_TOKENS, params.get("max_tokens", 2048))
         system_prompt_from_config = params.get(ModelParameter.SYSTEM_PROMPT, params.get("system_prompt"))
         system_prompt = system_prompt or system_prompt_from_config
         top_p = params.get(ModelParameter.TOP_P, params.get("top_p", 1.0))
@@ -195,9 +223,9 @@ class AnthropicProvider(AbstractLLMInterface):
         
         # Extract parameters (using both string and enum keys for backwards compatibility)
         api_key = params.get(ModelParameter.API_KEY, params.get("api_key"))
-        model = params.get(ModelParameter.MODEL, params.get("model", "claude-3-opus-20240229"))
+        model = params.get(ModelParameter.MODEL, params.get("model", "claude-3-5-haiku-20241022"))
         temperature = params.get(ModelParameter.TEMPERATURE, params.get("temperature", 0.7))
-        max_tokens = params.get(ModelParameter.MAX_TOKENS, params.get("max_tokens", 1024))
+        max_tokens = params.get(ModelParameter.MAX_TOKENS, params.get("max_tokens", 2048))
         system_prompt_from_config = params.get(ModelParameter.SYSTEM_PROMPT, params.get("system_prompt"))
         system_prompt = system_prompt or system_prompt_from_config
         top_p = params.get(ModelParameter.TOP_P, params.get("top_p", 1.0))
@@ -227,12 +255,32 @@ class AnthropicProvider(AbstractLLMInterface):
             "temperature": temperature,
             "max_tokens": max_tokens,
             "has_system_prompt": system_prompt is not None,
-            "stream": stream,
-            "async": True
+            "stream": stream
         })
         
         # Initialize client
-        client = anthropic.AsyncAnthropic(api_key=api_key)
+        try:
+            # Try to initialize AsyncAnthropic client for better performance
+            client = anthropic.AsyncAnthropic(api_key=api_key)
+        except (AttributeError, ImportError):
+            # Fallback to synchronous client with asyncio if AsyncAnthropic is not available
+            logger.warning("AsyncAnthropic not available, falling back to synchronous client")
+            client = anthropic.Anthropic(api_key=api_key)
+            
+            # If we're using the sync client, modify our approach for the non-streaming case
+            if not stream:
+                # Run the synchronous method in an executor
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    None, 
+                    lambda: self.generate(
+                        prompt=prompt, 
+                        system_prompt=system_prompt, 
+                        stream=False, 
+                        **kwargs
+                    )
+                )
+                return result
         
         # Log API request (without exposing API key)
         log_request_url("anthropic", f"https://api.anthropic.com/v1/messages (model: {model})")
@@ -266,21 +314,57 @@ class AnthropicProvider(AbstractLLMInterface):
                     # Remove the 'stream' parameter as it's not needed for client.messages.stream()
                     del streaming_params['stream']
                 
-                async with client.messages.stream(**streaming_params) as stream:
-                    async for text in stream.text_stream:
-                        yield text
+                # Check if we're using the async client or the sync client
+                if hasattr(client, 'messages') and hasattr(client.messages, 'stream'):
+                    # Using AsyncAnthropic
+                    async with client.messages.stream(**streaming_params) as stream:
+                        async for text in stream.text_stream:
+                            yield text
+                else:
+                    # Fallback to sync client with manual async wrapper
+                    logger.warning("Using synchronous streaming with async wrapper - not optimal")
+                    # Use the synchronous generate method with streaming
+                    sync_gen = self.generate(
+                        prompt=prompt, 
+                        system_prompt=system_prompt, 
+                        stream=True, 
+                        **kwargs
+                    )
+                    # Wrap the sync generator in an async generator
+                    for chunk in sync_gen:
+                        yield chunk
+                        await asyncio.sleep(0)  # Allow other tasks to run
             
             return async_generator()
         else:
-            # Call API
-            response = await client.messages.create(**message_params)
-            
-            # Extract and log the response
-            result = response.content[0].text
-            log_response("anthropic", result)
-            logger.info("Async generation completed successfully")
-            
-            return result
+            # Handle non-streaming case
+            # Check if we're using the async client or the sync client
+            if hasattr(client, 'messages') and hasattr(client.messages, 'create'):
+                # Using AsyncAnthropic
+                # Call API
+                response = await client.messages.create(**message_params)
+                
+                # Extract and log the response
+                result = response.content[0].text
+                log_response("anthropic", result)
+                logger.info("Async generation completed successfully")
+                
+                return result
+            else:
+                # Fallback to sync client with async wrapper
+                logger.warning("Using synchronous client with async wrapper - not optimal")
+                # Run the synchronous method in an executor
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    None, 
+                    lambda: self.generate(
+                        prompt=prompt, 
+                        system_prompt=system_prompt, 
+                        stream=False, 
+                        **kwargs
+                    )
+                )
+                return result
     
     def get_capabilities(self) -> Dict[Union[str, ModelCapability], Any]:
         """
