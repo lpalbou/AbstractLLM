@@ -307,6 +307,12 @@ pytest tests/
 # Run only tests for specific providers
 pytest tests/ -m openai
 pytest tests/ -m anthropic
+pytest tests/ -m huggingface
+pytest tests/ -m ollama
+pytest tests/ -m vision
+
+# Run specific test
+python -m pytest tests/test_vision_captions.py::test_caption_quality -v --log-cli-level=INFO
 
 # Run tests with coverage report
 pytest tests/ --cov=abstractllm --cov-report=term

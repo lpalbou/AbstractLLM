@@ -12,7 +12,8 @@ import sys
 import gc
 from concurrent.futures import ThreadPoolExecutor
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoProcessor
+from pathlib import Path
 
 from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability, create_config
 from abstractllm.utils.logging import (
@@ -20,12 +21,25 @@ from abstractllm.utils.logging import (
     log_response,
     log_request_url
 )
+from abstractllm.utils.image import preprocess_image_inputs
 
 # Configure logger with specific class path
 logger = logging.getLogger("abstractllm.providers.huggingface.HuggingFaceProvider")
 
+# Default model - small, usable by most systems
+DEFAULT_MODEL = "bartowski/microsoft_Phi-4-mini-instruct-GGUF"
+
+# Models that support vision capabilities
+VISION_CAPABLE_MODELS = [
+    "Qwen/Qwen2.5-Omni-7B", 
+    "Qwen/Qwen2.5-VL-32B-Instruct", 
+    "Qwen/Qwen2.5-VL-7B-Instruct", 
+    "Qwen/Qwen2.5-VL-3B-Instruct", 
+    "llava-hf/llava-v1.6-mistral-7b-hf", 
+    "microsoft/Phi-4-multimodal-instruct"
+]
+
 # Constants for model selection
-DEFAULT_MODEL = "bartowski/microsoft_Phi-4-mini-instruct-GGUF"  # Very small model for faster testing
 TINY_TEST_PROMPT = "Hello, what is the capital of France?"  # Used for warmup
 
 def _get_optimal_device() -> str:
@@ -246,7 +260,7 @@ class HuggingFaceProvider(AbstractLLMInterface):
             raise ImportError("PyTorch is required for HuggingFace models")
             
         # Import here to avoid dependency issues for users not using HF
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from transformers import AutoModelForCausalLM, AutoTokenizer, AutoProcessor
         import os
         from pathlib import Path
             
@@ -254,6 +268,9 @@ class HuggingFaceProvider(AbstractLLMInterface):
         model_name = self.config.get(ModelParameter.MODEL, self.config.get("model"))
         if not model_name:
             raise ValueError("Model name must be provided in configuration")
+        
+        # Check if this is a vision-capable model
+        is_vision_capable = any(vision_model in model_name for vision_model in VISION_CAPABLE_MODELS)
         
         # Create a cache key for this model configuration
         cache_key = self._get_cache_key()
@@ -268,7 +285,7 @@ class HuggingFaceProvider(AbstractLLMInterface):
             return
         
         # Log model loading at INFO level
-        logger.info(f"Loading HuggingFace model: {model_name}")
+        logger.info(f"Loading HuggingFace model: {model_name}{' (vision-capable)' if is_vision_capable else ''}")
         
         # Extract parameters for model loading
         load_in_8bit = self.config.get("load_in_8bit", False)
@@ -312,6 +329,20 @@ class HuggingFaceProvider(AbstractLLMInterface):
             except Exception as e:
                 logger.warning(f"Could not verify model existence on HF Hub: {e}")
                 # Continue anyway, as the model might be local or use a custom format
+            
+            # For vision models, try to load processor first
+            if is_vision_capable:
+                try:
+                    logger.debug(f"Loading processor for vision model: {model_name}")
+                    self._processor = AutoProcessor.from_pretrained(
+                        model_name,
+                        cache_dir=cache_dir,
+                        trust_remote_code=trust_remote_code
+                    )
+                    logger.debug(f"Successfully loaded processor for {model_name}")
+                except Exception as processor_error:
+                    logger.warning(f"Failed to load processor: {processor_error}. Will try to use tokenizer only.")
+                    self._processor = None
             
             # Load tokenizer with graceful fallback options
             logger.debug(f"Loading tokenizer for model: {model_name}")
@@ -381,12 +412,67 @@ class HuggingFaceProvider(AbstractLLMInterface):
             # Check for timeout during model loading
             if time.time() - start_time > timeout:
                 raise TimeoutError(f"Timed out loading model {model_name} after {timeout} seconds")
-                    
-            # Load the model
-            self._model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                **model_kwargs
-            )
+            
+            # For vision models, may need to use a different model class
+            if is_vision_capable:
+                try:
+                    # Try AutoModelForVision first
+                    try:
+                        from transformers import AutoModelForVision, AutoModelForCausalLM
+                        logger.debug("Attempting to load vision model with AutoModelForVision")
+                        self._model = AutoModelForVision.from_pretrained(
+                            model_name,
+                            **model_kwargs
+                        )
+                    except (ImportError, Exception) as e:
+                        logger.debug(f"AutoModelForVision not available or failed: {e}")
+                        # Fall back to appropriate model class based on model name pattern
+                        try:
+                            if "llava" in model_name.lower():
+                                from transformers import LlavaForConditionalGeneration
+                                logger.debug("Loading LlavaForConditionalGeneration model")
+                                self._model = LlavaForConditionalGeneration.from_pretrained(
+                                    model_name,
+                                    **model_kwargs
+                                )
+                            elif "qwen" in model_name.lower():
+                                try:
+                                    from transformers import Qwen2VLForConditionalGeneration
+                                    logger.debug("Loading Qwen2VLForConditionalGeneration model")
+                                    self._model = Qwen2VLForConditionalGeneration.from_pretrained(
+                                        model_name,
+                                        **model_kwargs
+                                    )
+                                except ImportError:
+                                    # Try for general multimodal
+                                    from transformers import AutoModelForVision
+                                    self._model = AutoModelForCausalLM.from_pretrained(
+                                        model_name,
+                                        **model_kwargs
+                                    )
+                            else:
+                                # Default to causal LM for other models
+                                logger.debug("Falling back to AutoModelForCausalLM for vision model")
+                                self._model = AutoModelForCausalLM.from_pretrained(
+                                    model_name,
+                                    **model_kwargs
+                                )
+                        except Exception as model_error:
+                            logger.error(f"Failed to load vision model: {model_error}")
+                            # Last attempt with regular causal LM
+                            self._model = AutoModelForCausalLM.from_pretrained(
+                                model_name,
+                                **model_kwargs
+                            )
+                except Exception as vision_error:
+                    logger.error(f"All attempts to load vision model failed: {vision_error}")
+                    raise
+            else:
+                # Load standard causal LM model
+                self._model = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    **model_kwargs
+                )
             
             # Set pad_token_id in the model's config to match the tokenizer
             if hasattr(self._model, 'config') and self._tokenizer.pad_token_id is not None:
@@ -432,6 +518,27 @@ class HuggingFaceProvider(AbstractLLMInterface):
         params = self.config.copy()
         params.update(kwargs)
         
+        # Process image inputs if present
+        has_image = "image" in params or "images" in params
+        
+        # Check if the model supports vision
+        model_name = params.get(ModelParameter.MODEL, params.get("model"))
+        is_vision_capable = any(vision_model in model_name for vision_model in VISION_CAPABLE_MODELS) if model_name else False
+        
+        if has_image and not is_vision_capable:
+            logger.warning(f"Model {model_name} does not support vision inputs. Ignoring image input.")
+            # Remove image inputs to avoid errors
+            if "image" in params:
+                del params["image"]
+            if "images" in params:
+                del params["images"]
+        elif has_image and is_vision_capable:
+            # Process image inputs for vision-capable models
+            params = preprocess_image_inputs(params, "huggingface")
+            
+            # Log vision request
+            logger.info(f"Processing vision input for model {model_name}")
+        
         # Extract parameters (using both string and enum keys for backwards compatibility)
         model_name = params.get(ModelParameter.MODEL, params.get("model"))
         temperature = params.get(ModelParameter.TEMPERATURE, params.get("temperature", 0.7))
@@ -476,29 +583,106 @@ class HuggingFaceProvider(AbstractLLMInterface):
         # Get model's context size - default to 1024 if not available
         context_size = getattr(self._model.config, "n_positions", 1024)
         
-        # Tokenize with truncation to prevent index errors
-        try:
-            inputs = self._tokenizer(
-                full_prompt, 
-                return_tensors="pt", 
-                truncation=True, 
-                max_length=context_size - max_tokens
-            )
-            inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
-        except Exception as e:
-            logger.error(f"Tokenization error: {e}")
-            # Fall back to a simpler approach
+        # Check if this is a vision model with image inputs
+        model_name = params.get(ModelParameter.MODEL, params.get("model"))
+        is_vision_capable = any(vision_model in model_name for vision_model in VISION_CAPABLE_MODELS)
+        has_image = "image" in params
+        
+        if has_image and is_vision_capable:
+            # Process image input
+            image_input = params.get("image")
+            
+            # Import PIL only when needed
+            try:
+                from PIL import Image
+                import requests
+                from io import BytesIO
+            except ImportError:
+                raise ImportError("PIL and requests are required for image processing")
+            
+            # Load image based on the input type
+            if isinstance(image_input, str):
+                if image_input.startswith(('http://', 'https://')):
+                    # Load from URL
+                    logger.debug(f"Loading image from URL: {image_input}")
+                    response = requests.get(image_input)
+                    image = Image.open(BytesIO(response.content))
+                else:
+                    # Load from file path
+                    logger.debug(f"Loading image from file: {image_input}")
+                    image = Image.open(image_input)
+            else:
+                raise ValueError(f"Unsupported image input type: {type(image_input)}")
+            
+            # Process inputs based on the model type
+            if hasattr(self, '_processor') and self._processor is not None:
+                logger.debug("Using processor for multimodal input")
+                try:
+                    # Use processor if available
+                    inputs = self._processor(text=full_prompt, images=image, return_tensors="pt")
+                    inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
+                except Exception as e:
+                    logger.error(f"Error processing multimodal input: {e}")
+                    raise
+            else:
+                # Use model-specific approaches if processor is not available
+                if "llava" in model_name.lower():
+                    logger.debug("Processing for LLaVA model")
+                    inputs = self._tokenizer(
+                        full_prompt, 
+                        return_tensors="pt", 
+                        padding=True
+                    )
+                    # Add image as pixel_values
+                    # Process image according to LLaVA requirements
+                    from transformers import CLIPImageProcessor
+                    image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14")
+                    pixel_values = image_processor(image, return_tensors="pt").pixel_values
+                    inputs["pixel_values"] = pixel_values.to(self._model.device)
+                elif "qwen" in model_name.lower():
+                    logger.debug("Processing for Qwen model")
+                    inputs = self._tokenizer(
+                        full_prompt, 
+                        return_tensors="pt"
+                    )
+                    # Add image as pixel_values
+                    # Process image according to Qwen requirements
+                    inputs["pixel_values"] = self._model.get_image_features(image)
+                else:
+                    # Default approach - try standard LLM processing with warning
+                    logger.warning(f"No specific handling for vision model {model_name}. Attempting generic processing.")
+                    inputs = self._tokenizer(
+                        full_prompt, 
+                        return_tensors="pt", 
+                        truncation=True, 
+                        max_length=context_size - max_tokens
+                    )
+                
+                inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
+        else:
+            # Standard text-only processing
             try:
                 inputs = self._tokenizer(
-                    full_prompt,
-                    return_tensors="pt",
-                    truncation=True,
-                    max_length=512  # Use a conservative value
+                    full_prompt, 
+                    return_tensors="pt", 
+                    truncation=True, 
+                    max_length=context_size - max_tokens
                 )
                 inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
-            except Exception as fallback_error:
-                logger.error(f"Fallback tokenization failed: {fallback_error}")
-                return f"Error: Failed to process the input prompt. {str(e)}"
+            except Exception as e:
+                logger.error(f"Tokenization error: {e}")
+                # Fall back to a simpler approach
+                try:
+                    inputs = self._tokenizer(
+                        full_prompt,
+                        return_tensors="pt",
+                        truncation=True,
+                        max_length=512  # Use a conservative value
+                    )
+                    inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
+                except Exception as fallback_error:
+                    logger.error(f"Fallback tokenization failed: {fallback_error}")
+                    return f"Error: Failed to process the input prompt. {str(e)}"
         
         # Set up generation config
         generation_config = {
@@ -684,13 +868,19 @@ class HuggingFaceProvider(AbstractLLMInterface):
         Returns:
             Dictionary of capabilities
         """
+        # Get model name from config
+        model_name = self.config.get(ModelParameter.MODEL, self.config.get("model"))
+        
+        # Check if this is a vision-capable model
+        is_vision_capable = any(vision_model in model_name for vision_model in VISION_CAPABLE_MODELS) if model_name else False
+        
         return {
             ModelCapability.STREAMING: True,
             ModelCapability.MAX_TOKENS: None,  # Varies by model and hardware
             ModelCapability.SYSTEM_PROMPT: True,
             ModelCapability.ASYNC: True,
             ModelCapability.FUNCTION_CALLING: False,  # Not typically supported natively
-            ModelCapability.VISION: False  # Depends on model, assume False by default
+            ModelCapability.VISION: is_vision_capable  # Check if model is in vision capable list
         }
     
     @staticmethod

@@ -58,7 +58,7 @@ Thank you for your interest in contributing to AbstractLLM! This document provid
 
 ## Documentation
 
-- Update README.md for significant changes
+- Update [README.md](README.md) for significant changes
 - Add docstrings to new functions/classes
 - Update API documentation if needed
 

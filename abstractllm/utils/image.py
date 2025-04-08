@@ -78,7 +78,7 @@ def format_image_for_provider(
     
     Args:
         image_input: Image input (URL, file path, base64 string, or dict with provider-specific format)
-        provider: Provider name ('openai', 'anthropic', 'ollama')
+        provider: Provider name ('openai', 'anthropic', 'ollama', 'huggingface')
         
     Returns:
         Properly formatted image data for the specified provider
@@ -104,6 +104,10 @@ def format_image_for_provider(
                 
             elif provider == "ollama":
                 return {"url": url}
+            
+            elif provider == "huggingface":
+                # For Hugging Face, return the URL directly for PIL to load
+                return url
                 
             else:
                 logger.warning(f"Unknown provider {provider}, returning URL as-is")
@@ -136,6 +140,10 @@ def format_image_for_provider(
                 
             elif provider == "ollama":
                 return {"data": encoded_image}
+            
+            elif provider == "huggingface":
+                # For Hugging Face, return the file path directly for PIL to load
+                return str(path)
                 
             else:
                 logger.warning(f"Unknown provider {provider}, returning base64 encoded data")
@@ -232,7 +240,7 @@ def preprocess_image_inputs(
     
     Args:
         params: Parameters dictionary that may contain image inputs
-        provider: Provider name ('openai', 'anthropic', 'ollama')
+        provider: Provider name ('openai', 'anthropic', 'ollama', 'huggingface')
         
     Returns:
         Updated parameters dictionary with properly formatted image data
@@ -314,6 +322,10 @@ def preprocess_image_inputs(
             elif provider == "ollama":
                 # For Ollama, images are added as a separate parameter
                 processed_params["images"] = [formatted_image]
+                
+            elif provider == "huggingface":
+                # For Hugging Face, add as a 'pixel_values' parameter
+                processed_params["image"] = formatted_image
     
     # Handle multiple images parameter
     if "images" in processed_params or "IMAGES" in processed_params:
@@ -387,5 +399,13 @@ def preprocess_image_inputs(
             elif provider == "ollama":
                 # For Ollama, images are added as a separate parameter
                 processed_params["images"] = formatted_images
+                
+            elif provider == "huggingface":
+                # For Hugging Face, add as a list in 'pixel_values' parameter
+                # Most HF models only support a single image, use the first one
+                if formatted_images:
+                    processed_params["image"] = formatted_images[0]
+                    if len(formatted_images) > 1:
+                        logger.warning("HuggingFace models typically support only one image at a time. Using the first image only.")
     
     return processed_params 
