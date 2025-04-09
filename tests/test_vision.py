@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 # Test image paths and expected keywords
 TEST_IMAGES = {
     "mountain_path": {
-        "path": "tests/examples/mountains_path.jpg",
-        "url": "https://raw.githubusercontent.com/lpalbou/abstractllm/refs/heads/main/tests/examples/test_image_1.jpg",
+        "path": "tests/examples/mountain_path.jpg",
+        "url": "https://raw.githubusercontent.com/lpalbou/abstractllm/refs/heads/main/tests/examples/mountain_path.jpg",
         "keywords": [
             "mountains", "path", "fence", "sunlight", "sky", "clouds", "hiking", 
             "trail", "wooden fence", "meadow", "landscape", "nature", "dirt road", 
