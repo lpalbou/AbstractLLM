@@ -8,6 +8,8 @@ This directory contains example scripts demonstrating how to use AbstractLLM in 
 | ------- | ----------- |
 | [basic_usage.py](basic_usage.py) | Basic usage with different providers (OpenAI, Anthropic, Ollama) |
 | [async_usage.py](async_usage.py) | Asynchronous operations and parallel generation |
+| [chain_and_session_example.py](chain_and_session_example.py) | Provider chains, fallback behavior, and session management |
+| [json_mode_example.py](json_mode_example.py) | Generating structured JSON responses with OpenAI |
 
 ## Running the Examples
 
@@ -36,6 +38,29 @@ pip install abstractllm[openai]
 
 # Run async usage example
 python examples/async_usage.py
+```
+
+### Provider Chains and Session Management
+
+```bash
+# Install required dependencies
+pip install abstractllm[all]
+
+# Run chains and session management example
+python examples/chain_and_session_example.py
+```
+
+### JSON Mode Example
+
+```bash
+# Install required dependencies
+pip install abstractllm[openai]
+
+# Set your OpenAI API key
+export OPENAI_API_KEY=your-api-key-here
+
+# Run JSON mode example
+python examples/json_mode_example.py
 ```
 
 ## Setting API Keys

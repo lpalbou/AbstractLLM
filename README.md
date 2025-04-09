@@ -18,6 +18,9 @@ A lightweight, unified interface for interacting with multiple Large Language Mo
 - 📊 **Capabilities Inspection**: Query models for their capabilities
 - 📝 **Logging**: Built-in request and response logging
 - 🔤 **Type-Safe Parameters**: Enum-based parameters for enhanced IDE support and error prevention
+- 🔄 **Provider Chains**: Create fallback chains and load balancing across multiple providers
+- 💬 **Session Management**: Maintain conversation context when switching between providers
+- 🛑 **Unified Error Handling**: Consistent error handling across all providers
 
 ## Installation
 
@@ -157,7 +160,7 @@ llm = create_llm("openai", temperature=0.7, system_prompt="You are a helpful ass
 # Using enum keys (type-safe)
 llm = create_llm("openai", **{
     ModelParameter.TEMPERATURE: 0.5,
-    ModelParameter.SYSTEM_PROMPT: "You are a helpful assistant."
+    ModelParameter.SYSTEM_PROMPT: "You are a helpful scientific assistant."
 })
 
 # Update later with enums
@@ -190,6 +193,92 @@ response = llm.generate(
     "What is quantum entanglement?", 
     system_prompt="You are a physics professor explaining to a high school student."
 )
+```
+
+## Provider Chains
+
+AbstractLLM supports creating chains of providers with fallback capabilities to ensure robust operation:
+
+```python
+from abstractllm.chain import create_fallback_chain, create_capability_chain, create_load_balanced_chain
+
+# Create a fallback chain that tries providers in sequence
+chain = create_fallback_chain(
+    providers=["openai", "anthropic", "ollama"],
+    max_retries=2
+)
+
+# Generate with automatic fallback if a provider fails
+response = chain.generate("Explain quantum computing in simple terms.")
+
+# Create a chain that selects providers based on capabilities
+vision_chain = create_capability_chain(
+    required_capabilities=[ModelCapability.VISION],
+    preferred_providers=["openai", "anthropic"]
+)
+
+# Generate with a provider that supports vision
+image_url = "https://example.com/image.jpg"
+response = vision_chain.generate("What's in this image?", image=image_url)
+
+# Create a load-balanced chain for distributing requests
+balanced_chain = create_load_balanced_chain(
+    providers=["openai", "anthropic", "ollama"]
+)
+
+# Requests will be distributed across providers
+response1 = balanced_chain.generate("What is AI?")
+response2 = balanced_chain.generate("What is machine learning?")
+```
+
+## Session Management
+
+AbstractLLM includes session management for maintaining conversation context even when switching providers:
+
+```python
+from abstractllm.session import Session, SessionManager
+
+# Create a session with a system prompt
+session = Session(
+    system_prompt="You are a helpful assistant specializing in physics.",
+    provider="openai"
+)
+
+# Send a message using the default provider
+response = session.send("What is the theory of relativity?")
+print(f"OpenAI: {response}")
+
+# Switch providers for the next message while maintaining context
+response = session.send(
+    "Can you explain it in simpler terms?",
+    provider="anthropic"
+)
+print(f"Anthropic: {response}")
+
+# Save the session for later
+session.save("physics_session.json")
+
+# Later, load the session and continue
+loaded_session = Session.load("physics_session.json")
+response = loaded_session.send("How is this related to quantum mechanics?")
+
+# Managing multiple sessions
+manager = SessionManager(sessions_dir="my_sessions")
+physics_session = manager.create_session(
+    system_prompt="You are a physics professor.",
+    provider="openai"
+)
+history_session = manager.create_session(
+    system_prompt="You are a historian.",
+    provider="anthropic"
+)
+
+# Use different sessions for different topics
+physics_response = physics_session.send("What is quantum entanglement?")
+history_response = history_session.send("Tell me about ancient Egypt.")
+
+# Save all sessions
+manager.save_all()
 ```
 
 ## Vision Capabilities
@@ -248,6 +337,36 @@ if capabilities[ModelCapability.STREAMING]:
     
 if capabilities[ModelCapability.VISION]:
     print("Vision capabilities are supported!")
+```
+
+## Error Handling
+
+AbstractLLM provides a unified error handling system across all providers:
+
+```python
+from abstractllm import create_llm
+from abstractllm.exceptions import (
+    AbstractLLMError,
+    AuthenticationError,
+    QuotaExceededError,
+    ContextWindowExceededError
+)
+
+try:
+    llm = create_llm("openai", api_key="invalid-key")
+    response = llm.generate("Hello")
+except AuthenticationError as e:
+    print(f"Authentication failed: {e}")
+    # Try with a different key or provider
+except QuotaExceededError as e:
+    print(f"Quota exceeded: {e}")
+    # Implement rate limiting or fallback to another provider
+except ContextWindowExceededError as e:
+    print(f"Context window exceeded: {e}")
+    # Implement chunking or summarization
+except AbstractLLMError as e:
+    print(f"Generic error: {e}")
+    # Handle all other AbstractLLM errors
 ```
 
 ## Logging

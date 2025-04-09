@@ -49,6 +49,15 @@ classDiagram
         +etc...
     }
     
+    class ConfigurationManager {
+        <<static>>
+        +create_base_config(**kwargs): dict
+        +initialize_provider_config(provider_name: str, config: dict): dict
+        +get_param(config: dict, param: ModelParameter, default: Any): Any
+        +update_config(config: dict, updates: dict): dict
+        +extract_generation_params(provider: str, config: dict, kwargs: dict, system_prompt: str): dict
+    }
+    
     class OpenAIProvider {
         +__init__(config: dict)
         +generate(prompt: str, **kwargs): str|Generator
@@ -111,6 +120,13 @@ classDiagram
     Factory ..> OllamaProvider: creates
     Factory ..> HuggingFaceProvider: creates
     
+    Factory ..> ConfigurationManager: uses
+    AbstractLLMInterface ..> ConfigurationManager: uses
+    OpenAIProvider ..> ConfigurationManager: uses
+    AnthropicProvider ..> ConfigurationManager: uses
+    OllamaProvider ..> ConfigurationManager: uses
+    HuggingFaceProvider ..> ConfigurationManager: uses
+    
     LoggingUtils <.. OpenAIProvider: uses
     LoggingUtils <.. AnthropicProvider: uses
     LoggingUtils <.. OllamaProvider: uses
@@ -139,6 +155,7 @@ abstractllm/
 │   └── huggingface.py         # Hugging Face implementation
 └── utils/
     ├── __init__.py
+    ├── config.py              # Centralized configuration management
     ├── logging.py             # Logging utilities
     └── image.py               # Image processing utilities
 ```
@@ -152,13 +169,14 @@ The following diagram illustrates the general flow of a generation request throu
 ```mermaid
 flowchart TB
     User[User Code] --> Factory["create_llm(provider, **config)"]
-    Factory --> |"create provider instance"| Provider[LLM Provider]
+    Factory --> ConfigManager["ConfigurationManager.create_base_config()"]
+    ConfigManager --> ProviderConfig["ConfigurationManager.initialize_provider_config()"]
+    ProviderConfig --> |"create provider instance"| Provider[LLM Provider]
     
     User --> |"prompt, system_prompt, stream, **kwargs"| Generate["provider.generate()"]
     
     subgraph Generation
-        Generate --> ValidateConfig[Merge config with kwargs]
-        ValidateConfig --> ExtractParams[Extract and process parameters]
+        Generate --> ExtractParams["ConfigurationManager.extract_generation_params()"]
         ExtractParams --> CheckImage[Check for image inputs]
         
         CheckImage --> |"if images present"| ProcessImages[Process images for provider]
@@ -229,6 +247,17 @@ The package uses enumerated types to provide type-safe parameter handling:
 
 1. **ModelParameter**: Defines available configuration parameters (temperature, max_tokens, etc.)
 2. **ModelCapability**: Defines capabilities that models may support (streaming, vision, etc.)
+
+### ConfigurationManager
+
+The `ConfigurationManager` class provides centralized configuration management through a set of static methods:
+
+1. **Base Configuration Creation**: Creates a configuration dictionary with appropriate defaults
+2. **Provider-Specific Initialization**: Applies provider-specific defaults and environment variables
+3. **Parameter Extraction**: Extracts and combines parameters for API calls
+4. **Parameter Access**: Provides a consistent way to access parameters regardless of key type (enum or string)
+
+This centralized approach eliminates configuration duplication across providers and ensures consistent parameter handling throughout the library.
 
 ### Factory Function
 

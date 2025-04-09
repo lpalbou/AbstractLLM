@@ -34,7 +34,7 @@ def encode_image_to_base64(image_path: Union[str, Path]) -> str:
     try:
         with open(image_path, "rb") as image_file:
             encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-            logger.debug(f"Successfully encoded image: {image_path}")
+            logger.debug(f"Successfully encoded image: {image_path}, length: {len(encoded_string)} chars")
             return encoded_string
     except Exception as e:
         logger.error(f"Failed to encode image: {e}")

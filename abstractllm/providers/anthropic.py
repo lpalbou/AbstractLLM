@@ -8,7 +8,7 @@ import logging
 import time
 import asyncio
 
-from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability, create_config
+from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability
 from abstractllm.utils.logging import (
     log_request, 
     log_response, 
@@ -17,8 +17,9 @@ from abstractllm.utils.logging import (
     log_request_url
 )
 from abstractllm.utils.image import preprocess_image_inputs
+from abstractllm.utils.config import ConfigurationManager
 
-# Configure logger with specific class path
+# Configure logger
 logger = logging.getLogger("abstractllm.providers.anthropic.AnthropicProvider")
 
 # Models that support vision capabilities
@@ -64,23 +65,17 @@ class AnthropicProvider(AbstractLLMInterface):
         # Check if Anthropic package is available
         if not ANTHROPIC_AVAILABLE:
             raise ImportError("Anthropic package not found. Install it with: pip install anthropic")
-            
-        self.model = config.get(ModelParameter.MODEL.value, "claude-3-5-haiku-20241022")
-
-        # Get API key from config or environment
-        api_key = config.get(ModelParameter.API_KEY.value)
-        env_var_name = "ANTHROPIC_API_KEY"
-
-        if not api_key:
-            api_key = os.getenv(env_var_name)
-            if api_key:
-                log_api_key_from_env("anthropic", env_var_name)
-
+        
+        # Initialize provider-specific configuration
+        self.config = ConfigurationManager.initialize_provider_config("anthropic", self.config)
+        
+        # Extract the model and API key
+        self.model = ConfigurationManager.get_param(self.config, ModelParameter.MODEL, "claude-3-5-haiku-20241022")
+        api_key = ConfigurationManager.get_param(self.config, ModelParameter.API_KEY)
+        
+        # Create client
         self.client = anthropic.Anthropic(api_key=api_key)
         logger.info(f"Initialized {self.__class__.__name__} with model {self.model}")
-        
-        if ModelParameter.MODEL not in self.config and "model" not in self.config:
-            self.config[ModelParameter.MODEL] = "claude-3-5-haiku-20241022"
     
     def generate(self, 
                 prompt: str, 
@@ -104,36 +99,17 @@ class AnthropicProvider(AbstractLLMInterface):
         Raises:
             Exception: If the API call fails or no API key is provided
         """
-        try:
-            import anthropic
-        except ImportError:
-            raise ImportError(
-                "Anthropic package not found. Install it with: pip install anthropic"
-            )
+        # Extract and combine parameters using the configuration manager
+        params = ConfigurationManager.extract_generation_params(
+            "anthropic", self.config, kwargs, system_prompt
+        )
         
-        # Combine configuration with kwargs
-        params = self.config.copy()
-        params.update(kwargs)
-        
-        # Extract parameters (using both string and enum keys for backwards compatibility)
-        api_key = params.get(ModelParameter.API_KEY, params.get("api_key"))
-        model = params.get(ModelParameter.MODEL, params.get("model", "claude-3-5-haiku-20241022"))
-        temperature = params.get(ModelParameter.TEMPERATURE, params.get("temperature", 0.7))
-        max_tokens = params.get(ModelParameter.MAX_TOKENS, params.get("max_tokens", 2048))
-        system_prompt_from_config = params.get(ModelParameter.SYSTEM_PROMPT, params.get("system_prompt"))
-        system_prompt = system_prompt or system_prompt_from_config
-        top_p = params.get(ModelParameter.TOP_P, params.get("top_p", 1.0))
-        stop = params.get(ModelParameter.STOP, params.get("stop"))
-        
-        # Log at INFO level
-        logger.info(f"Generating response with Anthropic model: {model}")
-        
-        # Log detailed parameters at DEBUG level
-        logger.debug(f"Generation parameters: temperature={temperature}, max_tokens={max_tokens}, top_p={top_p}")
-        if system_prompt:
-            logger.debug("Using system prompt")
-        if stop:
-            logger.debug(f"Using stop sequences: {stop}")
+        # Extract key parameters
+        api_key = params.get("api_key")
+        model = params.get("model", self.model)
+        temperature = params.get("temperature", 0.7)
+        max_tokens = params.get("max_tokens", 2048)
+        system_prompt = params.get("system_prompt")
         
         # Check for API key
         if not api_key:
@@ -143,16 +119,46 @@ class AnthropicProvider(AbstractLLMInterface):
                 "set the ANTHROPIC_API_KEY environment variable."
             )
         
+        # Log at INFO level
+        logger.info(f"Generating response with Anthropic model: {model}")
+        
+        # Log detailed parameters at DEBUG level
+        logger.debug(f"Generation parameters: temperature={temperature}, max_tokens={max_tokens}")
+        if system_prompt:
+            logger.debug("Using system prompt")
+        
         # Check if model supports vision
-        has_vision = any(model.startswith(vm) for vm in VISION_CAPABLE_MODELS)
+        has_vision = any(vision_model in model.lower() for vision_model in [vm.lower() for vm in VISION_CAPABLE_MODELS])
         
         # Process image inputs if any, and if model supports vision
         image_request = False
-        if has_vision and (ModelParameter.IMAGE in params or "image" in params or 
-                          ModelParameter.IMAGES in params or "images" in params):
+        if has_vision and ("image" in params or "images" in params):
             logger.info("Processing image inputs for vision request")
             image_request = True
             params = preprocess_image_inputs(params, "anthropic")
+        
+        # Prepare message parameters
+        message_params = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": []
+        }
+        
+        # Add system message if provided
+        if system_prompt:
+            message_params["system"] = system_prompt
+        
+        # Handle image content
+        if image_request:
+            # The image content should already be formatted by preprocess_image_inputs
+            message_params["messages"] = params.get("messages", [])
+            if not message_params["messages"]:
+                # Fallback if messages not set by preprocess_image_inputs
+                message_params["messages"] = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+        else:
+            # Text-only request
+            message_params["messages"] = [{"role": "user", "content": prompt}]
         
         # Log the request
         log_request("anthropic", prompt, {
@@ -164,35 +170,8 @@ class AnthropicProvider(AbstractLLMInterface):
             "image_request": image_request
         })
         
-        # Initialize client
-        client = anthropic.Anthropic(api_key=api_key)
-        
         # Log API request (without exposing API key)
-        log_request_url("anthropic", f"https://api.anthropic.com/v1/messages (model: {model})")
-        
-        # Prepare message
-        message_params = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "top_p": top_p,
-            "stream": stream
-        }
-        
-        # Add messages if provided through the preprocess_image_inputs function
-        if "messages" in params:
-            message_params["messages"] = params["messages"]
-        else:
-            # Otherwise, create a simple user message
-            message_params["messages"] = [
-                {"role": "user", "content": prompt}
-            ]
-        
-        if system_prompt:
-            message_params["system"] = system_prompt
-            
-        if stop:
-            message_params["stop_sequences"] = stop if isinstance(stop, list) else [stop]
+        log_request_url("anthropic", f"Anthropic API (model: {model})")
         
         # Handle streaming if requested
         if stream:
@@ -201,20 +180,20 @@ class AnthropicProvider(AbstractLLMInterface):
             def response_generator():
                 # Create a copy of message_params for streaming (without the 'stream' parameter)
                 streaming_params = message_params.copy()
-                if 'stream' in streaming_params:
-                    # Remove the 'stream' parameter as it's not needed for client.messages.stream()
-                    del streaming_params['stream']
                 
-                with client.messages.stream(**streaming_params) as stream:
-                    for text in stream.text_stream:
-                        yield text
+                # The Anthropic API's messages.stream() method handles streaming automatically,
+                # so we don't need to add stream=True to the parameters
+                
+                # Call the API
+                with self.client.messages.stream(**streaming_params) as stream:
+                    for chunk in stream:
+                        if hasattr(chunk, 'delta') and hasattr(chunk.delta, 'text'):
+                            yield chunk.delta.text
             
             return response_generator()
         else:
-            # Call API
-            response = client.messages.create(**message_params)
-            
-            # Extract and log the response
+            # Standard non-streaming response
+            response = self.client.messages.create(**message_params)
             result = response.content[0].text
             log_response("anthropic", result)
             logger.info("Generation completed successfully")
@@ -238,41 +217,23 @@ class AnthropicProvider(AbstractLLMInterface):
                 - images: List of images (URLs, file paths, base64 strings, or dicts)
             
         Returns:
-            The generated response or an async generator if streaming
+            If stream=False: The complete generated response as a string
+            If stream=True: An async generator yielding response chunks
             
         Raises:
-            Exception: If the API call fails
+            Exception: If the API call fails or no API key is provided
         """
-        try:
-            import anthropic
-        except ImportError:
-            raise ImportError(
-                "Anthropic package not found. Install it with: pip install anthropic"
-            )
+        # Extract and combine parameters using the configuration manager
+        params = ConfigurationManager.extract_generation_params(
+            "anthropic", self.config, kwargs, system_prompt
+        )
         
-        # Combine configuration with kwargs
-        params = self.config.copy()
-        params.update(kwargs)
-        
-        # Extract parameters (using both string and enum keys for backwards compatibility)
-        api_key = params.get(ModelParameter.API_KEY, params.get("api_key"))
-        model = params.get(ModelParameter.MODEL, params.get("model", "claude-3-5-haiku-20241022"))
-        temperature = params.get(ModelParameter.TEMPERATURE, params.get("temperature", 0.7))
-        max_tokens = params.get(ModelParameter.MAX_TOKENS, params.get("max_tokens", 2048))
-        system_prompt_from_config = params.get(ModelParameter.SYSTEM_PROMPT, params.get("system_prompt"))
-        system_prompt = system_prompt or system_prompt_from_config
-        top_p = params.get(ModelParameter.TOP_P, params.get("top_p", 1.0))
-        stop = params.get(ModelParameter.STOP, params.get("stop"))
-        
-        # Log at INFO level
-        logger.info(f"Generating async response with Anthropic model: {model}")
-        
-        # Log detailed parameters at DEBUG level
-        logger.debug(f"Generation parameters: temperature={temperature}, max_tokens={max_tokens}, top_p={top_p}")
-        if system_prompt:
-            logger.debug("Using system prompt")
-        if stop:
-            logger.debug(f"Using stop sequences: {stop}")
+        # Extract key parameters
+        api_key = params.get("api_key")
+        model = params.get("model", self.model)
+        temperature = params.get("temperature", 0.7)
+        max_tokens = params.get("max_tokens", 2048)
+        system_prompt = params.get("system_prompt")
         
         # Check for API key
         if not api_key:
@@ -281,18 +242,48 @@ class AnthropicProvider(AbstractLLMInterface):
                 "Anthropic API key not provided. Pass it as a parameter in config or "
                 "set the ANTHROPIC_API_KEY environment variable."
             )
-            
+        
+        # Log at INFO level
+        logger.info(f"Generating async response with Anthropic model: {model}")
+        
+        # Log detailed parameters at DEBUG level
+        logger.debug(f"Generation parameters: temperature={temperature}, max_tokens={max_tokens}")
+        if system_prompt:
+            logger.debug("Using system prompt")
+        
         # Check if model supports vision
-        has_vision = any(model.startswith(vm) for vm in VISION_CAPABLE_MODELS)
+        has_vision = any(vision_model in model.lower() for vision_model in [vm.lower() for vm in VISION_CAPABLE_MODELS])
         
         # Process image inputs if any, and if model supports vision
         image_request = False
-        if has_vision and (ModelParameter.IMAGE in params or "image" in params or 
-                          ModelParameter.IMAGES in params or "images" in params):
+        if has_vision and ("image" in params or "images" in params):
             logger.info("Processing image inputs for vision request")
             image_request = True
             params = preprocess_image_inputs(params, "anthropic")
-            
+        
+        # Prepare message parameters
+        message_params = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": []
+        }
+        
+        # Add system message if provided
+        if system_prompt:
+            message_params["system"] = system_prompt
+        
+        # Handle image content
+        if image_request:
+            # The image content should already be formatted by preprocess_image_inputs
+            message_params["messages"] = params.get("messages", [])
+            if not message_params["messages"]:
+                # Fallback if messages not set by preprocess_image_inputs
+                message_params["messages"] = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+        else:
+            # Text-only request
+            message_params["messages"] = [{"role": "user", "content": prompt}]
+        
         # Log the request
         log_request("anthropic", prompt, {
             "model": model,
@@ -303,102 +294,51 @@ class AnthropicProvider(AbstractLLMInterface):
             "image_request": image_request
         })
         
-        # Initialize client
-        client = anthropic.AsyncAnthropic(api_key=api_key) if hasattr(anthropic, "AsyncAnthropic") else None
-        
         # Log API request (without exposing API key)
-        log_request_url("anthropic", f"https://api.anthropic.com/v1/messages (model: {model})")
-        
-        # Prepare message
-        message_params = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "top_p": top_p,
-            "stream": stream
-        }
-        
-        # Add messages if provided through the preprocess_image_inputs function
-        if "messages" in params:
-            message_params["messages"] = params["messages"]
-        else:
-            # Otherwise, create a simple user message
-            message_params["messages"] = [
-                {"role": "user", "content": prompt}
-            ]
-        
-        if system_prompt:
-            message_params["system"] = system_prompt
-            
-        if stop:
-            message_params["stop_sequences"] = stop if isinstance(stop, list) else [stop]
+        log_request_url("anthropic", f"Anthropic API (model: {model})")
         
         # Handle streaming if requested
         if stream:
             logger.info("Starting async streaming generation")
             
-            if client and hasattr(client, 'messages') and hasattr(client.messages, 'stream'):
-                # Using AsyncAnthropic
-                async def async_generator():
-                    # Create a copy of message_params for streaming (without the 'stream' parameter)
-                    streaming_params = message_params.copy()
-                    if 'stream' in streaming_params:
-                        del streaming_params['stream']
+            async def async_generator():
+                # For async streaming, we need to use the synchronous API through asyncio.to_thread
+                # Create a copy of message_params for streaming
+                streaming_params = message_params.copy()
+                
+                # Implement a wrapper that runs the synchronous streaming in a thread
+                async def stream_wrapper():
+                    def sync_stream():
+                        chunks = []
+                        with self.client.messages.stream(**streaming_params) as stream:
+                            for chunk in stream:
+                                if hasattr(chunk, 'delta') and hasattr(chunk.delta, 'text'):
+                                    chunks.append(chunk.delta.text)
+                        return chunks
                     
-                    async with client.messages.stream(**streaming_params) as stream:
-                        async for text in stream.text_stream:
-                            yield text
+                    return await asyncio.to_thread(sync_stream)
                 
-                return async_generator()
-            else:
-                logger.warning("Async streaming not directly supported by Anthropic client, falling back to sync")
-                # Fallback to sync version in an asyncio executor
-                loop = asyncio.get_event_loop()
-                sync_generator = await loop.run_in_executor(
-                    None, 
-                    lambda: self.generate(
-                        prompt=prompt, 
-                        system_prompt=system_prompt, 
-                        stream=True, 
-                        **kwargs
-                    )
-                )
+                # Get all chunks from the stream
+                chunks = await stream_wrapper()
                 
-                # Convert sync generator to async generator
-                async def async_wrapper():
-                    for chunk in sync_generator:
-                        yield chunk
-                
-                return async_wrapper()
+                # Yield each chunk individually to maintain streaming behavior
+                for chunk in chunks:
+                    yield chunk
+            
+            return async_generator()
         else:
-            # Handle non-streaming case
-            # Check if we're using the async client or the sync client
-            if client and hasattr(client, 'messages') and hasattr(client.messages, 'create'):
-                # Using AsyncAnthropic
-                # Call API
-                response = await client.messages.create(**message_params)
-                
-                # Extract and log the response
+            # Use a wrapper function to execute the synchronous API call
+            async def async_wrapper():
+                # Standard non-streaming response
+                response = await asyncio.to_thread(
+                    self.client.messages.create, **message_params
+                )
                 result = response.content[0].text
                 log_response("anthropic", result)
                 logger.info("Async generation completed successfully")
-                
                 return result
-            else:
-                # Fallback to sync client with async wrapper
-                logger.warning("Using synchronous client with async wrapper - not optimal")
-                # Run the synchronous method in an executor
-                loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(
-                    None, 
-                    lambda: self.generate(
-                        prompt=prompt, 
-                        system_prompt=system_prompt, 
-                        stream=False, 
-                        **kwargs
-                    )
-                )
-                return result
+            
+            return await async_wrapper()
     
     def get_capabilities(self) -> Dict[Union[str, ModelCapability], Any]:
         """
@@ -407,19 +347,22 @@ class AnthropicProvider(AbstractLLMInterface):
         Returns:
             Dictionary of capabilities
         """
-        # Get current model
-        model = self.config.get(ModelParameter.MODEL, self.config.get("model", "claude-3-5-haiku-20241022"))
-        
-        # Check if model is vision-capable - ensure model is not None before checking
-        has_vision = False
-        if model:
-            has_vision = any(model.startswith(vm) for vm in VISION_CAPABLE_MODELS)
-        
-        return {
+        # Default base capabilities
+        capabilities = {
             ModelCapability.STREAMING: True,
-            ModelCapability.MAX_TOKENS: 100000,  # This varies by model
+            ModelCapability.MAX_TOKENS: 100000,  # Anthropic models support large outputs
             ModelCapability.SYSTEM_PROMPT: True,
             ModelCapability.ASYNC: True,
-            ModelCapability.FUNCTION_CALLING: True,  # Claude 3 supports tool use
-            ModelCapability.VISION: has_vision  # Dynamic based on model
-        } 
+            ModelCapability.FUNCTION_CALLING: False,  # Add this when Anthropic supports tool use
+            ModelCapability.VISION: False
+        }
+        
+        # Check if the current model supports vision
+        model = ConfigurationManager.get_param(self.config, ModelParameter.MODEL, self.model)
+        has_vision = any(vision_model in model.lower() for vision_model in [vm.lower() for vm in VISION_CAPABLE_MODELS])
+        
+        # Update vision capability
+        if has_vision:
+            capabilities[ModelCapability.VISION] = True
+            
+        return capabilities 

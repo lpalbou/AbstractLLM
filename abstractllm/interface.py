@@ -76,38 +76,6 @@ class ModelCapability(str, Enum):
     JSON_MODE = "supports_json_mode"  # Structured JSON output
 
 
-def create_config(**kwargs) -> Dict[str, Any]:
-    """
-    Create a configuration dictionary with default values.
-    
-    Args:
-        **kwargs: Configuration parameters to override defaults
-        
-    Returns:
-        Configuration dictionary
-    """
-    # Default configuration
-    config = {
-        ModelParameter.TEMPERATURE: 0.7,
-        ModelParameter.MAX_TOKENS: 2048,
-        ModelParameter.SYSTEM_PROMPT: None,
-        ModelParameter.TOP_P: 1.0,
-        ModelParameter.FREQUENCY_PENALTY: 0.0,
-        ModelParameter.PRESENCE_PENALTY: 0.0,
-        ModelParameter.STOP: None,
-        ModelParameter.MODEL: None,
-        ModelParameter.API_KEY: None,
-        ModelParameter.BASE_URL: None,
-        ModelParameter.TIMEOUT: 120,
-        ModelParameter.RETRY_COUNT: 3,
-        ModelParameter.SEED: None,
-        ModelParameter.LOGGING_ENABLED: True,
-    }
-    # Update with provided values
-    config.update(kwargs)
-    return config
-
-
 class AbstractLLMInterface(ABC):
     """
     Abstract interface for LLM providers.
@@ -124,7 +92,8 @@ class AbstractLLMInterface(ABC):
         Args:
             config: Configuration dictionary for the provider
         """
-        self.config = config or create_config()
+        from abstractllm.utils.config import ConfigurationManager
+        self.config = config or ConfigurationManager.create_base_config()
     
     @abstractmethod
     def generate(self, 
@@ -149,7 +118,7 @@ class AbstractLLMInterface(ABC):
             Exception: If the generation fails
         """
         pass
-
+    
     @abstractmethod
     async def generate_async(self, 
                           prompt: str, 
@@ -179,21 +148,15 @@ class AbstractLLMInterface(ABC):
         Return capabilities of this LLM.
         
         Returns:
-            Dictionary of capabilities including:
-            - streaming: bool - Whether streaming is supported
-            - max_tokens: Optional[int] - Maximum tokens supported
-            - supports_system_prompt: bool - Whether system prompts are supported
-            - supports_async: bool - Whether async generation is supported
-            - supports_function_calling: bool - Whether function calling is supported
-            - supports_vision: bool - Whether vision capabilities are supported
+            Dictionary of capabilities
         """
         return {
             ModelCapability.STREAMING: False,
-            ModelCapability.MAX_TOKENS: 2048,  # Default value, should be overridden by providers
+            ModelCapability.MAX_TOKENS: None,
             ModelCapability.SYSTEM_PROMPT: False,
             ModelCapability.ASYNC: False,
             ModelCapability.FUNCTION_CALLING: False,
-            ModelCapability.VISION: False,
+            ModelCapability.VISION: False
         }
         
     def set_config(self, **kwargs) -> None:

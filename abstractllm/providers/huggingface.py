@@ -1,8 +1,8 @@
 """
-Hugging Face implementation for AbstractLLM.
+Hugging Face implementation for AbstractLLM using Transformers.
 """
 
-from typing import Dict, Any, Optional, Union, Generator, AsyncGenerator, Tuple, Type, ClassVar
+from typing import Dict, Any, Optional, Union, Generator, AsyncGenerator, Tuple, ClassVar, List
 import os
 import asyncio
 import logging
@@ -15,19 +15,23 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoProcessor
 from pathlib import Path
 
-from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability, create_config
+from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability
 from abstractllm.utils.logging import (
     log_request, 
     log_response,
     log_request_url
 )
 from abstractllm.utils.image import preprocess_image_inputs
+from abstractllm.utils.config import ConfigurationManager
 
 # Configure logger with specific class path
 logger = logging.getLogger("abstractllm.providers.huggingface.HuggingFaceProvider")
 
 # Default model - small, usable by most systems
 DEFAULT_MODEL = "bartowski/microsoft_Phi-4-mini-instruct-GGUF"
+
+# Default timeout in seconds for generation (preventing infinite loops)
+DEFAULT_GENERATION_TIMEOUT = 60
 
 # Models that support vision capabilities
 VISION_CAPABLE_MODELS = [
@@ -120,21 +124,21 @@ class HuggingFaceProvider(AbstractLLMInterface):
         """
         super().__init__(config)
         
-        # Set default configuration
-        if ModelParameter.MODEL not in self.config and "model" not in self.config:
-            self.config[ModelParameter.MODEL] = DEFAULT_MODEL
+        # Initialize provider-specific configuration
+        self.config = ConfigurationManager.initialize_provider_config("huggingface", self.config)
         
         # Store device preference (will be used later when loading model)
-        self._device = self.config.get(ModelParameter.DEVICE, self.config.get("device", _get_optimal_device()))
+        self._device = ConfigurationManager.get_param(self.config, ModelParameter.DEVICE, _get_optimal_device())
         
         # Initialize model and tokenizer objects to None (will be loaded on demand)
         self._model = None
         self._tokenizer = None
+        self._processor = None  # For vision models
         self._model_loaded = False
         self._warmup_completed = False
         
         # Log provider initialization
-        model_name = self.config.get(ModelParameter.MODEL, self.config.get("model"))
+        model_name = ConfigurationManager.get_param(self.config, ModelParameter.MODEL, DEFAULT_MODEL)
         logger.info(f"Initialized HuggingFace provider with model: {model_name}")
         
         # Preload the model if auto_load is set
@@ -200,7 +204,7 @@ class HuggingFaceProvider(AbstractLLMInterface):
         Returns:
             A tuple that can be used as a dictionary key for the model cache
         """
-        model_name = self.config.get(ModelParameter.MODEL, self.config.get("model"))
+        model_name = ConfigurationManager.get_param(self.config, ModelParameter.MODEL, DEFAULT_MODEL)
         device_map = self.config.get("device_map", "auto")
         load_in_8bit = self.config.get("load_in_8bit", False)
         load_in_4bit = self.config.get("load_in_4bit", False)
@@ -269,7 +273,7 @@ class HuggingFaceProvider(AbstractLLMInterface):
         from pathlib import Path
             
         # Get model name
-        model_name = self.config.get(ModelParameter.MODEL, self.config.get("model"))
+        model_name = ConfigurationManager.get_param(self.config, ModelParameter.MODEL, DEFAULT_MODEL)
         if not model_name:
             raise ValueError("Model name must be provided in configuration")
         
@@ -552,66 +556,47 @@ class HuggingFaceProvider(AbstractLLMInterface):
                 stream: bool = False, 
                 **kwargs) -> Union[str, Generator[str, None, None]]:
         """
-        Generate a response using Hugging Face model.
+        Generate a response using HuggingFace model.
         
         Args:
             prompt: The input prompt
             system_prompt: Override the system prompt in the config
             stream: Whether to stream the response
             **kwargs: Additional parameters to override configuration
+                - image: A single image (URL, file path, base64 string, or dict)
+                - images: List of images (URLs, file paths, base64 strings, or dicts)
             
         Returns:
-            The generated text response
-        """
-        # Import here to avoid dependency issues
-        if not torch_available():
-            raise ImportError("PyTorch is required for this provider")
-        import torch
-        
-        # Combine configuration with kwargs
-        params = self.config.copy()
-        params.update(kwargs)
-        
-        # Process image inputs if present
-        has_image = "image" in params or "images" in params
-        
-        # Check if the model supports vision
-        model_name = params.get(ModelParameter.MODEL, params.get("model"))
-        is_vision_capable = any(vision_model in model_name for vision_model in VISION_CAPABLE_MODELS) if model_name else False
-        
-        if has_image and not is_vision_capable:
-            logger.warning(f"Model {model_name} does not support vision inputs. Ignoring image input.")
-            # Remove image inputs to avoid errors
-            if "image" in params:
-                del params["image"]
-            if "images" in params:
-                del params["images"]
-        elif has_image and is_vision_capable:
-            # Process image inputs for vision-capable models
-            params = preprocess_image_inputs(params, "huggingface")
+            The generated response or a generator if streaming
             
-            # Log vision request
-            logger.info(f"Processing vision input for model {model_name}")
+        Raises:
+            Exception: If the generation fails
+        """
+        # Load model if not already loaded
+        if not self._model_loaded:
+            self.load_model()
         
-        # Extract parameters (using both string and enum keys for backwards compatibility)
-        model_name = params.get(ModelParameter.MODEL, params.get("model"))
-        temperature = params.get(ModelParameter.TEMPERATURE, params.get("temperature", 0.7))
-        max_tokens = params.get(ModelParameter.MAX_TOKENS, params.get("max_new_tokens", params.get("max_tokens", 2048)))
-        system_prompt_from_config = params.get(ModelParameter.SYSTEM_PROMPT, params.get("system_prompt"))
-        system_prompt = system_prompt or system_prompt_from_config
-        top_p = params.get(ModelParameter.TOP_P, params.get("top_p", 1.0))
-        stop = params.get(ModelParameter.STOP, params.get("stop"))
-        generation_timeout = params.get("generation_timeout", 60)  # 1 minute default
+        # Extract and combine parameters using the configuration manager
+        params = ConfigurationManager.extract_generation_params(
+            "huggingface", self.config, kwargs, system_prompt
+        )
         
-        # Log at INFO level
-        logger.info(f"Generating response with HuggingFace model: {model_name}")
+        # Extract key parameters
+        model_name = ConfigurationManager.get_param(self.config, ModelParameter.MODEL, DEFAULT_MODEL)
+        temperature = params.get("temperature", 0.7)
+        max_tokens = params.get("max_tokens", 2048)
+        system_prompt = params.get("system_prompt")
+        top_p = params.get("top_p", 1.0)
+        repetition_penalty = params.get("repetition_penalty", 1.0)
+        timeout = params.get("generation_timeout", DEFAULT_GENERATION_TIMEOUT)
         
-        # Log detailed parameters at DEBUG level
-        logger.debug(f"Generation parameters: temperature={temperature}, max_tokens={max_tokens}, top_p={top_p}")
-        if system_prompt:
-            logger.debug("Using system prompt")
-        if stop:
-            logger.debug(f"Using stop sequences: {stop}")
+        # Process any image inputs
+        has_vision = any(vision_model in model_name for vision_model in VISION_CAPABLE_MODELS)
+        image_request = False
+        if has_vision and ("image" in params or "images" in params):
+            logger.info("Processing image inputs for vision request")
+            image_request = True
+            params = preprocess_image_inputs(params, "huggingface", is_open_model=True)
         
         # Log the request
         log_request("huggingface", prompt, {
@@ -619,402 +604,177 @@ class HuggingFaceProvider(AbstractLLMInterface):
             "temperature": temperature,
             "max_tokens": max_tokens,
             "has_system_prompt": system_prompt is not None,
-            "stream": stream
+            "stream": stream,
+            "image_request": image_request
         })
         
-        # Load model and tokenizer if not already loaded
-        if not self._model_loaded:
-            self.load_model()
+        # Handle special case for multimodal generation
+        if image_request:
+            # Check if the model is vision-capable
+            if not has_vision:
+                raise ValueError(f"Model {model_name} does not support vision. Choose a vision-capable model.")
+            
+            # Process image(s)
+            image_data = None
+            if "image" in params:
+                image_data = params["image"]
+            elif "images" in params and params["images"]:
+                # Take the first image if multiple are provided
+                image_data = params["images"][0]
+                if len(params["images"]) > 1:
+                    logger.warning("Multiple images provided, but only the first one will be used.")
+            
+            # Detect phi4-multimodal models which need special handling
+            is_phi4_vision = "phi-4-multimodal" in model_name.lower() or "phi4-multimodal" in model_name.lower()
+            
+            # Handle phi4-multimodal models
+            if is_phi4_vision:
+                return self._generate_phi4_vision(prompt, image_data, system_prompt, stream, max_tokens, temperature, top_p, repetition_penalty, timeout)
+            
+            # Handle other vision models (placeholder for different model-specific implementations)
+            else:
+                # Return this for now
+                raise NotImplementedError(f"Vision generation not implemented for {model_name}. Currently only Phi-4-multimodal is supported.")
         
-        # Prepare the input - handling system prompt if provided
+        # Create the input
+        input_text = prompt
         if system_prompt:
-            # Adapt based on the model - this is a simplistic approach
-            # Different models have different formats for system prompts
-            full_prompt = f"{system_prompt}\n\n{prompt}"
-        else:
-            full_prompt = prompt
-        
-        # Get model's context size - default to 1024 if not available
-        context_size = getattr(self._model.config, "n_positions", 1024)
-        
-        # Check if this is a vision model with image inputs
-        model_name = params.get(ModelParameter.MODEL, params.get("model"))
-        is_vision_capable = any(vision_model in model_name for vision_model in VISION_CAPABLE_MODELS) if model_name else False
-        has_image = "image" in params
-        
-        if has_image and is_vision_capable:
-            # Process image input
-            image_input = params.get("image")
-            image_processor_format = params.get("image_processor_format", "pil")
+            # Try to follow a common format for system instruction
+            input_text = f"<|system|>\n{system_prompt}\n<|user|>\n{prompt}\n<|assistant|>"
             
-            # Import PIL only when needed
-            try:
-                from PIL import Image
-                import requests
-                from io import BytesIO
-            except ImportError:
-                raise ImportError("PIL and requests are required for image processing")
-            
-            # Load image based on the input type
-            if isinstance(image_input, str):
-                if image_input.startswith(('http://', 'https://')):
-                    # Load from URL
-                    logger.debug(f"Loading image from URL: {image_input}")
-                    try:
-                        response = requests.get(image_input, stream=True, timeout=60)
-                        response.raise_for_status()
-                        image = Image.open(BytesIO(response.content))
-                    except Exception as e:
-                        logger.error(f"Failed to load image from URL: {e}")
-                        raise ValueError(f"Could not load image from URL: {e}")
-                else:
-                    # Load from file path
-                    try:
-                        logger.debug(f"Loading image from file: {image_input}")
-                        image = Image.open(image_input)
-                    except Exception as e:
-                        logger.error(f"Failed to load image from file: {e}")
-                        raise ValueError(f"Could not load image from file: {e}")
-            elif isinstance(image_input, bytes):
-                # Handle bytes data
-                logger.debug("Loading image from bytes data")
-                image = Image.open(BytesIO(image_input))
-            else:
-                # Assume it's already a PIL Image
-                logger.debug("Using provided PIL image object")
-                image = image_input
-                
-            # Ensure the image is in RGB mode
-            if image.mode != "RGB":
-                logger.debug(f"Converting image from {image.mode} to RGB")
-                image = image.convert("RGB")
-                
-            # Process the image based on the model type
-            if self._processor is not None:
-                logger.debug("Using model processor for image")
-                # If model has a processor, use it to process the image
-                if "deepseek-vl" in model_name.lower():
-                    # DeepSeek vision model processing
-                    try:
-                        logger.debug("Processing for DeepSeek vision model")
-                        
-                        # Format prompt for DeepSeek
-                        if system_prompt:
-                            deepseek_prompt = f"<system>\n{system_prompt}\n</system>\n\n<human>\n{prompt}\n</human>\n\n<bot>\n"
-                        else:
-                            deepseek_prompt = f"<human>\n{prompt}\n</human>\n\n<bot>\n"
-                        
-                        # Process the image and prepare model inputs
-                        processed_inputs = self._processor(
-                            text=deepseek_prompt,
-                            images=image,
-                            return_tensors="pt"
-                        )
-                        
-                        # Move to device
-                        processed_inputs = {k: v.to(self._model.device) for k, v in processed_inputs.items()}
-                        
-                        # Generate with the processed inputs
-                        generation_config = {
-                            "max_new_tokens": max_tokens,
-                            "do_sample": temperature > 0.0,
-                            "temperature": max(temperature, 1e-4),  # Avoid division by zero
-                            "top_p": top_p
-                        }
-                        
-                        # Set stop sequences if provided
-                        if stop and isinstance(stop, list):
-                            generation_config["stopping_criteria"] = self._create_stopping_criteria(stop, deepseek_prompt)
-                            
-                        # Start generation timer
-                        start_time = time.time()
-                        
-                        # Generate the full response at once
-                        with torch.no_grad():
-                            output_ids = self._model.generate(**processed_inputs, **generation_config)
-                            
-                        # Extract the response text - skip the prompt tokens
-                        input_length = processed_inputs["input_ids"].shape[1]
-                        response = self._tokenizer.decode(output_ids[0][input_length:], skip_special_tokens=True)
-                        
-                        # Log the response
-                        log_response("huggingface", response)
-                        return response
-                    except Exception as e:
-                        logger.error(f"Error in DeepSeek vision processing: {e}")
-                        raise
-                else:
-                    # Standard processor-based approach
-                    try:
-                        processed_inputs = self._processor(
-                            text=full_prompt, 
-                            images=image, 
-                            return_tensors="pt"
-                        )
-                        # Move to device
-                        processed_inputs = {k: v.to(self._model.device) for k, v in processed_inputs.items()}
-                    except Exception as e:
-                        logger.error(f"Failed to process image with processor: {e}")
-                        raise ValueError(f"Error processing image: {e}")
-            else:
-                # If no processor, convert image to pixel_values using tokenizer
-                logger.debug("No processor found. Using basic image processing.")
-                try:
-                    # Tokenize the prompt
-                    inputs = self._tokenizer(full_prompt, return_tensors="pt")
-                    inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
-                    
-                    # Provide a direct warning - most models without processors won't handle images well
-                    logger.warning(f"Model {model_name} does not have a processor for images. Vision may not work properly.")
-                    
-                    # Just proceed with text processing
-                    processed_inputs = inputs
-                except Exception as e:
-                    logger.error(f"Failed to process input: {e}")
-                    raise ValueError(f"Error processing input: {e}")
-            
-            # Start generation timer
-            start_time = time.time()
-            
-            # Generate the response - for models that use processor output directly
-            try:
-                logger.debug("Generating response from vision model")
-                
-                generation_config = {
-                    "max_new_tokens": max_tokens,
-                    "do_sample": temperature > 0.0,
-                    "temperature": max(temperature, 1e-4),  # Avoid division by zero
-                    "top_p": top_p
-                }
-                
-                # Set stop sequences if provided
-                if stop and isinstance(stop, list):
-                    generation_config["stopping_criteria"] = self._create_stopping_criteria(stop, full_prompt)
-                
-                # Stream if requested and not Phi-4 (which is handled above)
-                if stream and "phi-4" not in model_name.lower():
-                    return self._stream_generator(processed_inputs, generation_config, generation_timeout)
-                
-                # Otherwise, generate the full response at once
-                # Skip generation for Phi-4 which is handled above
-                if "phi-4" not in model_name.lower():
-                    with torch.no_grad():
-                        output_ids = self._model.generate(**processed_inputs, **generation_config)
-                        
-                    if hasattr(self._processor, "batch_decode"):
-                        # Use processor's decode if available
-                        logger.debug("Decoding with processor")
-                        response = self._processor.batch_decode(output_ids, skip_special_tokens=True)[0]
-                    else:
-                        # Fall back to tokenizer
-                        logger.debug("Decoding with tokenizer")
-                        response = self._tokenizer.decode(output_ids[0], skip_special_tokens=True)
-                    
-                    # Try to extract just the generated part (may vary by model architecture)
-                    try:
-                        input_length = processed_inputs["input_ids"].shape[1]
-                        response = self._tokenizer.decode(output_ids[0][input_length:], skip_special_tokens=True)
-                    except Exception:
-                        # Keep the full response if extraction fails
-                        pass
-                    
-                    # Log the response
-                    log_response("huggingface", response)
-                    return response
-            except Exception as e:
-                logger.error(f"Error in vision model response generation: {e}")
-                raise
-        else:
-            # Standard text-only processing
-            try:
-                inputs = self._tokenizer(
-                    full_prompt, 
-                    return_tensors="pt", 
-                    truncation=True, 
-                    max_length=context_size - max_tokens
-                )
-                inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
-            except Exception as e:
-                logger.error(f"Tokenization error: {e}")
-                # Fall back to a simpler approach
-                try:
-                    inputs = self._tokenizer(
-                        full_prompt,
-                        return_tensors="pt",
-                        truncation=True,
-                        max_length=512  # Use a conservative value
-                    )
-                    inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
-                except Exception as fallback_error:
-                    logger.error(f"Fallback tokenization failed: {fallback_error}")
-                    return f"Error: Failed to process the input prompt. {str(e)}"
-        
-        # Set up generation config
+        # Define generation config
         generation_config = {
             "max_new_tokens": max_tokens,
-            "do_sample": temperature > 0,
-            "top_p": top_p
+            "temperature": temperature,
+            "top_p": top_p,
+            "repetition_penalty": repetition_penalty,
+            "do_sample": temperature > 0.0001,  # Only use sampling if temperature is non-zero
         }
         
         # Add pad_token_id if available
         if hasattr(self._tokenizer, 'pad_token_id') and self._tokenizer.pad_token_id is not None:
             generation_config["pad_token_id"] = self._tokenizer.pad_token_id
-        
-        if temperature > 0:
-            generation_config["temperature"] = temperature
             
-        if stop:
-            # Convert stop sequences to token IDs
-            stop_token_ids = []
-            for seq in (stop if isinstance(stop, list) else [stop]):
-                ids = self._tokenizer.encode(seq, add_special_tokens=False)
-                if ids:
-                    stop_token_ids.append(ids[-1])  # Use last token as stop
-            if stop_token_ids:
-                generation_config["eos_token_id"] = stop_token_ids
+        # Add stopping criteria if requested
+        stop_sequences = params.get("stop", None)
+        if stop_sequences:
+            stopping_criteria = self._create_stopping_criteria(stop_sequences, input_text)
+            generation_config["stopping_criteria"] = stopping_criteria
+            
+        # Encode input text
+        inputs = self._tokenizer(input_text, return_tensors="pt")
+        inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
         
-        # Handle streaming if requested (a simplified version)
+        # Handle streaming if requested
         if stream:
             logger.info("Starting streaming generation")
             
-            def response_generator():
-                # Copy this to the local scope so it's available within the generator
-                local_stop_token_ids = stop_token_ids if 'stop_token_ids' in locals() else []
+            # Use the phi4 multimodal generator if it's the phi4 model (without image)
+            is_phi4 = "phi-4" in model_name.lower() or "phi4" in model_name.lower()
+            if is_phi4:
+                generator = self._phi4_multimodal_stream_generator(inputs, generation_config, timeout)
+            else:
+                generator = self._stream_generator(inputs, generation_config, timeout)
                 
-                input_length = inputs["input_ids"].shape[1]
-                start_time = time.time()
-                
-                with torch.no_grad():
-                    generated = inputs["input_ids"].clone()
-                    past_key_values = None
-                    
-                    for _ in range(max_tokens):
-                        # Check for timeout
-                        if time.time() - start_time > generation_timeout:
-                            logger.warning(f"Generation timed out after {generation_timeout} seconds")
-                            yield "\n[Generation timed out]"
-                            break
-                            
-                        with torch.no_grad():
-                            outputs = self._model(
-                                input_ids=generated[:, -1:] if past_key_values is not None else generated,
-                                past_key_values=past_key_values,
-                                use_cache=True
-                            )
-                            
-                            next_token_logits = outputs.logits[:, -1, :]
-                            
-                            # Apply temperature and top-p sampling
-                            if temperature > 0:
-                                next_token_logits = next_token_logits / temperature
-                            
-                            # Filter with top-p
-                            if top_p < 1.0:
-                                sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
-                                cumulative_probs = torch.cumsum(torch.nn.functional.softmax(sorted_logits, dim=-1), dim=-1)
-                                sorted_indices_to_remove = cumulative_probs > top_p
-                                sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-                                sorted_indices_to_remove[..., 0] = 0
-                                
-                                indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
-                                next_token_logits[indices_to_remove] = -float("Inf")
-                            
-                            # Sample
-                            probs = torch.nn.functional.softmax(next_token_logits, dim=-1)
-                            next_token = torch.multinomial(probs, num_samples=1)
-                            
-                            # Check for end of sequence
-                            if local_stop_token_ids and next_token.item() in local_stop_token_ids:
-                                break
-                                
-                            # Add to generated
-                            generated = torch.cat([generated, next_token], dim=-1)
-                            
-                            # Decode the current new token
-                            new_token_text = self._tokenizer.decode(next_token[0])
-                            yield new_token_text
-                            
-                            # Update past key values
-                            past_key_values = outputs.past_key_values
-                            
-            return response_generator()
+            return generator
         else:
-            # Standard non-streaming response
-            start_time = time.time()
-            
+            # Standard non-streaming generation
             try:
-                with torch.no_grad():
-                    outputs = self._model.generate(
-                        **inputs,
-                        **generation_config
-                    )
+                # Set up timeout
+                import signal
                 
-                # Decode and extract only the new content
-                full_output = self._tokenizer.decode(outputs[0], skip_special_tokens=True)
-                result = full_output[len(full_prompt):].strip()
+                class TimeoutException(Exception):
+                    pass
                 
-                # Log the response
-                log_response("huggingface", result)
-                logger.info("Generation completed successfully")
+                def timeout_handler(signum, frame):
+                    raise TimeoutException("Generation timed out")
                 
-                return result
+                # Set the timeout
+                original_handler = signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(timeout)
+                
+                try:
+                    # Generate output
+                    with torch.no_grad():
+                        outputs = self._model.generate(**inputs, **generation_config)
+                    
+                    # Decode and return result
+                    output_text = self._tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+                    
+                    # Clean the output text
+                    output_text = output_text.strip()
+                    
+                    # Log the result
+                    log_response("huggingface", output_text)
+                    logger.info("Generation completed successfully")
+                    
+                    return output_text
+                except TimeoutException:
+                    logger.error(f"Generation timed out after {timeout} seconds")
+                    raise RuntimeError(f"Generation timed out after {timeout} seconds")
+                finally:
+                    # Restore the original alarm handler
+                    signal.signal(signal.SIGALRM, original_handler)
+                    signal.alarm(0)
             except Exception as e:
-                # Check if we timed out
-                if time.time() - start_time > generation_timeout:
-                    logger.warning(f"Generation timed out after {generation_timeout} seconds")
-                    return "[Generation timed out]"
-                else:
-                    logger.error(f"Generation failed: {e}")
-                    raise
+                logger.error(f"Error during generation: {str(e)}")
+                raise
     
     async def generate_async(self, 
-                          prompt: str, 
-                          system_prompt: Optional[str] = None, 
-                          stream: bool = False, 
-                          **kwargs) -> Union[str, AsyncGenerator[str, None]]:
+                        prompt: str, 
+                        system_prompt: Optional[str] = None, 
+                        stream: bool = False, 
+                        **kwargs) -> Union[str, AsyncGenerator[str, None]]:
         """
-        Generate a response asynchronously using Hugging Face model.
+        Generate a response using HuggingFace model asynchronously.
         
         Args:
             prompt: The input prompt
             system_prompt: Override the system prompt in the config
             stream: Whether to stream the response
             **kwargs: Additional parameters to override configuration
-            
+                - image: A single image (URL, file path, base64 string, or dict)
+                - images: List of images (URLs, file paths, base64 strings, or dicts)
+                
         Returns:
-            The generated text response or an async generator
+            The generated response or an async generator if streaming
         """
-        # If streaming, create an async generator that wraps the sync generator
-        if stream:
-            # Create a sync generator in a thread and yield from it
-            async def async_generator():
-                with ThreadPoolExecutor() as executor:
-                    # Run the sync generate method in a thread
-                    gen_future = executor.submit(
-                        self.generate, prompt, system_prompt, True, **kwargs
-                    )
-                    
-                    try:
-                        # Get the sync generator
-                        sync_gen = await asyncio.to_thread(lambda: gen_future.result())
-                        
-                        # Yield from the sync generator
-                        for chunk in sync_gen:
-                            yield chunk
-                    except Exception as e:
-                        logger.error(f"Error in async generation: {e}")
-                        yield f"[Error: {str(e)}]"
-            
-            return async_generator()
-        else:
-            # For non-streaming, just run the sync method in a thread
-            try:
-                return await asyncio.to_thread(
-                    self.generate, prompt, system_prompt, False, **kwargs
+        # Import required modules for async execution
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+        
+        # Load model if not already loaded
+        if not self._model_loaded:
+            # Load model in a thread to avoid blocking the event loop
+            with ThreadPoolExecutor() as executor:
+                await asyncio.get_event_loop().run_in_executor(
+                    executor, self.load_model
                 )
-            except Exception as e:
-                logger.error(f"Error in async generation: {e}")
-                raise
+        
+        # Extract and combine parameters using the configuration manager
+        params = ConfigurationManager.extract_generation_params(
+            "huggingface", self.config, kwargs, system_prompt
+        )
+        
+        # Process stream parameter
+        if stream:
+            # Define an async generator that wraps the sync generator
+            async def async_stream_wrapper():
+                sync_gen = self.generate(prompt, system_prompt, stream=True, **kwargs)
+                for chunk in sync_gen:
+                    yield chunk
+                    # Add a small sleep to allow other async tasks to run
+                    await asyncio.sleep(0.01)
+            
+            return async_stream_wrapper()
+        else:
+            # Run the synchronous generate method in a thread pool
+            with ThreadPoolExecutor() as executor:
+                result = await asyncio.get_event_loop().run_in_executor(
+                    executor, 
+                    lambda: self.generate(prompt, system_prompt, stream=False, **kwargs)
+                )
+                return result
     
     def get_capabilities(self) -> Dict[Union[str, ModelCapability], Any]:
         """
@@ -1024,7 +784,7 @@ class HuggingFaceProvider(AbstractLLMInterface):
             Dictionary of capabilities
         """
         # Get model name from config
-        model_name = self.config.get(ModelParameter.MODEL, self.config.get("model"))
+        model_name = ConfigurationManager.get_param(self.config, ModelParameter.MODEL, DEFAULT_MODEL)
         
         # Check if this is a vision-capable model
         is_vision_capable = any(vision_model in model_name for vision_model in VISION_CAPABLE_MODELS) if model_name else False

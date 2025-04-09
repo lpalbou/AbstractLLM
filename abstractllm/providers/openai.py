@@ -2,14 +2,13 @@
 OpenAI API implementation for AbstractLLM.
 """
 
-from typing import Dict, Any, Optional, Union, Generator, AsyncGenerator
+from typing import Dict, Any, Optional, Union, Generator, AsyncGenerator, List
 import os
-import asyncio
 import logging
-import time
-import json
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
-from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability, create_config
+from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability
 from abstractllm.utils.logging import (
     log_request, 
     log_response, 
@@ -18,14 +17,18 @@ from abstractllm.utils.logging import (
     log_request_url
 )
 from abstractllm.utils.image import preprocess_image_inputs
+from abstractllm.utils.config import ConfigurationManager
 
-# Configure logger with specific class path
+# Configure logger
 logger = logging.getLogger("abstractllm.providers.openai.OpenAIProvider")
 
 # Models that support vision capabilities
 VISION_CAPABLE_MODELS = [
-    "gpt-4-vision-preview", 
-    "gpt-4-turbo", 
+    "gpt-4-vision",
+    "gpt-4-vision-preview",
+    "gpt-4-turbo-preview",
+    "gpt-4-turbo-vision-preview",
+    "gpt-4-turbo",
     "gpt-4o",
     "gpt-4o-2024-05-13"
 ]
@@ -44,21 +47,11 @@ class OpenAIProvider(AbstractLLMInterface):
         """
         super().__init__(config)
         
-        # Get API key from config or environment
-        api_key = self.config.get(ModelParameter.API_KEY, self.config.get("api_key"))
-        
-        # Try getting the API key from environment if not in config
-        if not api_key:
-            env_api_key = os.environ.get("OPENAI_API_KEY")
-            if env_api_key:
-                self.config[ModelParameter.API_KEY] = env_api_key
-                log_api_key_from_env("OpenAI", "OPENAI_API_KEY")
-        
-        if ModelParameter.MODEL not in self.config and "model" not in self.config:
-            self.config[ModelParameter.MODEL] = "gpt-3.5-turbo"
+        # Initialize provider-specific configuration
+        self.config = ConfigurationManager.initialize_provider_config("openai", self.config)
         
         # Log provider initialization
-        model = self.config.get(ModelParameter.MODEL, self.config.get("model", "gpt-3.5-turbo"))
+        model = ConfigurationManager.get_param(self.config, ModelParameter.MODEL, "gpt-3.5-turbo")
         logger.info(f"Initialized OpenAI provider with model: {model}")
     
     def generate(self, 
@@ -91,38 +84,28 @@ class OpenAIProvider(AbstractLLMInterface):
                 "OpenAI package not found. Install it with: pip install openai"
             )
         
-        # Combine configuration with kwargs
-        params = self.config.copy()
-        params.update(kwargs)
+        # Extract and combine parameters using the configuration manager
+        params = ConfigurationManager.extract_generation_params(
+            "openai", self.config, kwargs, system_prompt
+        )
         
-        # Extract parameters (using both string and enum keys for backwards compatibility)
-        api_key = params.get(ModelParameter.API_KEY, params.get("api_key"))
+        # Extract key parameters
+        api_key = params.get("api_key")
+        model = params.get("model", "gpt-3.5-turbo")
         
-        # Try getting the API key from environment if not in config
-        if not api_key:
-            api_key = os.environ.get("OPENAI_API_KEY")
-            if api_key:
-                # Update the config with the API key from environment for future use
-                self.config[ModelParameter.API_KEY] = api_key
-                log_api_key_from_env("OpenAI", "OPENAI_API_KEY")
-        
-        # Ensure model is set and has a valid value
-        model = params.get(ModelParameter.MODEL, params.get("model"))
-        if not model:
-            model = "gpt-3.5-turbo"  # Default model
-            # Update the config for future use
-            self.config[ModelParameter.MODEL] = model
-        
-        temperature = params.get(ModelParameter.TEMPERATURE, params.get("temperature", 0.7))
-        max_tokens = params.get(ModelParameter.MAX_TOKENS, params.get("max_tokens"))
-        system_prompt = system_prompt or params.get(ModelParameter.SYSTEM_PROMPT, params.get("system_prompt"))
-        top_p = params.get(ModelParameter.TOP_P, params.get("top_p", 1.0))
-        frequency_penalty = params.get(ModelParameter.FREQUENCY_PENALTY, params.get("frequency_penalty", 0.0))
-        presence_penalty = params.get(ModelParameter.PRESENCE_PENALTY, params.get("presence_penalty", 0.0))
-        stop = params.get(ModelParameter.STOP, params.get("stop"))
-        
-        # Handle image detail parameter for vision models
-        image_detail = params.get(ModelParameter.IMAGE_DETAIL, params.get("image_detail", "auto"))
+        # Ensure model is not None
+        if model is None:
+            model = "gpt-3.5-turbo"
+            logger.warning(f"Model was None, defaulting to {model}")
+            
+        temperature = params.get("temperature", 0.7)
+        max_tokens = params.get("max_tokens")
+        system_prompt = params.get("system_prompt")
+        top_p = params.get("top_p", 1.0)
+        frequency_penalty = params.get("frequency_penalty", 0.0)
+        presence_penalty = params.get("presence_penalty", 0.0)
+        stop = params.get("stop")
+        image_detail = params.get("image_detail", "auto")
         
         # Log at INFO level
         logger.info(f"Generating response with OpenAI model: {model}")
@@ -147,8 +130,7 @@ class OpenAIProvider(AbstractLLMInterface):
         
         # Process image inputs if any, and if model supports vision
         image_request = False
-        if has_vision and (ModelParameter.IMAGE in params or "image" in params or 
-                          ModelParameter.IMAGES in params or "images" in params):
+        if has_vision and ("image" in params or "images" in params):
             logger.info("Processing image inputs for vision request")
             image_request = True
             params = preprocess_image_inputs(params, "openai")
@@ -272,6 +254,7 @@ class OpenAIProvider(AbstractLLMInterface):
         model = params.get(ModelParameter.MODEL, params.get("model"))
         if not model:
             model = "gpt-3.5-turbo"  # Default model
+            logger.warning(f"Model was None, defaulting to {model}")
             # Update the config for future use
             self.config[ModelParameter.MODEL] = model
         
@@ -406,5 +389,6 @@ class OpenAIProvider(AbstractLLMInterface):
             ModelCapability.SYSTEM_PROMPT: True,
             ModelCapability.ASYNC: True,
             ModelCapability.FUNCTION_CALLING: True,
-            ModelCapability.VISION: has_vision  # Dynamic based on model
+            ModelCapability.VISION: has_vision,  # Dynamic based on model
+            ModelCapability.JSON_MODE: True  # OpenAI supports JSON mode
         } 

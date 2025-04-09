@@ -7,6 +7,7 @@ import asyncio
 from typing import Dict, Any, List, Union, Generator
 
 from abstractllm import AbstractLLMInterface, ModelParameter, ModelCapability
+from abstractllm.utils.config import ConfigurationManager
 from abstractllm.providers.openai import OpenAIProvider
 from abstractllm.providers.ollama import OllamaProvider
 from abstractllm.providers.huggingface import HuggingFaceProvider
@@ -50,9 +51,23 @@ def test_factual_generation(any_provider: AbstractLLMInterface, prompt_test: Dic
     prompt = prompt_test["prompt"]
     expected_contains = prompt_test["expected_contains"]
     
+    # Use ConfigurationManager to extract parameters before generation
+    provider_name = any_provider.__class__.__name__.replace("Provider", "").lower()
+    
     # Special handling for HuggingFace provider since it's using a standard language model
     # (not an instruction-tuned model like GPT or Claude)
     if isinstance(any_provider, HuggingFaceProvider):
+        # Extract generation parameters for HuggingFace
+        gen_params = ConfigurationManager.extract_generation_params(
+            "huggingface", 
+            any_provider.config, 
+            {"max_tokens": 30, "temperature": 0.9}
+        )
+        
+        # Verify parameters were properly extracted
+        assert gen_params["max_tokens"] == 30
+        assert gen_params["temperature"] == 0.9
+        
         # Use a simple prompt that is more likely to generate output with distilgpt2
         response = ""
         max_attempts = 3
@@ -76,6 +91,13 @@ def test_factual_generation(any_provider: AbstractLLMInterface, prompt_test: Dic
         assert isinstance(response, str)
         assert len(response) > 0
         return
+    
+    # Extract generation parameters for other providers
+    gen_params = ConfigurationManager.extract_generation_params(
+        provider_name, 
+        any_provider.config, 
+        {}
+    )
     
     # Normal path for other providers
     response = any_provider.generate(prompt)
@@ -105,6 +127,20 @@ def test_system_prompt(any_provider: AbstractLLMInterface, prompt_test: Dict[str
     system_prompt = prompt_test["system_prompt"]
     expected_contains = prompt_test["expected_contains"]
     not_expected_contains = prompt_test.get("not_expected_contains", [])
+    
+    # Extract provider name for ConfigurationManager
+    provider_name = any_provider.__class__.__name__.replace("Provider", "").lower()
+    
+    # Extract generation parameters including system prompt
+    gen_params = ConfigurationManager.extract_generation_params(
+        provider_name, 
+        any_provider.config, 
+        {}, 
+        system_prompt=system_prompt
+    )
+    
+    # Verify system prompt is included in the parameters
+    assert gen_params["system_prompt"] == system_prompt
     
     # Special handling for HuggingFace provider
     if isinstance(any_provider, HuggingFaceProvider):
@@ -149,6 +185,19 @@ def test_streaming(any_provider: AbstractLLMInterface, prompt_test: Dict[str, An
     prompt = prompt_test["prompt"]
     min_chunks = prompt_test.get("min_chunks", 2)
     expected_sequence = prompt_test.get("expected_sequence", [])
+    
+    # Extract provider name for ConfigurationManager
+    provider_name = any_provider.__class__.__name__.replace("Provider", "").lower()
+    
+    # Extract generation parameters with stream=True
+    gen_params = ConfigurationManager.extract_generation_params(
+        provider_name, 
+        any_provider.config, 
+        {"stream": True}
+    )
+    
+    # Verify streaming parameter is set
+    assert gen_params.get("stream", False) is True
     
     # Special handling for HuggingFace provider
     if isinstance(any_provider, HuggingFaceProvider):

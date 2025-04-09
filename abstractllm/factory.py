@@ -4,7 +4,8 @@ Factory function for creating LLM provider instances.
 
 from typing import Dict, Any, Optional
 import importlib
-from abstractllm.interface import AbstractLLMInterface, ModelParameter, create_config
+from abstractllm.interface import AbstractLLMInterface, ModelParameter
+from abstractllm.utils.config import ConfigurationManager
 
 
 # Provider mapping
@@ -45,8 +46,9 @@ def create_llm(provider: str, **config) -> AbstractLLMInterface:
     except (ImportError, AttributeError) as e:
         raise ImportError(f"Could not import provider {provider}: {e}")
     
-    # Create configuration with defaults
-    provider_config = create_config(**config)
+    # Create configuration with defaults and provider-specific setup
+    base_config = ConfigurationManager.create_base_config(**config)
+    provider_config = ConfigurationManager.initialize_provider_config(provider, base_config)
     
     # Instantiate and return the provider
     return provider_class(config=provider_config) 
