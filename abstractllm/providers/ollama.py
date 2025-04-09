@@ -25,7 +25,14 @@ logger = logging.getLogger("abstractllm.providers.ollama.OllamaProvider")
 VISION_CAPABLE_MODELS = [
     "llama3.2-vision",
     "deepseek-janus-pro",
-    "erwan2/DeepSeek-Janus-Pro-7B"
+    "erwan2/DeepSeek-Janus-Pro-7B",
+    "llava",
+    "llama2-vision",
+    "bakllava",
+    "cogvlm",
+    "moondream",
+    "multimodal",
+    "vision"
 ]
 
 class OllamaProvider(AbstractLLMInterface):
@@ -109,7 +116,103 @@ class OllamaProvider(AbstractLLMInterface):
             logger.info("Processing image inputs for vision request")
             image_request = True
             params = preprocess_image_inputs(params, "ollama")
+            
+            # For vision requests, use the chat API endpoint instead of generate
+            try:
+                # Build the chat API request
+                chat_request = {
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    "stream": stream,
+                    "options": {
+                        "temperature": temperature,
+                        "top_p": top_p,
+                        "top_k": top_k
+                    }
+                }
+                
+                # Add system prompt if provided
+                if system_prompt:
+                    chat_request["system"] = system_prompt
+                
+                # Add max tokens if provided
+                if max_tokens:
+                    chat_request["options"]["num_predict"] = max_tokens
+                
+                # Add stop sequences if provided
+                if stop:
+                    chat_request["options"]["stop"] = stop if isinstance(stop, list) else [stop]
+                
+                # Add images to the last user message
+                if "images" in params:
+                    # Find the last user message or create one
+                    if len(chat_request["messages"]) > 0 and chat_request["messages"][-1]["role"] == "user":
+                        chat_request["messages"][-1]["images"] = params["images"]
+                    else:
+                        # This should not happen as we just created a user message, but just in case
+                        logger.warning("Could not find user message to attach images to")
+                
+                # Log the request
+                log_request("ollama", prompt, {
+                    "model": model,
+                    "temperature": temperature,
+                    "base_url": base_url,
+                    "has_system_prompt": system_prompt is not None,
+                    "stream": stream,
+                    "image_request": image_request,
+                    "endpoint": "chat"
+                })
+                
+                # Log API request URL
+                log_request_url("ollama", f"{base_url}/api/chat (model: {model}, vision: true)")
+                
+                # Handle streaming if requested
+                if stream:
+                    logger.info("Starting streaming chat generation")
+                    
+                    def chat_response_generator():
+                        try:
+                            with requests.post(
+                                f"{base_url}/api/chat",
+                                json=chat_request,
+                                stream=True
+                            ) as response:
+                                response.raise_for_status()
+                                for line in response.iter_lines():
+                                    if line:
+                                        data = json.loads(line)
+                                        if "message" in data and "content" in data["message"]:
+                                            yield data["message"]["content"]
+                        except requests.exceptions.RequestException as e:
+                            logger.error(f"Ollama API request failed: {e}")
+                            raise Exception(f"Ollama API request failed: {e}")
+                    
+                    return chat_response_generator()
+                else:
+                    # Make the standard API request
+                    response = requests.post(
+                        f"{base_url}/api/chat",
+                        json=chat_request
+                    )
+                    response.raise_for_status()
+                    
+                    # Extract and log the response
+                    # Chat API returns different structure than generate API
+                    result = response.json().get("message", {}).get("content", "")
+                    log_response("ollama", result)
+                    logger.info("Generation completed successfully")
+                    
+                    return result
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Ollama API request failed: {e}")
+                raise Exception(f"Ollama API request failed: {e}")
         
+        # For non-vision requests, use the original generate API
         # Build the request
         request_data = {
             "model": model,
@@ -132,10 +235,6 @@ class OllamaProvider(AbstractLLMInterface):
         # Add stop sequences if provided
         if stop:
             request_data["options"]["stop"] = stop if isinstance(stop, list) else [stop]
-            
-        # Include images if provided through preprocess_image_inputs
-        if "images" in params:
-            request_data["images"] = params["images"]
         
         # Log the request
         log_request("ollama", prompt, {
@@ -144,7 +243,8 @@ class OllamaProvider(AbstractLLMInterface):
             "base_url": base_url,
             "has_system_prompt": system_prompt is not None,
             "stream": stream,
-            "image_request": image_request
+            "image_request": image_request,
+            "endpoint": "generate"
         })
         
         # Log API request URL
@@ -249,7 +349,104 @@ class OllamaProvider(AbstractLLMInterface):
             logger.info("Processing image inputs for vision request")
             image_request = True
             params = preprocess_image_inputs(params, "ollama")
+            
+            # For vision requests, use the chat API endpoint instead of generate
+            try:
+                # Build the chat API request
+                chat_request = {
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    "stream": stream,
+                    "options": {
+                        "temperature": temperature,
+                        "top_p": top_p,
+                        "top_k": top_k
+                    }
+                }
+                
+                # Add system prompt if provided
+                if system_prompt:
+                    chat_request["system"] = system_prompt
+                
+                # Add max tokens if provided
+                if max_tokens:
+                    chat_request["options"]["num_predict"] = max_tokens
+                
+                # Add stop sequences if provided
+                if stop:
+                    chat_request["options"]["stop"] = stop if isinstance(stop, list) else [stop]
+                
+                # Add images to the last user message
+                if "images" in params:
+                    # Find the last user message or create one
+                    if len(chat_request["messages"]) > 0 and chat_request["messages"][-1]["role"] == "user":
+                        chat_request["messages"][-1]["images"] = params["images"]
+                    else:
+                        # This should not happen as we just created a user message, but just in case
+                        logger.warning("Could not find user message to attach images to")
+                
+                # Log the request
+                log_request("ollama", prompt, {
+                    "model": model,
+                    "temperature": temperature,
+                    "base_url": base_url,
+                    "has_system_prompt": system_prompt is not None,
+                    "stream": stream,
+                    "image_request": image_request,
+                    "endpoint": "chat"
+                })
+                
+                # Log API request URL
+                log_request_url("ollama", f"{base_url}/api/chat (model: {model}, vision: true)")
+                
+                # Handle streaming if requested
+                if stream:
+                    logger.info("Starting async streaming chat generation")
+                    
+                    async def async_chat_generator():
+                        try:
+                            async with aiohttp.ClientSession() as session:
+                                async with session.post(
+                                    f"{base_url}/api/chat",
+                                    json=chat_request
+                                ) as response:
+                                    response.raise_for_status()
+                                    async for line in response.content:
+                                        if line:
+                                            data = json.loads(line)
+                                            if "message" in data and "content" in data["message"]:
+                                                yield data["message"]["content"]
+                        except aiohttp.ClientError as e:
+                            logger.error(f"Ollama API request failed: {e}")
+                            raise Exception(f"Ollama API request failed: {e}")
+                    
+                    return async_chat_generator()
+                else:
+                    # Make the standard API request
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(
+                            f"{base_url}/api/chat",
+                            json=chat_request
+                        ) as response:
+                            response.raise_for_status()
+                            response_json = await response.json()
+                    
+                    # Extract and log the response
+                    result = response_json.get("message", {}).get("content", "")
+                    log_response("ollama", result)
+                    logger.info("Async generation completed successfully")
+                    
+                    return result
+            except aiohttp.ClientError as e:
+                logger.error(f"Ollama API request failed: {e}")
+                raise Exception(f"Ollama API request failed: {e}")
         
+        # For non-vision requests, use the original generate API
         # Build the request
         request_data = {
             "model": model,
@@ -272,10 +469,6 @@ class OllamaProvider(AbstractLLMInterface):
         # Add stop sequences if provided
         if stop:
             request_data["options"]["stop"] = stop if isinstance(stop, list) else [stop]
-            
-        # Include images if provided through preprocess_image_inputs
-        if "images" in params:
-            request_data["images"] = params["images"]
         
         # Log the request
         log_request("ollama", prompt, {
@@ -284,7 +477,8 @@ class OllamaProvider(AbstractLLMInterface):
             "base_url": base_url,
             "has_system_prompt": system_prompt is not None,
             "stream": stream,
-            "image_request": image_request
+            "image_request": image_request,
+            "endpoint": "generate"
         })
         
         # Log API request URL

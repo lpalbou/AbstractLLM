@@ -1,111 +1,112 @@
 # AbstractLLM Implementation Guide
 
-This guide provides detailed implementation instructions for developing the AbstractLLM package.
+This document provides a detailed explanation of how AbstractLLM is implemented, with practical code examples, implementation patterns, and technical details.
 
-## Core Files Implementation
+## Core Components Implementation
 
-### `abstractllm/__init__.py`
+### Interface and Enums
 
-```python
-"""
-AbstractLLM: A unified interface for large language models.
-"""
-
-__version__ = "0.1.0"
-
-from abstractllm.interface import AbstractLLMInterface
-from abstractllm.factory import create_llm
-
-__all__ = ["AbstractLLMInterface", "create_llm"]
-```
-
-### `abstractllm/interface.py`
+The core of AbstractLLM is the abstract interface that all provider implementations must follow. The interface is defined in `interface.py` and includes:
 
 ```python
-"""
-Abstract interface for LLM providers.
-"""
-
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from enum import Enum
+from typing import Dict, Any, Optional, Union, Generator, AsyncGenerator
 
+class ModelParameter(str, Enum):
+    """Model parameters that can be configured."""
+    TEMPERATURE = "temperature"
+    MAX_TOKENS = "max_tokens"
+    SYSTEM_PROMPT = "system_prompt"
+    TOP_P = "top_p"
+    FREQUENCY_PENALTY = "frequency_penalty"
+    PRESENCE_PENALTY = "presence_penalty"
+    STOP = "stop"
+    MODEL = "model"
+    API_KEY = "api_key"
+    BASE_URL = "base_url"
+    # ... more parameters
+    
+class ModelCapability(str, Enum):
+    """Capabilities that a model may support."""
+    STREAMING = "streaming"
+    MAX_TOKENS = "max_tokens"
+    SYSTEM_PROMPT = "supports_system_prompt"
+    ASYNC = "supports_async" 
+    FUNCTION_CALLING = "supports_function_calling"
+    VISION = "supports_vision"
+    # ... more capabilities
+
+def create_config(**kwargs) -> Dict[str, Any]:
+    """Create a configuration dictionary with default values."""
+    # Default configuration
+    config = {
+        ModelParameter.TEMPERATURE: 0.7,
+        ModelParameter.MAX_TOKENS: 2048,
+        ModelParameter.SYSTEM_PROMPT: None,
+        # ... more defaults
+    }
+    # Update with provided values
+    config.update(kwargs)
+    return config
 
 class AbstractLLMInterface(ABC):
-    """
-    Abstract interface for LLM providers.
+    """Abstract interface for LLM providers."""
     
-    All LLM providers must implement this interface.
-    """
-    
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
-        """
-        Initialize the LLM provider.
-        
-        Args:
-            config: Configuration dictionary for the provider
-        """
-        self.config = config or {}
+    def __init__(self, config: Optional[Dict[Union[str, ModelParameter], Any]] = None):
+        """Initialize the LLM provider."""
+        self.config = config or create_config()
     
     @abstractmethod
-    def generate(self, prompt: str, **kwargs) -> str:
-        """
-        Generate a response to the prompt using the LLM.
-        
-        Args:
-            prompt: The input prompt
-            **kwargs: Additional provider-specific parameters
-            
-        Returns:
-            The generated response as a string
-            
-        Raises:
-            Exception: If the generation fails
-        """
+    def generate(self, 
+                prompt: str, 
+                system_prompt: Optional[str] = None, 
+                stream: bool = False, 
+                **kwargs) -> Union[str, Generator[str, None, None]]:
+        """Generate a response to the prompt using the LLM."""
+        pass
+
+    @abstractmethod
+    async def generate_async(self, 
+                          prompt: str, 
+                          system_prompt: Optional[str] = None, 
+                          stream: bool = False, 
+                          **kwargs) -> Union[str, AsyncGenerator[str, None]]:
+        """Asynchronously generate a response to the prompt using the LLM."""
         pass
         
-    def get_capabilities(self) -> Dict[str, Any]:
-        """
-        Return capabilities of this LLM.
-        
-        Returns:
-            Dictionary of capabilities
-        """
+    def get_capabilities(self) -> Dict[Union[str, ModelCapability], Any]:
+        """Return capabilities of this LLM."""
         return {
-            "streaming": False,
-            "max_tokens": None,
-            "supports_system_prompt": False
+            ModelCapability.STREAMING: False,
+            ModelCapability.MAX_TOKENS: 2048,
+            ModelCapability.SYSTEM_PROMPT: False,
+            ModelCapability.ASYNC: False,
+            ModelCapability.FUNCTION_CALLING: False,
+            ModelCapability.VISION: False,
         }
         
-    def set_config(self, config: Dict[str, Any]) -> None:
-        """
-        Update the configuration.
+    def set_config(self, **kwargs) -> None:
+        """Update the configuration with individual parameters."""
+        self.config.update(kwargs)
         
-        Args:
-            config: New configuration values to merge with existing config
-        """
+    def update_config(self, config: Dict[Union[str, ModelParameter], Any]) -> None:
+        """Update the configuration with a dictionary of parameters."""
         self.config.update(config)
         
-    def get_config(self) -> Dict[str, Any]:
-        """
-        Get the current configuration.
-        
-        Returns:
-            Current configuration as a dictionary
-        """
+    def get_config(self) -> Dict[Union[str, ModelParameter], Any]:
+        """Get the current configuration."""
         return self.config.copy()
 ```
 
-### `abstractllm/factory.py`
+### Factory Pattern Implementation
+
+The factory pattern is implemented in `factory.py`, providing a consistent way to create provider instances:
 
 ```python
-"""
-Factory function for creating LLM provider instances.
-"""
-
-from typing import Dict, Any, Optional, Type
+from typing import Dict, Any, Optional
 import importlib
-from abstractllm.interface import AbstractLLMInterface
-
+from abstractllm.interface import AbstractLLMInterface, ModelParameter, create_config
 
 # Provider mapping
 _PROVIDERS = {
@@ -115,21 +116,8 @@ _PROVIDERS = {
     "huggingface": "abstractllm.providers.huggingface.HuggingFaceProvider",
 }
 
-
 def create_llm(provider: str, **config) -> AbstractLLMInterface:
-    """
-    Create an LLM provider instance.
-    
-    Args:
-        provider: The provider name ('openai', 'anthropic', 'ollama', 'huggingface')
-        **config: Provider-specific configuration
-        
-    Returns:
-        An initialized LLM interface
-        
-    Raises:
-        ValueError: If the provider is not supported
-    """
+    """Create an LLM provider instance."""
     if provider not in _PROVIDERS:
         raise ValueError(
             f"Provider '{provider}' not supported. "
@@ -144,677 +132,525 @@ def create_llm(provider: str, **config) -> AbstractLLMInterface:
     except (ImportError, AttributeError) as e:
         raise ImportError(f"Could not import provider {provider}: {e}")
     
+    # Create configuration with defaults
+    provider_config = create_config(**config)
+    
     # Instantiate and return the provider
-    return provider_class(config=config)
-```
-
-### `abstractllm/utils/logging.py`
-
-```python
-"""
-Logging utilities for AbstractLLM.
-"""
-
-import logging
-from datetime import datetime
-from typing import Dict, Any
-
-
-# Configure logger
-logger = logging.getLogger("abstractllm")
-
-
-def log_request(provider: str, prompt: str, parameters: Dict[str, Any]) -> None:
-    """
-    Log an LLM request.
-    
-    Args:
-        provider: Provider name
-        prompt: The request prompt
-        parameters: Request parameters
-    """
-    logger.debug(f"REQUEST [{provider}]: {datetime.now().isoformat()}")
-    logger.debug(f"Parameters: {parameters}")
-    logger.debug(f"Prompt: {prompt}")
-
-
-def log_response(provider: str, response: str) -> None:
-    """
-    Log an LLM response.
-    
-    Args:
-        provider: Provider name
-        response: The response text
-    """
-    logger.debug(f"RESPONSE [{provider}]: {datetime.now().isoformat()}")
-    logger.debug(f"Response: {response}")
-
-
-def setup_logging(level: int = logging.INFO) -> None:
-    """
-    Set up logging configuration.
-    
-    Args:
-        level: Logging level (default: INFO)
-    """
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    return provider_class(config=provider_config)
 ```
 
 ## Provider Implementations
 
-### `abstractllm/providers/__init__.py`
+Let's examine how specific providers are implemented:
+
+### OpenAI Provider
+
+The OpenAI provider (`openai.py`) implements the interface for the OpenAI API:
 
 ```python
-"""
-Provider implementations for AbstractLLM.
-"""
-
-# This file intentionally left mostly empty
-# Providers are imported in the factory module
-```
-
-### `abstractllm/providers/openai.py`
-
-```python
-"""
-OpenAI API implementation for AbstractLLM.
-"""
-
-from typing import Dict, Any, Optional
-import os
-
-from abstractllm.interface import AbstractLLMInterface
-from abstractllm.utils.logging import log_request, log_response
-
-
-class OpenAIProvider(AbstractLLMInterface):
-    """
-    OpenAI API implementation.
-    """
-    
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
-        """
-        Initialize the OpenAI provider.
-        
-        Args:
-            config: Configuration dictionary
-        """
-        super().__init__(config)
-        
-        # Set default configuration
-        if "api_key" not in self.config:
-            self.config["api_key"] = os.environ.get("OPENAI_API_KEY")
-        
-        if "model" not in self.config:
-            self.config["model"] = "gpt-3.5-turbo"
-    
-    def generate(self, prompt: str, **kwargs) -> str:
-        """
-        Generate a response using OpenAI API.
-        
-        Args:
-            prompt: The input prompt
-            **kwargs: Additional parameters to override configuration
-            
-        Returns:
-            The generated response
-            
-        Raises:
-            Exception: If the API call fails or no API key is provided
-        """
-        try:
-            from openai import OpenAI
-        except ImportError:
-            raise ImportError(
-                "OpenAI package not found. Install it with: pip install openai"
-            )
-        
-        # Combine configuration with kwargs
-        params = self.config.copy()
-        params.update(kwargs)
-        
-        # Check for API key
-        if not params.get("api_key"):
-            raise ValueError(
-                "OpenAI API key not provided. Pass it as a parameter or "
-                "set the OPENAI_API_KEY environment variable."
-            )
-        
-        # Extract parameters
-        api_key = params.pop("api_key")
-        model = params.pop("model", "gpt-3.5-turbo")
-        temperature = params.pop("temperature", 0.7)
-        max_tokens = params.pop("max_tokens", None)
-        system_prompt = params.pop("system_prompt", None)
-        
-        # Prepare messages
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        
-        messages.append({"role": "user", "content": prompt})
-        
-        # Log the request
-        log_request("openai", prompt, {
-            "model": model,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "has_system_prompt": system_prompt is not None
-        })
-        
-        # Initialize client and call API
-        client = OpenAI(api_key=api_key)
-        
-        completion_params = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-        }
-        
-        if max_tokens:
-            completion_params["max_tokens"] = max_tokens
-        
-        response = client.chat.completions.create(**completion_params)
-        
-        # Extract and log the response
-        result = response.choices[0].message.content
-        log_response("openai", result)
-        
-        return result
-    
-    def get_capabilities(self) -> Dict[str, Any]:
-        """
-        Return capabilities of the OpenAI provider.
-        
-        Returns:
-            Dictionary of capabilities
-        """
-        return {
-            "streaming": True,
-            "max_tokens": 4096,  # This varies by model
-            "supports_system_prompt": True
-        }
-```
-
-### `abstractllm/providers/anthropic.py`
-
-```python
-"""
-Anthropic API implementation for AbstractLLM.
-"""
-
-from typing import Dict, Any, Optional
-import os
-
-from abstractllm.interface import AbstractLLMInterface
-from abstractllm.utils.logging import log_request, log_response
-
-
-class AnthropicProvider(AbstractLLMInterface):
-    """
-    Anthropic API implementation.
-    """
-    
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
-        """
-        Initialize the Anthropic provider.
-        
-        Args:
-            config: Configuration dictionary
-        """
-        super().__init__(config)
-        
-        # Set default configuration
-        if "api_key" not in self.config:
-            self.config["api_key"] = os.environ.get("ANTHROPIC_API_KEY")
-        
-        if "model" not in self.config:
-            self.config["model"] = "claude-3-opus-20240229"
-    
-    def generate(self, prompt: str, **kwargs) -> str:
-        """
-        Generate a response using Anthropic API.
-        
-        Args:
-            prompt: The input prompt
-            **kwargs: Additional parameters to override configuration
-            
-        Returns:
-            The generated response
-            
-        Raises:
-            Exception: If the API call fails or no API key is provided
-        """
-        try:
-            import anthropic
-        except ImportError:
-            raise ImportError(
-                "Anthropic package not found. Install it with: pip install anthropic"
-            )
-        
-        # Combine configuration with kwargs
-        params = self.config.copy()
-        params.update(kwargs)
-        
-        # Check for API key
-        if not params.get("api_key"):
-            raise ValueError(
-                "Anthropic API key not provided. Pass it as a parameter or "
-                "set the ANTHROPIC_API_KEY environment variable."
-            )
-        
-        # Extract parameters
-        api_key = params.pop("api_key")
-        model = params.pop("model", "claude-3-opus-20240229")
-        temperature = params.pop("temperature", 0.7)
-        max_tokens = params.pop("max_tokens", 2048)
-        system_prompt = params.pop("system_prompt", None)
-        
-        # Log the request
-        log_request("anthropic", prompt, {
-            "model": model,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "has_system_prompt": system_prompt is not None
-        })
-        
-        # Initialize client
-        client = anthropic.Anthropic(api_key=api_key)
-        
-        # Prepare message
-        message_params = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ]
-        }
-        
-        if system_prompt:
-            message_params["system"] = system_prompt
-        
-        # Call API
-        response = client.messages.create(**message_params)
-        
-        # Extract and log the response
-        result = response.content[0].text
-        log_response("anthropic", result)
-        
-        return result
-    
-    def get_capabilities(self) -> Dict[str, Any]:
-        """
-        Return capabilities of the Anthropic provider.
-        
-        Returns:
-            Dictionary of capabilities
-        """
-        return {
-            "streaming": True,
-            "max_tokens": 100000,  # This varies by model
-            "supports_system_prompt": True
-        }
-```
-
-### `abstractllm/providers/ollama.py`
-
-```python
-"""
-Ollama API implementation for AbstractLLM.
-"""
-
-from typing import Dict, Any, Optional
 import os
 import requests
+import json
+import logging
+from typing import Dict, Any, Optional, Union, Generator, AsyncGenerator
 
-from abstractllm.interface import AbstractLLMInterface
-from abstractllm.utils.logging import log_request, log_response
+from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability
+from abstractllm.utils.logging import log_request, log_response, log_api_key_missing, log_api_key_from_env
 
+logger = logging.getLogger("abstractllm.providers.openai.OpenAIProvider")
 
-class OllamaProvider(AbstractLLMInterface):
-    """
-    Ollama API implementation.
-    """
+class OpenAIProvider(AbstractLLMInterface):
+    """OpenAI API implementation."""
     
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
-        """
-        Initialize the Ollama provider.
-        
-        Args:
-            config: Configuration dictionary
-        """
+    def __init__(self, config: Optional[Dict[Union[str, ModelParameter], Any]] = None):
+        """Initialize the OpenAI provider."""
         super().__init__(config)
         
-        # Set default configuration
-        if "base_url" not in self.config:
-            self.config["base_url"] = os.environ.get(
-                "OLLAMA_BASE_URL", "http://localhost:11434"
-            )
-        
-        if "model" not in self.config:
-            self.config["model"] = "llama2"
+        # Get API key from config or environment
+        self._api_key = self.config.get(ModelParameter.API_KEY, self.config.get("api_key"))
+        if not self._api_key:
+            # Try to get from environment
+            self._api_key = os.environ.get("OPENAI_API_KEY")
+            if self._api_key:
+                log_api_key_from_env("OpenAI", "OPENAI_API_KEY")
+            else:
+                log_api_key_missing("OpenAI", "OPENAI_API_KEY")
+                
+        # Set default model if not specified
+        if not self.config.get(ModelParameter.MODEL) and not self.config.get("model"):
+            self.config[ModelParameter.MODEL] = "gpt-3.5-turbo"
     
-    def generate(self, prompt: str, **kwargs) -> str:
-        """
-        Generate a response using Ollama API.
+    def generate(self, 
+                prompt: str, 
+                system_prompt: Optional[str] = None, 
+                stream: bool = False, 
+                **kwargs) -> Union[str, Generator[str, None, None]]:
+        """Generate a response using the OpenAI API."""
+        # Implementation includes:
+        # 1. Combine config with kwargs
+        # 2. Extract parameters (model, temperature, etc.)
+        # 3. Process image inputs if present
+        # 4. Prepare the API request
+        # 5. Handle streaming vs. non-streaming
+        # 6. Make the API call
+        # 7. Process and return the response
         
-        Args:
-            prompt: The input prompt
-            **kwargs: Additional parameters to override configuration
-            
-        Returns:
-            The generated response
-            
-        Raises:
-            Exception: If the API call fails
-        """
-        # Combine configuration with kwargs
-        params = self.config.copy()
-        params.update(kwargs)
-        
-        # Extract parameters
-        base_url = params.pop("base_url", "http://localhost:11434")
-        model = params.pop("model", "llama2")
-        temperature = params.pop("temperature", 0.7)
-        system_prompt = params.pop("system_prompt", None)
-        
-        # Build the request
-        request_data = {
-            "model": model,
-            "prompt": prompt,
-            "temperature": temperature,
-            "options": params  # Pass any remaining parameters as options
-        }
-        
-        # Add system prompt if provided
-        if system_prompt:
-            request_data["system"] = system_prompt
-        
-        # Log the request
-        log_request("ollama", prompt, {
-            "model": model,
-            "temperature": temperature,
-            "base_url": base_url,
-            "has_system_prompt": system_prompt is not None
-        })
-        
-        # Make the API request
-        try:
-            response = requests.post(
-                f"{base_url}/api/generate",
-                json=request_data
-            )
-            response.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"Ollama API request failed: {e}")
-        
-        # Extract and log the response
-        result = response.json().get("response", "")
-        log_response("ollama", result)
-        
-        return result
+        # Example of streaming implementation:
+        if stream:
+            def response_generator():
+                # Streaming implementation
+                # Yield chunks of the response as they're received
+                pass
+            return response_generator()
+        else:
+            # Non-streaming implementation
+            # Return the complete response
+            pass
     
-    def get_capabilities(self) -> Dict[str, Any]:
-        """
-        Return capabilities of the Ollama provider.
+    async def generate_async(self, 
+                          prompt: str, 
+                          system_prompt: Optional[str] = None, 
+                          stream: bool = False, 
+                          **kwargs) -> Union[str, AsyncGenerator[str, None]]:
+        """Asynchronously generate a response using the OpenAI API."""
+        # Async implementation follows similar pattern to synchronous
+        # but uses aiohttp for async HTTP requests
+        pass
+    
+    def get_capabilities(self) -> Dict[Union[str, ModelCapability], Any]:
+        """Return capabilities of the OpenAI provider."""
+        # Get model name to determine capabilities
+        model_name = self.config.get(ModelParameter.MODEL, self.config.get("model", "gpt-3.5-turbo"))
         
-        Returns:
-            Dictionary of capabilities
-        """
+        # Determine if the model supports vision
+        supports_vision = any(model in model_name for model in [
+            "gpt-4-vision-preview", "gpt-4-turbo", "gpt-4o"
+        ])
+        
         return {
-            "streaming": True,
-            "max_tokens": None,  # Varies by model
-            "supports_system_prompt": True
+            ModelCapability.STREAMING: True,
+            ModelCapability.MAX_TOKENS: 4096,  # Varies by model
+            ModelCapability.SYSTEM_PROMPT: True,
+            ModelCapability.ASYNC: True,
+            ModelCapability.FUNCTION_CALLING: True,
+            ModelCapability.VISION: supports_vision
         }
 ```
 
-### `abstractllm/providers/huggingface.py`
+### HuggingFace Provider
+
+The HuggingFace provider (`huggingface.py`) has unique features for managing local models:
 
 ```python
-"""
-Hugging Face implementation for AbstractLLM.
-"""
-
-from typing import Dict, Any, Optional
 import os
+import gc
+import time
+import logging
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, Any, Optional, Union, Generator, AsyncGenerator, Tuple, ClassVar, List
+from pathlib import Path
 
-from abstractllm.interface import AbstractLLMInterface
+from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability
 from abstractllm.utils.logging import log_request, log_response
 
+logger = logging.getLogger("abstractllm.providers.huggingface.HuggingFaceProvider")
+
+# Default model to use
+DEFAULT_MODEL = "distilgpt2"
+
+# List of vision-capable models
+VISION_CAPABLE_MODELS = [
+    "microsoft/Phi-4-multimodal-instruct",
+    "liuhaotian/llava-phi-1.5",
+    "Qwen/Qwen2-VL",
+    "internlm/internlm-xcomposer2-vl",
+    "deepseek-ai/deepseek-vl-7b",
+    # ... more vision models
+]
+
+def _get_optimal_device() -> str:
+    """Determine the best available device for model loading."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"  # Apple Silicon GPU support
+        else:
+            return "cpu"
+    except ImportError:
+        return "cpu"
 
 class HuggingFaceProvider(AbstractLLMInterface):
-    """
-    Hugging Face implementation using Transformers.
-    """
+    """Hugging Face implementation using Transformers."""
     
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
-        """
-        Initialize the Hugging Face provider.
-        
-        Args:
-            config: Configuration dictionary
-        """
+    # Default cache directory
+    DEFAULT_CACHE_DIR = "~/.cache/abstractllm/models"
+    
+    # Class-level cache for sharing models between instances
+    _model_cache: ClassVar[Dict[Tuple[str, str, bool, bool], Tuple[Any, Any, float]]] = {}
+    
+    # Maximum number of models to keep in the cache
+    _max_cached_models = 3
+    
+    def __init__(self, config: Optional[Dict[Union[str, ModelParameter], Any]] = None):
+        """Initialize the Hugging Face provider."""
         super().__init__(config)
         
-        # Set default configuration
-        if "model" not in self.config:
-            self.config["model"] = "google/gemma-7b"
+        # Set default model if not specified
+        if ModelParameter.MODEL not in self.config and "model" not in self.config:
+            self.config[ModelParameter.MODEL] = DEFAULT_MODEL
         
+        # Determine optimal device if not specified
+        self._device = self.config.get(ModelParameter.DEVICE, self.config.get("device", _get_optimal_device()))
+        
+        # Initialize model state
         self._model = None
         self._tokenizer = None
-    
-    def _load_model_and_tokenizer(self):
-        """
-        Load the model and tokenizer if not already loaded.
+        self._processor = None  # For vision models
+        self._model_loaded = False
+        self._warmup_completed = False
         
-        Raises:
-            ImportError: If required packages are not installed
-        """
-        if self._model is not None and self._tokenizer is not None:
+        # Preload model if requested
+        if self.config.get("auto_load", False):
+            self.load_model()
+            
+            # Run warmup if requested
+            if self.config.get("auto_warmup", False):
+                self.warmup()
+    
+    def load_model(self) -> None:
+        """Load the model and tokenizer based on the configuration."""
+        # Implementation includes:
+        # 1. Check if model already loaded
+        # 2. Check class-level cache
+        # 3. Load tokenizer and model with appropriate settings
+        # 4. Handle vision-capable models specially
+        # 5. Store model in cache for reuse
+        
+        # Example of cache key generation and lookup:
+        cache_key = self._get_cache_key()
+        if cache_key in HuggingFaceProvider._model_cache:
+            self._model, self._tokenizer, _ = HuggingFaceProvider._model_cache[cache_key]
+            # Update last access time
+            HuggingFaceProvider._model_cache[cache_key] = (self._model, self._tokenizer, time.time())
+            self._model_loaded = True
             return
         
-        try:
-            import torch
-            from transformers import AutoModelForCausalLM, AutoTokenizer
-        except ImportError:
-            raise ImportError(
-                "Required packages not found. Install them with: "
-                "pip install torch transformers"
-            )
+        # Example of cache cleanup:
+        self._clean_model_cache_if_needed()
         
-        model_name = self.config.get("model", "google/gemma-7b")
+        # Example of model loading logic:
+        model_name = self.config.get(ModelParameter.MODEL, self.config.get("model"))
+        is_vision_capable = any(vision_model in model_name for vision_model in VISION_CAPABLE_MODELS)
         
-        self._tokenizer = AutoTokenizer.from_pretrained(model_name)
+        # ... (model loading implementation)
         
-        # Load in 8-bit precision if specified and supported
-        load_in_8bit = self.config.get("load_in_8bit", False)
-        device_map = self.config.get("device_map", "auto")
-        
-        if load_in_8bit:
-            try:
-                import bitsandbytes
-                self._model = AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    load_in_8bit=True,
-                    device_map=device_map
-                )
-            except ImportError:
-                print("Warning: bitsandbytes not installed. Falling back to default precision.")
-                self._model = AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    device_map=device_map
-                )
-        else:
-            self._model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                device_map=device_map
-            )
+        # Store in cache
+        HuggingFaceProvider._model_cache[cache_key] = (self._model, self._tokenizer, time.time())
     
-    def generate(self, prompt: str, **kwargs) -> str:
-        """
-        Generate a response using Hugging Face model.
-        
-        Args:
-            prompt: The input prompt
-            **kwargs: Additional parameters to override configuration
-            
-        Returns:
-            The generated response
-            
-        Raises:
-            Exception: If model loading or generation fails
-        """
-        # Combine configuration with kwargs
-        params = self.config.copy()
-        params.update(kwargs)
-        
-        # Extract parameters
-        temperature = params.pop("temperature", 0.7)
-        max_new_tokens = params.pop("max_new_tokens", 512)
-        system_prompt = params.pop("system_prompt", None)
-        
-        # Log the request
-        log_request("huggingface", prompt, {
-            "model": params.get("model", "google/gemma-7b"),
-            "temperature": temperature,
-            "max_new_tokens": max_new_tokens,
-            "has_system_prompt": system_prompt is not None
-        })
-        
-        # Load model and tokenizer
-        self._load_model_and_tokenizer()
-        
-        # Prepare the input
-        if system_prompt:
-            full_prompt = f"{system_prompt}\n\n{prompt}"
-        else:
-            full_prompt = prompt
-        
-        inputs = self._tokenizer(full_prompt, return_tensors="pt")
-        inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
-        
-        # Generate
-        import torch
-        
-        with torch.no_grad():
-            generation_config = {
-                "max_new_tokens": max_new_tokens,
-                "temperature": temperature,
-                "do_sample": temperature > 0,
-                **params  # Pass any remaining parameters
-            }
-            
-            outputs = self._model.generate(
-                **inputs,
-                **generation_config
-            )
-        
-        # Decode and extract only the new content
-        full_output = self._tokenizer.decode(outputs[0], skip_special_tokens=True)
-        result = full_output[len(full_prompt):].strip()
-        
-        # Log the response
-        log_response("huggingface", result)
-        
-        return result
+    def generate(self, 
+                prompt: str, 
+                system_prompt: Optional[str] = None, 
+                stream: bool = False, 
+                **kwargs) -> Union[str, Generator[str, None, None]]:
+        """Generate a response using Hugging Face model."""
+        # Implementation includes:
+        # 1. Load model if not already loaded
+        # 2. Process parameters and inputs
+        # 3. Handle image inputs for vision models
+        # 4. Set up generation configuration
+        # 5. Generate response (streaming or non-streaming)
+        pass
     
-    def get_capabilities(self) -> Dict[str, Any]:
-        """
-        Return capabilities of the Hugging Face provider.
+    # Other methods...
+```
+
+## Configuration Management
+
+Configuration is managed through a dictionary-based approach with support for both string keys and enumerated types for backward compatibility and type safety.
+
+Example of parameter extraction in a provider:
+
+```python
+# Combine configuration with kwargs
+params = self.config.copy()
+params.update(kwargs)
+
+# Extract parameters with fallbacks for both string and enum keys
+model_name = params.get(ModelParameter.MODEL, params.get("model", "default-model"))
+temperature = params.get(ModelParameter.TEMPERATURE, params.get("temperature", 0.7))
+max_tokens = params.get(ModelParameter.MAX_TOKENS, params.get("max_tokens", 2048))
+system_prompt_from_config = params.get(ModelParameter.SYSTEM_PROMPT, params.get("system_prompt"))
+system_prompt = system_prompt or system_prompt_from_config
+```
+
+## Capability Inspection
+
+Capability inspection allows clients to adapt their behavior based on provider capabilities:
+
+```python
+llm = create_llm("openai")
+capabilities = llm.get_capabilities()
+
+if capabilities.get(ModelCapability.VISION):
+    # Use vision features
+    response = llm.generate("What's in this image?", image="path/to/image.jpg")
+else:
+    # Fall back to text-only
+    response = llm.generate("Please describe what might be in an image.")
+```
+
+Providers implement `get_capabilities()` to report what features they support, based on their implementation and the configured model.
+
+## Streaming Implementation
+
+Streaming is implemented using Python generators (synchronous) and async generators (asynchronous):
+
+### Synchronous Streaming
+
+```python
+def generate(self, prompt: str, stream: bool = False, **kwargs):
+    # ... parameter processing ...
+    
+    if stream:
+        def response_generator():
+            # Make streaming API call
+            with requests.post(url, json=payload, stream=True) as response:
+                for line in response.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        yield data["choices"][0]["text"]
         
-        Returns:
-            Dictionary of capabilities
-        """
-        return {
-            "streaming": False,
-            "max_tokens": None,  # Varies by model and hardware
-            "supports_system_prompt": True
-        }
+        return response_generator()
+    else:
+        # Make standard API call
+        response = requests.post(url, json=payload)
+        return response.json()["choices"][0]["text"]
+```
+
+### Asynchronous Streaming
+
+```python
+async def generate_async(self, prompt: str, stream: bool = False, **kwargs):
+    # ... parameter processing ...
+    
+    if stream:
+        async def async_generator():
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload) as response:
+                    async for line in response.content:
+                        if line:
+                            data = json.loads(line)
+                            yield data["choices"][0]["text"]
+        
+        return async_generator()
+    else:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload) as response:
+                result = await response.json()
+                return result["choices"][0]["text"]
+```
+
+## Vision Capability Implementation
+
+Vision capability is implemented by detecting image inputs and processing them appropriately for each provider:
+
+### Image Processing Utilities
+
+```python
+def format_image_for_provider(image_input, provider):
+    """Format an image for a specific provider's API format."""
+    # Handle different input types (URL, file path, base64)
+    # Format according to provider requirements
+    if provider == "openai":
+        return {"type": "image_url", "image_url": {"url": url, "detail": "auto"}}
+    elif provider == "anthropic":
+        return {"type": "image", "source": {"type": "url", "url": url}}
+    # ... etc.
+
+def preprocess_image_inputs(params, provider):
+    """Preprocess image inputs in the params dictionary for a specific provider."""
+    # Extract and format image inputs
+    # Add to request in provider-specific format
+    # Return updated parameters
+```
+
+### Using Vision Capabilities
+
+In provider implementation:
+
+```python
+# Check for image inputs
+has_image = "image" in params or "images" in params
+is_vision_capable = any(vision_model in model_name for vision_model in VISION_CAPABLE_MODELS)
+
+if has_image and not is_vision_capable:
+    logger.warning(f"Model {model_name} does not support vision inputs. Ignoring image input.")
+    # Remove image inputs
+elif has_image and is_vision_capable:
+    # Process image inputs for vision-capable models
+    params = preprocess_image_inputs(params, "provider_name")
+    # Prepare vision-specific request
+```
+
+## Memory Management
+
+Memory management is particularly important for the HuggingFace provider, which loads models into memory:
+
+### Model Cache Implementation
+
+```python
+def _clean_model_cache_if_needed(self) -> None:
+    """Clean up the model cache if it exceeds the maximum size."""
+    if len(HuggingFaceProvider._model_cache) <= self._max_cached_models:
+        return
+        
+    # Sort by last used time (oldest first)
+    sorted_keys = sorted(
+        HuggingFaceProvider._model_cache.keys(),
+        key=lambda k: HuggingFaceProvider._model_cache[k][2]
+    )
+    
+    # Remove oldest models
+    models_to_remove = len(HuggingFaceProvider._model_cache) - self._max_cached_models
+    for i in range(models_to_remove):
+        key = sorted_keys[i]
+        model, tokenizer, _ = HuggingFaceProvider._model_cache[key]
+        
+        # Set models to None to help with garbage collection
+        model = None
+        tokenizer = None
+        
+        # Remove from cache
+        del HuggingFaceProvider._model_cache[key]
+    
+    # Explicitly run garbage collection
+    gc.collect()
+    
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 ```
 
 ## Error Handling
 
-Each provider implementation should include proper error handling:
-
-1. **Missing dependencies**: Check for required packages and provide helpful error messages
-2. **API errors**: Handle and provide meaningful error messages
-3. **Configuration issues**: Validate configuration and provide clear errors
-
-## Testing
-
-Create simple test files for each provider to verify functionality:
+Error handling is implemented throughout the codebase to provide clear feedback on failures:
 
 ```python
-# Example test for OpenAI provider
-import os
-import unittest
-from abstractllm import create_llm
-
-class TestOpenAIProvider(unittest.TestCase):
-    def test_generate(self):
-        # Skip if no API key
-        if not os.environ.get("OPENAI_API_KEY"):
-            self.skipTest("OpenAI API key not set")
-        
-        llm = create_llm("openai")
-        response = llm.generate("Say hello")
-        self.assertIsInstance(response, str)
-        self.assertTrue(len(response) > 0)
-
-if __name__ == "__main__":
-    unittest.main()
+try:
+    # Make API call
+    response = requests.post(url, json=payload, timeout=timeout)
+    response.raise_for_status()  # Raise exception for HTTP errors
+    
+    # Process response
+    result = response.json()
+    log_response("provider_name", result)
+    return result
+except requests.exceptions.RequestException as e:
+    # Handle network or API errors
+    logger.error(f"API request failed: {e}")
+    if "timeout" in str(e).lower():
+        raise TimeoutError(f"API request timed out after {timeout} seconds")
+    else:
+        raise Exception(f"API request failed: {e}")
+except (ValueError, KeyError) as e:
+    # Handle JSON parsing or response format errors
+    logger.error(f"Error processing response: {e}")
+    raise Exception(f"Error processing response: {e}")
+except Exception as e:
+    # Handle any other errors
+    logger.error(f"Unexpected error: {e}")
+    raise
 ```
 
-## Packaging
+## Logging System
 
-Include these files for PyPI packaging:
-
-1. `setup.py`
-2. `README.md`
-3. `LICENSE`
-4. `requirements.txt`
-
-Example `setup.py`:
+The logging system is designed to provide visibility into the operation of the library while respecting security concerns:
 
 ```python
-from setuptools import setup, find_packages
+def log_request(provider: str, prompt: str, parameters: Dict[str, Any]) -> None:
+    """Log an LLM request."""
+    # Log basic request info at INFO level
+    logger.info(f"LLM request to {provider} provider")
+    
+    # Log detailed request information at DEBUG level
+    logger.debug(f"REQUEST [{provider}]: {datetime.now().isoformat()}")
+    logger.debug(f"Parameters: {parameters}")
+    logger.debug(f"Prompt: {prompt}")
 
-with open("README.md", "r", encoding="utf-8") as fh:
-    long_description = fh.read()
-
-setup(
-    name="abstractllm",
-    version="0.1.0",
-    author="Your Name",
-    author_email="your.email@example.com",
-    description="A unified interface for large language models",
-    long_description=long_description,
-    long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/abstractllm",
-    packages=find_packages(),
-    classifiers=[
-        "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: MIT License",
-        "Operating System :: OS Independent",
-    ],
-    python_requires=">=3.7",
-    install_requires=[
-        "requests>=2.25.0",
-    ],
-    extras_require={
-        "openai": ["openai>=1.0.0"],
-        "anthropic": ["anthropic>=0.5.0"],
-        "huggingface": ["torch>=1.10.0", "transformers>=4.15.0"],
-        "all": [
-            "openai>=1.0.0",
-            "anthropic>=0.5.0",
-            "torch>=1.10.0",
-            "transformers>=4.15.0",
-        ],
-    },
-)
+def log_response(provider: str, response: str) -> None:
+    """Log an LLM response."""
+    # Log basic response info at INFO level
+    logger.info(f"LLM response received from {provider} provider")
+    
+    # Log detailed response at DEBUG level
+    logger.debug(f"RESPONSE [{provider}]: {datetime.now().isoformat()}")
+    logger.debug(f"Response: {response}")
 ```
+
+## Cross-Platform Compatibility
+
+The library is designed to work across different platforms:
+
+1. **Automatic device detection** based on available hardware
+2. **Flexible model loading options** for different hardware constraints
+3. **Dependency management** to avoid unnecessary dependencies
+4. **Path handling** that works across operating systems
+
+For example, with HuggingFace provider on Apple Silicon:
+
+```python
+def _get_optimal_device() -> str:
+    """Determine the best available device for model loading."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"  # Apple Silicon GPU support
+        else:
+            return "cpu"
+    except ImportError:
+        return "cpu"
+```
+
+## Performance Considerations
+
+1. **Lazy imports** to avoid loading unnecessary dependencies
+2. **Model caching** to avoid reloading models
+3. **Warmup passes** to optimize model performance
+4. **Timeout handling** to prevent hanging requests
+5. **Async support** for concurrent operations
+
+## Testing Strategy
+
+Testing is implemented with a focus on real-world behavior:
+
+1. **Unit tests** for individual components
+2. **Integration tests** for provider implementations
+3. **Visual tests** for multimodal capabilities
+4. **Cross-provider tests** for consistency
+
+For example, a vision test:
+
+```python
+@pytest.mark.vision
+def test_vision_capability():
+    """Test vision capability detection and basic functionality."""
+    # Test with a vision-capable model
+    llm = create_llm("openai", **{
+        ModelParameter.MODEL: "gpt-4o"
+    })
+    
+    capabilities = llm.get_capabilities()
+    assert capabilities.get(ModelCapability.VISION) is True
+    
+    # Test with a non-vision model
+    llm = create_llm("openai", **{
+        ModelParameter.MODEL: "gpt-3.5-turbo"
+    })
+    
+    capabilities = llm.get_capabilities()
+    assert capabilities.get(ModelCapability.VISION) is False
+``` 

@@ -103,7 +103,8 @@ def format_image_for_provider(
                 return {"type": "image", "source": {"type": "url", "url": url}}
                 
             elif provider == "ollama":
-                return {"url": url}
+                # For Ollama chat API, we need the URL directly for images array
+                return url
             
             elif provider == "huggingface":
                 # For Hugging Face, return the URL directly for PIL to load
@@ -139,7 +140,8 @@ def format_image_for_provider(
                 }
                 
             elif provider == "ollama":
-                return {"data": encoded_image}
+                # For Ollama chat API, we need the base64 string directly for images array
+                return encoded_image
             
             elif provider == "huggingface":
                 # For Hugging Face, return the file path directly for PIL to load
@@ -175,9 +177,8 @@ def format_image_for_provider(
                     }
                     
                 elif provider == "ollama":
-                    # Extract just the base64 data
-                    data = encoded_image.split(',')[1]
-                    return {"data": data}
+                    # Extract just the base64 data for Ollama chat API
+                    return encoded_image.split(',')[1]
                     
                 else:
                     logger.warning(f"Unknown provider {provider}, returning as-is")
@@ -205,7 +206,8 @@ def format_image_for_provider(
                     }
                     
                 elif provider == "ollama":
-                    return {"data": encoded_image}
+                    # For Ollama chat API, return base64 directly
+                    return encoded_image
                     
                 else:
                     logger.warning(f"Unknown provider {provider}, returning as-is")
@@ -324,8 +326,21 @@ def preprocess_image_inputs(
                 processed_params["images"] = [formatted_image]
                 
             elif provider == "huggingface":
-                # For Hugging Face, add as a 'pixel_values' parameter
+                # For Hugging Face, keep the image path or URL as is
                 processed_params["image"] = formatted_image
+                
+                # Ensure Hugging Face vision models have access to required libraries
+                try:
+                    from PIL import Image
+                    import requests
+                    from io import BytesIO
+                except ImportError:
+                    logger.warning("PIL and/or requests not installed. Required for HuggingFace vision models.")
+                
+                # Add image_processor_format parameter if not already provided
+                if "image_processor_format" not in processed_params:
+                    # Default to PIL format
+                    processed_params["image_processor_format"] = "pil"
     
     # Handle multiple images parameter
     if "images" in processed_params or "IMAGES" in processed_params:
@@ -402,10 +417,15 @@ def preprocess_image_inputs(
                 
             elif provider == "huggingface":
                 # For Hugging Face, add as a list in 'pixel_values' parameter
-                # Most HF models only support a single image, use the first one
+                # Most HF models only support a single image at a time
                 if formatted_images:
                     processed_params["image"] = formatted_images[0]
                     if len(formatted_images) > 1:
                         logger.warning("HuggingFace models typically support only one image at a time. Using the first image only.")
+                    
+                    # Add image_processor_format parameter if not already provided
+                    if "image_processor_format" not in processed_params:
+                        # Default to PIL format
+                        processed_params["image_processor_format"] = "pil"
     
     return processed_params 

@@ -31,16 +31,20 @@ DEFAULT_MODEL = "bartowski/microsoft_Phi-4-mini-instruct-GGUF"
 
 # Models that support vision capabilities
 VISION_CAPABLE_MODELS = [
-    "Qwen/Qwen2.5-Omni-7B", 
-    "Qwen/Qwen2.5-VL-32B-Instruct", 
-    "Qwen/Qwen2.5-VL-7B-Instruct", 
-    "Qwen/Qwen2.5-VL-3B-Instruct", 
+    "openai/clip-vit-base-patch32",
+    "facebook/dinov2-small",
+    "Salesforce/blip2-opt-2.7b",
+#    "deepseek-ai/deepseek-vl-7b-chat",  # DeepSeek Omni vision model
+#    "Qwen/Qwen2.5-Omni-7B", 
+#    "Qwen/Qwen2.5-VL-32B-Instruct", 
+#    "Qwen/Qwen2.5-VL-7B-Instruct", 
+#    "Qwen/Qwen2.5-VL-3B-Instruct", 
     "llava-hf/llava-v1.6-mistral-7b-hf", 
-    "microsoft/Phi-4-multimodal-instruct"
+#    "microsoft/Phi-4-multimodal-instruct"
 ]
 
 # Constants for model selection
-TINY_TEST_PROMPT = "Hello, what is the capital of France?"  # Used for warmup
+TINY_TEST_PROMPT = "Hello, what is the capital of France?"  # Used for warmup"
 
 def _get_optimal_device() -> str:
     """
@@ -310,8 +314,15 @@ class HuggingFaceProvider(AbstractLLMInterface):
         timeout = self.config.get("load_timeout", 300)  # 5 minutes default
         trust_remote_code = self.config.get("trust_remote_code", False)
         
+        # Check if FlashAttention should be disabled
+        disable_flash_attn = self.config.get("disable_flash_attn", True)
+        
+        # Add to model kwargs if needed 
+        attn_implementation = "eager" if disable_flash_attn else "flash_attention_2"
+        
         # Log detailed configuration at DEBUG level
         logger.debug(f"Model loading configuration: load_in_8bit={load_in_8bit}, load_in_4bit={load_in_4bit}, device_map={device_map}")
+        logger.debug(f"FlashAttention disabled: {disable_flash_attn}, using attention implementation: {attn_implementation}")
         if cache_dir:
             logger.debug(f"Using custom cache directory: {cache_dir}")
         
@@ -389,7 +400,8 @@ class HuggingFaceProvider(AbstractLLMInterface):
             model_kwargs = {
                 "device_map": device_map,
                 "cache_dir": cache_dir,
-                "trust_remote_code": trust_remote_code
+                "trust_remote_code": trust_remote_code,
+                "attn_implementation": attn_implementation
             }
             
             if load_in_8bit:
@@ -416,26 +428,50 @@ class HuggingFaceProvider(AbstractLLMInterface):
             # For vision models, may need to use a different model class
             if is_vision_capable:
                 try:
-                    # Try AutoModelForVision first
-                    try:
-                        from transformers import AutoModelForVision, AutoModelForCausalLM
-                        logger.debug("Attempting to load vision model with AutoModelForVision")
-                        self._model = AutoModelForVision.from_pretrained(
-                            model_name,
-                            **model_kwargs
-                        )
-                    except (ImportError, Exception) as e:
-                        logger.debug(f"AutoModelForVision not available or failed: {e}")
-                        # Fall back to appropriate model class based on model name pattern
+                    # Vision models require different handling based on model type
+                    logger.debug(f"Loading vision-capable model: {model_name}")
+                    
+                    # Try model-specific approaches based on known architectures
+                    if "deepseek-vl" in model_name.lower():
                         try:
-                            if "llava" in model_name.lower():
-                                from transformers import LlavaForConditionalGeneration
-                                logger.debug("Loading LlavaForConditionalGeneration model")
-                                self._model = LlavaForConditionalGeneration.from_pretrained(
-                                    model_name,
-                                    **model_kwargs
-                                )
-                            elif "qwen" in model_name.lower():
+                            # For DeepSeek vision models 
+                            logger.debug("Loading DeepSeek vision model with AutoModelForCausalLM")
+                            from transformers.models.auto import modeling_auto
+                            
+                            # Set torch dtype to load in lower precision if needed
+                            if device_map not in ["cpu", "auto"]:
+                                try:
+                                    import torch
+                                    model_kwargs["torch_dtype"] = torch.float16  # Use FP16 for GPU
+                                    logger.debug("Using torch_dtype=float16 for DeepSeek model")
+                                except Exception as dtype_error:
+                                    logger.warning(f"Failed to set torch_dtype: {dtype_error}")
+                                
+                            self._model = AutoModelForCausalLM.from_pretrained(
+                                model_name,
+                                **model_kwargs
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to load DeepSeek vision model: {e}")
+                            raise
+                    elif "llava" in model_name.lower():
+                        try:
+                            from transformers import LlavaForConditionalGeneration
+                            logger.debug("Loading LlavaForConditionalGeneration model")
+                            self._model = LlavaForConditionalGeneration.from_pretrained(
+                                model_name,
+                                **model_kwargs
+                            )
+                        except (ImportError, Exception) as e:
+                            logger.debug(f"Failed to load LlavaForConditionalGeneration: {e}")
+                            # Fall back to standard approach
+                            self._model = AutoModelForCausalLM.from_pretrained(
+                                model_name,
+                                **model_kwargs
+                            )
+                    elif "qwen" in model_name.lower():
+                        try:
+                            if "qwen2" in model_name.lower():
                                 try:
                                     from transformers import Qwen2VLForConditionalGeneration
                                     logger.debug("Loading Qwen2VLForConditionalGeneration model")
@@ -443,27 +479,45 @@ class HuggingFaceProvider(AbstractLLMInterface):
                                         model_name,
                                         **model_kwargs
                                     )
-                                except ImportError:
-                                    # Try for general multimodal
-                                    from transformers import AutoModelForVision
+                                except ImportError as e:
+                                    logger.debug(f"Qwen2VLForConditionalGeneration not available: {e}")
+                                    # Fall back to standard approach
                                     self._model = AutoModelForCausalLM.from_pretrained(
                                         model_name,
                                         **model_kwargs
                                     )
                             else:
-                                # Default to causal LM for other models
-                                logger.debug("Falling back to AutoModelForCausalLM for vision model")
+                                from transformers import AutoModelForCausalLM
+                                logger.debug("Loading QwenVL model with AutoModelForCausalLM")
                                 self._model = AutoModelForCausalLM.from_pretrained(
                                     model_name,
                                     **model_kwargs
                                 )
-                        except Exception as model_error:
-                            logger.error(f"Failed to load vision model: {model_error}")
-                            # Last attempt with regular causal LM
+                        except Exception as e:
+                            logger.debug(f"Failed to load Qwen vision model: {e}")
+                            # Fall back to standard approach
                             self._model = AutoModelForCausalLM.from_pretrained(
                                 model_name,
                                 **model_kwargs
                             )
+                    elif "phi-4" in model_name.lower():
+                        try:
+                            # For Phi-4 multimodal models
+                            logger.debug("Loading Phi-4 multimodal model with AutoModelForCausalLM")
+                            self._model = AutoModelForCausalLM.from_pretrained(
+                                model_name,
+                                **model_kwargs
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to load Phi-4 multimodal model: {e}")
+                            raise
+                    else:
+                        # Default to causal LM for other models
+                        logger.debug("Using AutoModelForCausalLM for vision model")
+                        self._model = AutoModelForCausalLM.from_pretrained(
+                            model_name,
+                            **model_kwargs
+                        )
                 except Exception as vision_error:
                     logger.error(f"All attempts to load vision model failed: {vision_error}")
                     raise
@@ -585,12 +639,13 @@ class HuggingFaceProvider(AbstractLLMInterface):
         
         # Check if this is a vision model with image inputs
         model_name = params.get(ModelParameter.MODEL, params.get("model"))
-        is_vision_capable = any(vision_model in model_name for vision_model in VISION_CAPABLE_MODELS)
+        is_vision_capable = any(vision_model in model_name for vision_model in VISION_CAPABLE_MODELS) if model_name else False
         has_image = "image" in params
         
         if has_image and is_vision_capable:
             # Process image input
             image_input = params.get("image")
+            image_processor_format = params.get("image_processor_format", "pil")
             
             # Import PIL only when needed
             try:
@@ -605,60 +660,170 @@ class HuggingFaceProvider(AbstractLLMInterface):
                 if image_input.startswith(('http://', 'https://')):
                     # Load from URL
                     logger.debug(f"Loading image from URL: {image_input}")
-                    response = requests.get(image_input)
-                    image = Image.open(BytesIO(response.content))
+                    try:
+                        response = requests.get(image_input, stream=True, timeout=60)
+                        response.raise_for_status()
+                        image = Image.open(BytesIO(response.content))
+                    except Exception as e:
+                        logger.error(f"Failed to load image from URL: {e}")
+                        raise ValueError(f"Could not load image from URL: {e}")
                 else:
                     # Load from file path
-                    logger.debug(f"Loading image from file: {image_input}")
-                    image = Image.open(image_input)
+                    try:
+                        logger.debug(f"Loading image from file: {image_input}")
+                        image = Image.open(image_input)
+                    except Exception as e:
+                        logger.error(f"Failed to load image from file: {e}")
+                        raise ValueError(f"Could not load image from file: {e}")
+            elif isinstance(image_input, bytes):
+                # Handle bytes data
+                logger.debug("Loading image from bytes data")
+                image = Image.open(BytesIO(image_input))
             else:
-                raise ValueError(f"Unsupported image input type: {type(image_input)}")
-            
-            # Process inputs based on the model type
-            if hasattr(self, '_processor') and self._processor is not None:
-                logger.debug("Using processor for multimodal input")
-                try:
-                    # Use processor if available
-                    inputs = self._processor(text=full_prompt, images=image, return_tensors="pt")
-                    inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
-                except Exception as e:
-                    logger.error(f"Error processing multimodal input: {e}")
-                    raise
-            else:
-                # Use model-specific approaches if processor is not available
-                if "llava" in model_name.lower():
-                    logger.debug("Processing for LLaVA model")
-                    inputs = self._tokenizer(
-                        full_prompt, 
-                        return_tensors="pt", 
-                        padding=True
-                    )
-                    # Add image as pixel_values
-                    # Process image according to LLaVA requirements
-                    from transformers import CLIPImageProcessor
-                    image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14")
-                    pixel_values = image_processor(image, return_tensors="pt").pixel_values
-                    inputs["pixel_values"] = pixel_values.to(self._model.device)
-                elif "qwen" in model_name.lower():
-                    logger.debug("Processing for Qwen model")
-                    inputs = self._tokenizer(
-                        full_prompt, 
-                        return_tensors="pt"
-                    )
-                    # Add image as pixel_values
-                    # Process image according to Qwen requirements
-                    inputs["pixel_values"] = self._model.get_image_features(image)
-                else:
-                    # Default approach - try standard LLM processing with warning
-                    logger.warning(f"No specific handling for vision model {model_name}. Attempting generic processing.")
-                    inputs = self._tokenizer(
-                        full_prompt, 
-                        return_tensors="pt", 
-                        truncation=True, 
-                        max_length=context_size - max_tokens
-                    )
+                # Assume it's already a PIL Image
+                logger.debug("Using provided PIL image object")
+                image = image_input
                 
-                inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
+            # Ensure the image is in RGB mode
+            if image.mode != "RGB":
+                logger.debug(f"Converting image from {image.mode} to RGB")
+                image = image.convert("RGB")
+                
+            # Process the image based on the model type
+            if self._processor is not None:
+                logger.debug("Using model processor for image")
+                # If model has a processor, use it to process the image
+                if "deepseek-vl" in model_name.lower():
+                    # DeepSeek vision model processing
+                    try:
+                        logger.debug("Processing for DeepSeek vision model")
+                        
+                        # Format prompt for DeepSeek
+                        if system_prompt:
+                            deepseek_prompt = f"<system>\n{system_prompt}\n</system>\n\n<human>\n{prompt}\n</human>\n\n<bot>\n"
+                        else:
+                            deepseek_prompt = f"<human>\n{prompt}\n</human>\n\n<bot>\n"
+                        
+                        # Process the image and prepare model inputs
+                        processed_inputs = self._processor(
+                            text=deepseek_prompt,
+                            images=image,
+                            return_tensors="pt"
+                        )
+                        
+                        # Move to device
+                        processed_inputs = {k: v.to(self._model.device) for k, v in processed_inputs.items()}
+                        
+                        # Generate with the processed inputs
+                        generation_config = {
+                            "max_new_tokens": max_tokens,
+                            "do_sample": temperature > 0.0,
+                            "temperature": max(temperature, 1e-4),  # Avoid division by zero
+                            "top_p": top_p
+                        }
+                        
+                        # Set stop sequences if provided
+                        if stop and isinstance(stop, list):
+                            generation_config["stopping_criteria"] = self._create_stopping_criteria(stop, deepseek_prompt)
+                            
+                        # Start generation timer
+                        start_time = time.time()
+                        
+                        # Generate the full response at once
+                        with torch.no_grad():
+                            output_ids = self._model.generate(**processed_inputs, **generation_config)
+                            
+                        # Extract the response text - skip the prompt tokens
+                        input_length = processed_inputs["input_ids"].shape[1]
+                        response = self._tokenizer.decode(output_ids[0][input_length:], skip_special_tokens=True)
+                        
+                        # Log the response
+                        log_response("huggingface", response)
+                        return response
+                    except Exception as e:
+                        logger.error(f"Error in DeepSeek vision processing: {e}")
+                        raise
+                else:
+                    # Standard processor-based approach
+                    try:
+                        processed_inputs = self._processor(
+                            text=full_prompt, 
+                            images=image, 
+                            return_tensors="pt"
+                        )
+                        # Move to device
+                        processed_inputs = {k: v.to(self._model.device) for k, v in processed_inputs.items()}
+                    except Exception as e:
+                        logger.error(f"Failed to process image with processor: {e}")
+                        raise ValueError(f"Error processing image: {e}")
+            else:
+                # If no processor, convert image to pixel_values using tokenizer
+                logger.debug("No processor found. Using basic image processing.")
+                try:
+                    # Tokenize the prompt
+                    inputs = self._tokenizer(full_prompt, return_tensors="pt")
+                    inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
+                    
+                    # Provide a direct warning - most models without processors won't handle images well
+                    logger.warning(f"Model {model_name} does not have a processor for images. Vision may not work properly.")
+                    
+                    # Just proceed with text processing
+                    processed_inputs = inputs
+                except Exception as e:
+                    logger.error(f"Failed to process input: {e}")
+                    raise ValueError(f"Error processing input: {e}")
+            
+            # Start generation timer
+            start_time = time.time()
+            
+            # Generate the response - for models that use processor output directly
+            try:
+                logger.debug("Generating response from vision model")
+                
+                generation_config = {
+                    "max_new_tokens": max_tokens,
+                    "do_sample": temperature > 0.0,
+                    "temperature": max(temperature, 1e-4),  # Avoid division by zero
+                    "top_p": top_p
+                }
+                
+                # Set stop sequences if provided
+                if stop and isinstance(stop, list):
+                    generation_config["stopping_criteria"] = self._create_stopping_criteria(stop, full_prompt)
+                
+                # Stream if requested and not Phi-4 (which is handled above)
+                if stream and "phi-4" not in model_name.lower():
+                    return self._stream_generator(processed_inputs, generation_config, generation_timeout)
+                
+                # Otherwise, generate the full response at once
+                # Skip generation for Phi-4 which is handled above
+                if "phi-4" not in model_name.lower():
+                    with torch.no_grad():
+                        output_ids = self._model.generate(**processed_inputs, **generation_config)
+                        
+                    if hasattr(self._processor, "batch_decode"):
+                        # Use processor's decode if available
+                        logger.debug("Decoding with processor")
+                        response = self._processor.batch_decode(output_ids, skip_special_tokens=True)[0]
+                    else:
+                        # Fall back to tokenizer
+                        logger.debug("Decoding with tokenizer")
+                        response = self._tokenizer.decode(output_ids[0], skip_special_tokens=True)
+                    
+                    # Try to extract just the generated part (may vary by model architecture)
+                    try:
+                        input_length = processed_inputs["input_ids"].shape[1]
+                        response = self._tokenizer.decode(output_ids[0][input_length:], skip_special_tokens=True)
+                    except Exception:
+                        # Keep the full response if extraction fails
+                        pass
+                    
+                    # Log the response
+                    log_response("huggingface", response)
+                    return response
+            except Exception as e:
+                logger.error(f"Error in vision model response generation: {e}")
+                raise
         else:
             # Standard text-only processing
             try:
@@ -808,10 +973,7 @@ class HuggingFaceProvider(AbstractLLMInterface):
                           stream: bool = False, 
                           **kwargs) -> Union[str, AsyncGenerator[str, None]]:
         """
-        Asynchronously generate a response using Hugging Face model.
-        
-        This runs the generation in a thread pool since most HF models
-        are not async-compatible.
+        Generate a response asynchronously using Hugging Face model.
         
         Args:
             prompt: The input prompt
@@ -820,46 +982,39 @@ class HuggingFaceProvider(AbstractLLMInterface):
             **kwargs: Additional parameters to override configuration
             
         Returns:
-            The generated response or an async generator if streaming
-            
-        Raises:
-            Exception: If model loading or generation fails
+            The generated text response or an async generator
         """
-        # Since HuggingFace doesn't have native async support, we'll run in a thread
-        loop = asyncio.get_event_loop()
-        
-        # Ensure model is loaded before entering the async context
-        if not self._model_loaded:
-            await loop.run_in_executor(None, self.load_model)
-        
-        if not stream:
-            # For non-streaming, run the synchronous method in an executor
-            result = await loop.run_in_executor(
-                None, 
-                lambda: self.generate(
-                    prompt=prompt, 
-                    system_prompt=system_prompt, 
-                    stream=False, 
-                    **kwargs
-                )
-            )
-            return result
-        else:
-            # For streaming, we need to wrap the generator
-            sync_gen = self.generate(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                stream=True,
-                **kwargs
-            )
-            
+        # If streaming, create an async generator that wraps the sync generator
+        if stream:
+            # Create a sync generator in a thread and yield from it
             async def async_generator():
-                for token in sync_gen:
-                    yield token
-                    # Small sleep to give other tasks a chance to run
-                    await asyncio.sleep(0)
+                with ThreadPoolExecutor() as executor:
+                    # Run the sync generate method in a thread
+                    gen_future = executor.submit(
+                        self.generate, prompt, system_prompt, True, **kwargs
+                    )
+                    
+                    try:
+                        # Get the sync generator
+                        sync_gen = await asyncio.to_thread(lambda: gen_future.result())
+                        
+                        # Yield from the sync generator
+                        for chunk in sync_gen:
+                            yield chunk
+                    except Exception as e:
+                        logger.error(f"Error in async generation: {e}")
+                        yield f"[Error: {str(e)}]"
             
             return async_generator()
+        else:
+            # For non-streaming, just run the sync method in a thread
+            try:
+                return await asyncio.to_thread(
+                    self.generate, prompt, system_prompt, False, **kwargs
+                )
+            except Exception as e:
+                logger.error(f"Error in async generation: {e}")
+                raise
     
     def get_capabilities(self) -> Dict[Union[str, ModelCapability], Any]:
         """
@@ -969,6 +1124,269 @@ class HuggingFaceProvider(AbstractLLMInterface):
                 delete_cache_folder(cache_dir=cache_dir)
         except ImportError:
             raise ImportError("huggingface_hub package is required for this feature")
+
+    def _stream_generator(self, inputs, generation_config, timeout):
+        """
+        Helper method to generate streaming text using Hugging Face models.
+        
+        Args:
+            inputs: Processed inputs for the model
+            generation_config: Generation parameters
+            timeout: Generation timeout in seconds
+            
+        Returns:
+            Generator yielding text chunks
+        """
+        import torch
+        
+        def response_generator():
+            start_time = time.time()
+            
+            # Get the tokenizer (for decoding)
+            tokenizer = self._tokenizer
+            
+            # Set up the generation parameters
+            gen_config = generation_config.copy()
+            
+            # Stream token by token
+            generated_ids = inputs["input_ids"]
+            past_key_values = None
+            token_cache = []
+            past = None
+            
+            for _ in range(gen_config.pop("max_new_tokens", 100)):
+                # Check timeout
+                if timeout and time.time() - start_time > timeout:
+                    logger.warning("Generation timeout reached")
+                    yield "\n[Generation timeout reached]"
+                    break
+                
+                try:
+                    # Set up model inputs for the next token
+                    model_inputs = {
+                        "input_ids": generated_ids,
+                        "past_key_values": past_key_values if past_key_values is not None else past
+                    }
+                    
+                    # Generate next token
+                    with torch.no_grad():
+                        outputs = self._model(**model_inputs, use_cache=True)
+                    
+                    # Get probabilities for the next token
+                    next_token_logits = outputs.logits[:, -1, :]
+                    past_key_values = outputs.past_key_values
+                    
+                    # Apply temperature
+                    if "temperature" in gen_config and gen_config["temperature"] > 0:
+                        next_token_logits = next_token_logits / gen_config["temperature"]
+                    
+                    # Apply top-p
+                    if "top_p" in gen_config and gen_config["top_p"] < 1.0:
+                        next_token_logits = self._top_p_filtering(next_token_logits, 
+                                                                 top_p=gen_config["top_p"])
+                    
+                    # Sample from the filtered distribution
+                    if gen_config.get("do_sample", False):
+                        probs = torch.nn.functional.softmax(next_token_logits, dim=-1)
+                        next_token = torch.multinomial(probs, num_samples=1)
+                    else:
+                        next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
+                    
+                    # Append to the sequence
+                    generated_ids = torch.cat([generated_ids, next_token], dim=-1)
+                    
+                    # Check if we're at an EOS token
+                    if tokenizer.eos_token_id is not None and next_token.item() == tokenizer.eos_token_id:
+                        break
+                    
+                    # Decode the token
+                    token = tokenizer.decode([next_token.item()], skip_special_tokens=True)
+                    token_cache.append(token)
+                    
+                    # Yield the token if it's not empty
+                    if token:
+                        yield token
+                    
+                    # For efficiency, yield accumulated tokens and clear cache periodically
+                    if len(token_cache) > 5:
+                        token_cache = []
+                        
+                except Exception as e:
+                    logger.error(f"Error during streaming: {e}")
+                    yield f"\n[Error: {str(e)}]"
+                    break
+            
+            # Final check for any remaining tokens
+            if token_cache:
+                remaining = "".join(token_cache)
+                if remaining:
+                    yield remaining
+        
+        return response_generator()
+    
+    def _phi4_multimodal_stream_generator(self, inputs, generation_config, timeout):
+        """
+        Helper method to generate streaming text specifically for Phi-4 multimodal model.
+        
+        Args:
+            inputs: Processed inputs for the model
+            generation_config: Generation parameters
+            timeout: Generation timeout in seconds
+            
+        Returns:
+            Generator yielding text chunks
+        """
+        import torch
+        
+        def response_generator():
+            start_time = time.time()
+            
+            try:
+                # Get the processor for decoding
+                processor = self._processor
+                
+                # Set up streamer
+                from transformers import TextIteratorStreamer
+                from threading import Thread
+                
+                streamer = TextIteratorStreamer(processor.tokenizer, skip_special_tokens=True)
+                
+                # Copy the generation config
+                gen_config = generation_config.copy()
+                
+                # Set up the generation parameters
+                max_new_tokens = gen_config.pop("max_new_tokens", 100)
+                
+                # Set up model inputs for generation
+                inputs_copy = {k: v.clone() if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+                
+                # Start generation in a separate thread
+                generation_kwargs = dict(
+                    **inputs_copy,
+                    streamer=streamer,
+                    max_new_tokens=max_new_tokens,
+                    **gen_config
+                )
+                
+                thread = Thread(target=self._model.generate, kwargs=generation_kwargs)
+                thread.start()
+                
+                # Yield from the streamer
+                for text_chunk in streamer:
+                    # Check timeout
+                    if timeout and time.time() - start_time > timeout:
+                        logger.warning("Generation timeout reached")
+                        yield "\n[Generation timeout reached]"
+                        break
+                    
+                    yield text_chunk
+                
+                # Wait for the generation to complete
+                thread.join()
+                
+            except Exception as e:
+                logger.error(f"Error during Phi-4 streaming: {e}")
+                yield f"\n[Error: {str(e)}]"
+        
+        return response_generator()
+    
+    def _top_p_filtering(self, logits, top_p=0.9):
+        """
+        Filter logits using nucleus (top-p) filtering.
+        
+        Args:
+            logits: Logits to filter
+            top_p: Cumulative probability threshold
+            
+        Returns:
+            Filtered logits
+        """
+        import torch
+        
+        sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+        cumulative_probs = torch.cumsum(torch.nn.functional.softmax(sorted_logits, dim=-1), dim=-1)
+        
+        # Remove tokens with cumulative probability above the threshold
+        sorted_indices_to_remove = cumulative_probs > top_p
+        # Shift the indices to the right to keep the first token above threshold
+        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+        sorted_indices_to_remove[..., 0] = 0
+        
+        # Scatter sorted indices to original indexing
+        indices_to_remove = sorted_indices_to_remove.scatter(
+            -1, sorted_indices, sorted_indices_to_remove
+        )
+        logits[indices_to_remove] = -float("Inf")
+        return logits
+
+    def _create_stopping_criteria(self, stop_sequences, prompt=""):
+        """
+        Create a stopping criteria for text generation based on stop sequences.
+        
+        Args:
+            stop_sequences: List of sequences that should stop generation when encountered
+            prompt: The input prompt (used to determine prompt length)
+            
+        Returns:
+            StoppingCriteriaList object
+        """
+        try:
+            from transformers import StoppingCriteria, StoppingCriteriaList
+            
+            class StopSequenceCriteria(StoppingCriteria):
+                """Criteria to stop generation when any of the specified sequences is generated."""
+                def __init__(self, tokenizer, stop_sequences, prompt_length):
+                    self.tokenizer = tokenizer
+                    self.stop_sequences = stop_sequences
+                    self.prompt_length = prompt_length
+                    
+                    # Pre-compute token IDs for stop sequences when possible
+                    self.stop_sequence_ids = []
+                    for seq in stop_sequences:
+                        # Only use sequences that can be tokenized
+                        try:
+                            if seq:
+                                ids = self.tokenizer.encode(seq, add_special_tokens=False)
+                                if ids:
+                                    self.stop_sequence_ids.append(ids)
+                        except:
+                            pass  # Skip sequences that can't be tokenized
+                
+                def __call__(self, input_ids, scores, **kwargs):
+                    # Only check the part after the prompt
+                    generated_ids = input_ids[0, self.prompt_length:]
+                    
+                    # If nothing generated yet, continue
+                    if len(generated_ids) == 0:
+                        return False
+                    
+                    # Check if any stop sequence is present in the generated text
+                    generated_text = self.tokenizer.decode(generated_ids, skip_special_tokens=False)
+                    
+                    # Check for any stop sequence in the generated text
+                    for seq in self.stop_sequences:
+                        if seq and seq in generated_text:
+                            return True
+                    
+                    # Check for token-level matches (more efficient for longer sequences)
+                    if len(generated_ids) >= 1:
+                        for stop_ids in self.stop_sequence_ids:
+                            if len(stop_ids) <= len(generated_ids):
+                                # Check if the end of generated_ids matches any stop_ids
+                                if stop_ids == generated_ids[-len(stop_ids):].tolist():
+                                    return True
+                    
+                    return False
+            
+            # Create stopping criteria with the prompt length for proper context
+            prompt_length = len(self._tokenizer.encode(prompt, add_special_tokens=True))
+            criteria = StopSequenceCriteria(self._tokenizer, stop_sequences, prompt_length)
+            
+            return StoppingCriteriaList([criteria])
+            
+        except ImportError:
+            logger.warning("transformers.StoppingCriteria not available. Stop sequences will be ignored.")
+            return None
 
 def torch_available() -> bool:
     """
