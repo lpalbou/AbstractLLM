@@ -16,7 +16,7 @@ from abstractllm.utils.logging import (
     log_api_key_missing,
     log_request_url
 )
-from abstractllm.utils.image import preprocess_image_inputs
+from abstractllm.media.processor import MediaProcessor
 from abstractllm.utils.config import ConfigurationManager
 
 # Configure logger
@@ -133,7 +133,7 @@ class OpenAIProvider(AbstractLLMInterface):
         if has_vision and ("image" in params or "images" in params):
             logger.info("Processing image inputs for vision request")
             image_request = True
-            params = preprocess_image_inputs(params, "openai")
+            params = MediaProcessor.process_inputs(params, "openai")
         
         # Prepare messages
         messages = params.get("messages", [])
@@ -296,7 +296,7 @@ class OpenAIProvider(AbstractLLMInterface):
                           ModelParameter.IMAGES in params or "images" in params):
             logger.info("Processing image inputs for vision request")
             image_request = True
-            params = preprocess_image_inputs(params, "openai")
+            params = MediaProcessor.process_inputs(params, "openai")
         
         # Prepare messages
         messages = params.get("messages", [])
@@ -392,3 +392,50 @@ class OpenAIProvider(AbstractLLMInterface):
             ModelCapability.VISION: has_vision,  # Dynamic based on model
             ModelCapability.JSON_MODE: True  # OpenAI supports JSON mode
         } 
+
+# Add a wrapper class for backward compatibility with the test suite
+class OpenAILLM:
+    """
+    Wrapper around OpenAIProvider for backward compatibility with the test suite.
+    """
+    
+    def __init__(self, model="gpt-4o", api_key=None):
+        """
+        Initialize an OpenAI LLM instance.
+        
+        Args:
+            model: The model to use
+            api_key: Optional API key (will use environment variable if not provided)
+        """
+        config = {
+            ModelParameter.MODEL: model,
+        }
+        
+        if api_key:
+            config[ModelParameter.API_KEY] = api_key
+            
+        self.provider = OpenAIProvider(config)
+        
+    def generate(self, prompt, image=None, images=None, **kwargs):
+        """
+        Generate a response using the OpenAI provider.
+        
+        Args:
+            prompt: The prompt to send
+            image: Optional single image
+            images: Optional list of images
+            return_format: Format to return the response in
+            **kwargs: Additional parameters
+            
+        Returns:
+            The generated response
+        """
+        # Add images to kwargs if provided
+        if image:
+            kwargs["image"] = image
+        if images:
+            kwargs["images"] = images
+            
+        response = self.provider.generate(prompt, **kwargs)
+
+        return response

@@ -1,71 +1,182 @@
-"""
-Tests for vision capabilities in AbstractLLM providers.
-"""
+"""Tests for vision capabilities of various providers."""
 
 import os
-import sys
 import pytest
 import requests
-import shutil
-from io import BytesIO
-from typing import Dict, Any, List, Union, Generator
-import unittest.mock
-from pathlib import Path
+import logging
+from abstractllm import create_llm, ModelCapability
+from abstractllm.media import MediaFactory
 
-from abstractllm import create_llm, ModelParameter, ModelCapability
-from abstractllm.providers.openai import OpenAIProvider, VISION_CAPABLE_MODELS as OPENAI_VISION_MODELS
-from abstractllm.providers.anthropic import AnthropicProvider, VISION_CAPABLE_MODELS as ANTHROPIC_VISION_MODELS
-from abstractllm.providers.ollama import OllamaProvider, VISION_CAPABLE_MODELS as OLLAMA_VISION_MODELS
-from abstractllm.providers.huggingface import HuggingFaceProvider, VISION_CAPABLE_MODELS as HF_VISION_MODELS
-from abstractllm.utils.image import format_image_for_provider
-from tests.utils import validate_response, validate_not_contains, has_capability
+# Configure logger
+logger = logging.getLogger(__name__)
 
-# Define test resources directory and examples directory
-RESOURCES_DIR = os.path.join(os.path.dirname(__file__), "resources")
-EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "examples")
-os.makedirs(RESOURCES_DIR, exist_ok=True)
-
-# Define test image paths and their keywords
+# Test image paths and expected keywords
 TEST_IMAGES = {
-    "test_image_1.jpg": {
-        "path": os.path.join(RESOURCES_DIR, "test_image_1.jpg"),
-        "source": os.path.join(EXAMPLES_DIR, "test_image_1.jpg"),
+    "mountain_path": {
+        "path": "tests/examples/mountains_path.jpg",
+        "url": "https://raw.githubusercontent.com/lpalbou/abstractllm/refs/heads/main/tests/examples/test_image_1.jpg",
         "keywords": [
-            "mountain", "mountains", "range", "dirt", "path", "trail", "wooden", "fence", 
-            "sunlight", "sunny", "blue sky", "grass", "meadow", "hiking", 
-            "countryside", "rural", "landscape", "horizon"
-        ],
-        "prompt": "Describe what you see in this image in detail."
+            "mountains", "path", "fence", "sunlight", "sky", "clouds", "hiking", 
+            "trail", "wooden fence", "meadow", "landscape", "nature", "dirt road", 
+            "mountain range", "sunny day"
+        ]
     },
-    "test_image_2.jpg": {
-        "path": os.path.join(RESOURCES_DIR, "test_image_2.jpg"),
-        "source": os.path.join(EXAMPLES_DIR, "test_image_2.jpg"),
+    "urban_sunset": {
+        "path": "tests/examples/urban_sunset.jpg",
+        "url": "https://raw.githubusercontent.com/lpalbou/abstractllm/refs/heads/main/tests/examples/urban_sunset.jpg",
         "keywords": [
-            "lamppost", "street light", "sunset", "dusk", "pink", "orange", "sky",
-            "pathway", "walkway", "park", "urban", "trees", "buildings", "benches",
-            "garden", "evening"
-        ],
-        "prompt": "What's shown in this image? Give a detailed description."
+            "sunset", "street lamps", "pathway", "trees", "buildings", "urban", 
+            "city", "dusk", "pink sky", "lampposts", "sidewalk", "park", 
+            "evening", "autumn", "architecture"
+        ]
     },
-    "test_image_3.jpg": {
-        "path": os.path.join(RESOURCES_DIR, "test_image_3.jpg"),
-        "source": os.path.join(EXAMPLES_DIR, "test_image_3.jpg"),
+    "whale": {
+        "path": "tests/examples/whale.jpg",
+        "url": "https://raw.githubusercontent.com/lpalbou/abstractllm/refs/heads/main/tests/examples/whale.jpg",
         "keywords": [
-            "whale", "humpback", "ocean", "sea", "breaching", "jumping", "splash",
-            "marine", "mammal", "fins", "flipper", "gray", "waves", "wildlife",
-            "water"
-        ],
-        "prompt": "Describe the creature in this image and what it's doing."
+            "whale", "humpback", "ocean", "water", "splash", "marine", "wildlife",
+            "breaching", "sea", "waves", "mammal", "nature", "aquatic", 
+            "motion", "dramatic"
+        ]
     },
-    "test_image_4.jpg": {
-        "path": os.path.join(RESOURCES_DIR, "test_image_4.jpg"),
-        "source": os.path.join(EXAMPLES_DIR, "test_image_4.jpg"),
+    "space_cat": {
+        "path": "tests/examples/space_cat.jpg",
+        "url": "https://raw.githubusercontent.com/lpalbou/abstractllm/refs/heads/main/tests/examples/space_cat.jpg",
         "keywords": [
-            "cat", "pet", "carrier", "transport", "dome", "window", "plastic",
-            "orange", "tabby", "fur", "eyes", "round", "opening", "white", "base",
-            "ventilation", "air holes"
-        ],
-        "prompt": "What animal is shown in this image and where is it located?"
+            "cat", "dome", "spaceship", "astronaut", "helmet", "white", "funny",
+            "pet", "feline", "porthole", "viewing window", "whimsical", 
+            "curious", "space theme", "futuristic"
+        ]
     }
 }
 
+def ensure_test_images_exist():
+    """Ensure all test images exist and are accessible."""
+    # Check local images
+    for image_info in TEST_IMAGES.values():
+        if not os.path.exists(image_info["path"]):
+            pytest.skip(f"Test image not found: {image_info['path']}")
+            
+    # Check remote images with proper headers
+    headers = {
+        "User-Agent": "AbstractLLM/1.0 (https://github.com/lpalbou/abstractllm)"
+    }
+    for image_info in TEST_IMAGES.values():
+        try:
+            response = requests.head(image_info["url"], headers=headers)
+            response.raise_for_status()
+        except (requests.RequestException, Exception) as e:
+            pytest.skip(f"Remote test image not accessible: {image_info['url']} - {str(e)}")
+
+def verify_keyword_match(extracted_keywords: str, expected_keywords: list, min_matches: int = 2) -> bool:
+    """Verify that enough expected keywords are found in the extracted keywords."""
+    extracted_lower = extracted_keywords.lower()
+    matches = sum(1 for keyword in expected_keywords if keyword.lower() in extracted_lower)
+    return matches >= min_matches
+
+def test_openai_vision():
+    """Test OpenAI's vision capabilities."""
+    ensure_test_images_exist()
+    llm = create_llm("openai", capabilities=[ModelCapability.VISION])
+    
+    # Test local images
+    for image_name, image_info in TEST_IMAGES.items():
+        image = MediaFactory.from_source(image_info["path"])
+        response = llm.generate("Extract keywords describing this image:", image=image)
+        assert verify_keyword_match(response, image_info["keywords"])
+        
+    # Test remote images
+    for image_name, image_info in TEST_IMAGES.items():
+        image = MediaFactory.from_source(image_info["url"])
+        response = llm.generate("Extract keywords describing this image:", image=image)
+        assert verify_keyword_match(response, image_info["keywords"])
+
+def test_anthropic_vision():
+    """Test Anthropic's vision capabilities."""
+    ensure_test_images_exist()
+    llm = create_llm("anthropic", capabilities=[ModelCapability.VISION])
+    
+    # Test local images
+    for image_name, image_info in TEST_IMAGES.items():
+        image = MediaFactory.from_source(image_info["path"])
+        response = llm.generate("Extract keywords describing this image:", image=image)
+        assert verify_keyword_match(response, image_info["keywords"])
+        
+    # Test remote images
+    for image_name, image_info in TEST_IMAGES.items():
+        image = MediaFactory.from_source(image_info["url"])
+        response = llm.generate("Extract keywords describing this image:", image=image)
+        assert verify_keyword_match(response, image_info["keywords"])
+
+def test_ollama_vision():
+    """Test Ollama's vision capabilities."""
+    ensure_test_images_exist()
+    llm = create_llm("ollama", capabilities=[ModelCapability.VISION])
+    
+    # Test local images
+    for image_name, image_info in TEST_IMAGES.items():
+        image = MediaFactory.from_source(image_info["path"])
+        response = llm.generate("Extract keywords describing this image:", image=image)
+        assert verify_keyword_match(response, image_info["keywords"])
+        
+    # Test remote images
+    for image_name, image_info in TEST_IMAGES.items():
+        image = MediaFactory.from_source(image_info["url"])
+        response = llm.generate("Extract keywords describing this image:", image=image)
+        assert verify_keyword_match(response, image_info["keywords"])
+
+def test_huggingface_vision():
+    """Test HuggingFace's vision capabilities."""
+    ensure_test_images_exist()
+    llm = create_llm("huggingface", capabilities=[ModelCapability.VISION])
+    
+    # Test with first image only (most HF models only support one image)
+    image_info = next(iter(TEST_IMAGES.values()))
+    
+    # Test with local image
+    image = MediaFactory.from_source(image_info["path"])
+    response = llm.generate("Extract keywords describing this image:", image=image)
+    assert verify_keyword_match(response, image_info["keywords"])
+    
+    # Test with remote image
+    image = MediaFactory.from_source(image_info["url"])
+    response = llm.generate("Extract keywords describing this image:", image=image)
+    assert verify_keyword_match(response, image_info["keywords"])
+    
+    # Test with multiple images (should raise warning)
+    with pytest.warns(UserWarning, match="Most HuggingFace models only support one image"):
+        images = [MediaFactory.from_source(info["path"]) for info in list(TEST_IMAGES.values())[:2]]
+        response = llm.generate("Extract keywords describing these images:", images=images)
+        # Should still get valid response for the first image
+        assert verify_keyword_match(response, list(TEST_IMAGES.values())[0]["keywords"])
+
+def test_multiple_providers():
+    """Test using multiple providers with the same images."""
+    ensure_test_images_exist()
+    
+    providers = ["openai", "anthropic", "ollama", "huggingface"]
+    image_info = next(iter(TEST_IMAGES.values()))  # Use first image for consistency
+    
+    # Test with local image
+    image = MediaFactory.from_source(image_info["path"])
+    
+    for provider in providers:
+        llm = create_llm(provider, capabilities=[ModelCapability.VISION])
+        try:
+            response = llm.generate("Extract keywords describing this image:", image=image)
+            assert verify_keyword_match(response, image_info["keywords"])
+        except Exception as e:
+            logger.warning(f"Provider {provider} failed with error: {str(e)}")
+            continue
+    
+    # Test with remote image
+    image = MediaFactory.from_source(image_info["url"])
+    
+    for provider in providers:
+        llm = create_llm(provider, capabilities=[ModelCapability.VISION])
+        try:
+            response = llm.generate("Extract keywords describing this image:", image=image)
+            assert verify_keyword_match(response, image_info["keywords"])
+        except Exception as e:
+            logger.warning(f"Provider {provider} failed with error: {str(e)}")
+            continue

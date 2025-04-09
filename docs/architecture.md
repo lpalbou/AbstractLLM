@@ -11,6 +11,7 @@ AbstractLLM follows a clean architectural pattern that separates interface defin
 3. **Configuration Management**: A unified configuration system
 4. **Capability Inspection**: Dynamic capability discovery
 5. **Error Handling and Logging**: Consistent error handling and logging across all providers
+6. **Media Handling**: Modular system for processing different media types
 
 The following diagram illustrates the high-level architecture:
 
@@ -101,9 +102,29 @@ classDiagram
         +setup_logging(level: int): void
     }
     
-    class ImageUtils {
-        +format_image_for_provider(image_input, provider): image_data
-        +preprocess_image_inputs(params, provider): processed_params
+    class MediaInput {
+        <<abstract>>
+        +to_provider_format(provider: str): Any
+        +media_type(): str
+        +metadata(): dict
+    }
+    
+    class ImageInput {
+        +source: str|Path
+        +detail_level: str
+        +to_provider_format(provider: str): Any
+        +media_type(): str
+        +get_base64(): str
+        +get_content(): bytes
+    }
+    
+    class MediaFactory {
+        +from_source(source, media_type): MediaInput
+        +from_sources(sources, media_type): List[MediaInput]
+    }
+    
+    class MediaProcessor {
+        +process_inputs(params: dict, provider: str): dict
     }
     
     AbstractLLMInterface <|-- OpenAIProvider
@@ -132,10 +153,15 @@ classDiagram
     LoggingUtils <.. OllamaProvider: uses
     LoggingUtils <.. HuggingFaceProvider: uses
     
-    ImageUtils <.. OpenAIProvider: uses
-    ImageUtils <.. AnthropicProvider: uses
-    ImageUtils <.. OllamaProvider: uses
-    ImageUtils <.. HuggingFaceProvider: uses
+    MediaInput <|-- ImageInput
+    MediaFactory ..> MediaInput: creates
+    MediaFactory ..> ImageInput: creates
+    MediaProcessor ..> MediaFactory: uses
+    
+    MediaProcessor <.. OpenAIProvider: uses
+    MediaProcessor <.. AnthropicProvider: uses
+    MediaProcessor <.. OllamaProvider: uses
+    MediaProcessor <.. HuggingFaceProvider: uses
 ```
 
 ## Package Structure
@@ -153,11 +179,18 @@ abstractllm/
 │   ├── anthropic.py           # Anthropic implementation
 │   ├── ollama.py              # Ollama implementation
 │   └── huggingface.py         # Hugging Face implementation
-└── utils/
-    ├── __init__.py
-    ├── config.py              # Centralized configuration management
-    ├── logging.py             # Logging utilities
-    └── image.py               # Image processing utilities
+├── media/
+│   ├── __init__.py            # Media handling exports
+│   ├── interface.py           # MediaInput abstract base class
+│   ├── image.py               # ImageInput implementation
+│   ├── factory.py             # MediaFactory implementation
+│   └── processor.py           # MediaProcessor implementation
+├── utils/
+│   ├── __init__.py
+│   ├── config.py              # Centralized configuration management
+│   ├── logging.py             # Logging utilities
+│   └── image.py               # Legacy image processing utilities
+└── exceptions.py              # Custom exception classes
 ```
 
 ## Data Flow Diagrams
@@ -173,16 +206,18 @@ flowchart TB
     ConfigManager --> ProviderConfig["ConfigurationManager.initialize_provider_config()"]
     ProviderConfig --> |"create provider instance"| Provider[LLM Provider]
     
-    User --> |"prompt, system_prompt, stream, **kwargs"| Generate["provider.generate()"]
+    User --> |"prompt, system_prompt, stream, image, images, **kwargs"| Generate["provider.generate()"]
     
     subgraph Generation
         Generate --> ExtractParams["ConfigurationManager.extract_generation_params()"]
-        ExtractParams --> CheckImage[Check for image inputs]
+        ExtractParams --> CheckImage[Check for media inputs]
         
-        CheckImage --> |"if images present"| ProcessImages[Process images for provider]
-        ProcessImages --> PrepareRequest[Prepare API request]
+        CheckImage --> |"if media present"| ProcessMedia[MediaProcessor.process_inputs()]
+        CheckImage --> |"if no media"| PrepareRequest
         
-        CheckImage --> |"if no images"| PrepareRequest
+        ProcessMedia --> |"Create MediaInput objects"| MediaFactory[MediaFactory.from_source()]
+        MediaFactory --> FormatMedia[MediaInput.to_provider_format()]
+        FormatMedia --> PrepareRequest[Prepare API request]
         
         PrepareRequest --> LogRequest[Log request]
         

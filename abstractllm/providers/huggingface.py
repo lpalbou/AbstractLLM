@@ -21,7 +21,7 @@ from abstractllm.utils.logging import (
     log_response,
     log_request_url
 )
-from abstractllm.utils.image import preprocess_image_inputs
+from abstractllm.media.processor import MediaProcessor
 from abstractllm.utils.config import ConfigurationManager
 
 # Configure logger with specific class path
@@ -590,13 +590,10 @@ class HuggingFaceProvider(AbstractLLMInterface):
         repetition_penalty = params.get("repetition_penalty", 1.0)
         timeout = params.get("generation_timeout", DEFAULT_GENERATION_TIMEOUT)
         
-        # Process any image inputs
-        has_vision = any(vision_model in model_name for vision_model in VISION_CAPABLE_MODELS)
-        image_request = False
-        if has_vision and ("image" in params or "images" in params):
+        # Process image inputs if any
+        if "image" in params or "images" in params:
             logger.info("Processing image inputs for vision request")
-            image_request = True
-            params = preprocess_image_inputs(params, "huggingface", is_open_model=True)
+            params = MediaProcessor.process_inputs(params, "huggingface")
         
         # Log the request
         log_request("huggingface", prompt, {
@@ -605,13 +602,13 @@ class HuggingFaceProvider(AbstractLLMInterface):
             "max_tokens": max_tokens,
             "has_system_prompt": system_prompt is not None,
             "stream": stream,
-            "image_request": image_request
+            "image_request": "image" in params or "images" in params
         })
         
         # Handle special case for multimodal generation
-        if image_request:
+        if "image" in params or "images" in params:
             # Check if the model is vision-capable
-            if not has_vision:
+            if not any(vision_model in model_name for vision_model in VISION_CAPABLE_MODELS):
                 raise ValueError(f"Model {model_name} does not support vision. Choose a vision-capable model.")
             
             # Process image(s)
@@ -1159,4 +1156,51 @@ def torch_available() -> bool:
         import torch
         return True
     except ImportError:
-        return False 
+        return False
+
+# Simple adapter class for tests
+class HuggingFaceLLM:
+    """
+    Simple adapter around HuggingFaceProvider for test compatibility.
+    """
+    
+    def __init__(self, model="llava-hf/llava-1.5-7b-hf", api_key=None):
+        """
+        Initialize a HuggingFace LLM instance.
+        
+        Args:
+            model: The model to use
+            api_key: Optional API key (will use environment variable if not provided)
+        """
+        config = {
+            ModelParameter.MODEL: model,
+        }
+        
+        if api_key:
+            config[ModelParameter.API_KEY] = api_key
+            
+        self.provider = HuggingFaceProvider(config)
+        
+    def generate(self, prompt, image=None, images=None, **kwargs):
+        """
+        Generate a response using the provider.
+        
+        Args:
+            prompt: The prompt to send
+            image: Optional single image
+            images: Optional list of images
+            return_format: Format to return the response in
+            **kwargs: Additional parameters
+            
+        Returns:
+            The generated response
+        """
+        # Add images to kwargs if provided
+        if image:
+            kwargs["image"] = image
+        if images:
+            kwargs["images"] = images
+            
+        response = self.provider.generate(prompt, **kwargs)
+        
+        return response 

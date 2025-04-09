@@ -18,7 +18,8 @@ from abstractllm.utils.logging import (
     log_request_url,
     truncate_base64
 )
-from abstractllm.utils.image import preprocess_image_inputs
+from abstractllm.media.processor import MediaProcessor
+from abstractllm.exceptions import ImageProcessingError
 from abstractllm.utils.config import ConfigurationManager
 
 # Configure logger
@@ -105,12 +106,10 @@ class OllamaProvider(AbstractLLMInterface):
         # Check if model supports vision
         has_vision = any(vision_model in model.lower() for vision_model in [vm.lower() for vm in VISION_CAPABLE_MODELS])
         
-        # Process image inputs if any, and if model supports vision
-        image_request = False
-        if has_vision and ("image" in params or "images" in params):
+        # Process image inputs if any
+        if "image" in params or "images" in params:
             logger.info("Processing image inputs for vision request")
-            image_request = True
-            params = preprocess_image_inputs(params, "ollama")
+            params = MediaProcessor.process_inputs(params, "ollama")
         
         # Determine endpoint based on whether this is a chat-format request or completion request
         format_type = params.pop("format", "chat")
@@ -179,7 +178,7 @@ class OllamaProvider(AbstractLLMInterface):
             "temperature": temperature,
             "has_system_prompt": system_prompt is not None,
             "stream": stream,
-            "image_request": image_request,
+            "image_request": "image" in params or "images" in params,
             "format": format_type
         })
         
@@ -187,7 +186,7 @@ class OllamaProvider(AbstractLLMInterface):
         log_request_url("ollama", endpoint)
         
         # For image requests, create a sanitized version of request data for debug logging
-        if image_request and logger.isEnabledFor(logging.DEBUG):
+        if "image" in params or "images" in params and logger.isEnabledFor(logging.DEBUG):
             sanitized_request = copy.deepcopy(request_data)
             if "images" in sanitized_request:
                 image_count = len(sanitized_request["images"])
@@ -245,29 +244,33 @@ class OllamaProvider(AbstractLLMInterface):
                 
                 return response_generator()
         else:
-            # Standard non-streaming response
+            # Non-streaming request
+            logger.info("Making non-streaming request")
+            
             try:
-                # Set stream to False for non-streaming request
-                request_data["stream"] = False
-                
-                # Make the API request
                 response = requests.post(endpoint, json=request_data)
                 response.raise_for_status()
                 data = response.json()
                 
-                # Extract result based on format
-                if format_type == "chat" and "message" in data and "content" in data["message"]:
-                    result = data["message"]["content"]
-                elif "response" in data:
-                    result = data["response"]
+                # Extract the response text based on the format
+                if format_type == "chat":
+                    if "message" in data and "content" in data["message"]:
+                        result = data["message"]["content"]
+                    else:
+                        logger.error(f"Unexpected response format: {data}")
+                        raise ValueError(f"Unexpected response format from Ollama API")
                 else:
-                    logger.error(f"Unexpected response format from Ollama: {data}")
-                    raise ValueError(f"Unexpected response format from Ollama: {data}")
+                    if "response" in data:
+                        result = data["response"]
+                    else:
+                        logger.error(f"Unexpected response format: {data}")
+                        raise ValueError(f"Unexpected response format from Ollama API")
                 
+                # Log the response
                 log_response("ollama", result)
-                logger.info("Generation completed successfully")
                 
                 return result
+                
             except requests.RequestException as e:
                 logger.error(f"Ollama API request failed: {str(e)}")
                 raise
@@ -317,12 +320,10 @@ class OllamaProvider(AbstractLLMInterface):
         # Check if model supports vision
         has_vision = any(vision_model in model.lower() for vision_model in [vm.lower() for vm in VISION_CAPABLE_MODELS])
         
-        # Process image inputs if any, and if model supports vision
-        image_request = False
-        if has_vision and ("image" in params or "images" in params):
+        # Process image inputs if any
+        if "image" in params or "images" in params:
             logger.info("Processing image inputs for vision request")
-            image_request = True
-            params = preprocess_image_inputs(params, "ollama")
+            params = MediaProcessor.process_inputs(params, "ollama")
         
         # Determine endpoint based on whether this is a chat-format request or completion request
         format_type = params.pop("format", "chat")
@@ -391,7 +392,7 @@ class OllamaProvider(AbstractLLMInterface):
             "temperature": temperature,
             "has_system_prompt": system_prompt is not None,
             "stream": stream,
-            "image_request": image_request,
+            "image_request": "image" in params or "images" in params,
             "format": format_type
         })
         
@@ -399,7 +400,7 @@ class OllamaProvider(AbstractLLMInterface):
         log_request_url("ollama", endpoint)
         
         # For image requests, create a sanitized version of request data for debug logging
-        if image_request and logger.isEnabledFor(logging.DEBUG):
+        if "image" in params or "images" in params and logger.isEnabledFor(logging.DEBUG):
             sanitized_request = copy.deepcopy(request_data)
             if "images" in sanitized_request:
                 image_count = len(sanitized_request["images"])
@@ -521,3 +522,47 @@ class OllamaProvider(AbstractLLMInterface):
             capabilities[ModelCapability.VISION] = True
             
         return capabilities 
+
+# Simple adapter class for tests
+class OllamaLLM:
+    """
+    Simple adapter around OllamaProvider for test compatibility.
+    """
+    
+    def __init__(self, model="llava", api_key=None):
+        """
+        Initialize an Ollama LLM instance.
+        
+        Args:
+            model: The model to use
+            api_key: Not used for Ollama but included for API consistency
+        """
+        config = {
+            ModelParameter.MODEL: model,
+        }
+            
+        self.provider = OllamaProvider(config)
+        
+    def generate(self, prompt, image=None, images=None, **kwargs):
+        """
+        Generate a response using the provider.
+        
+        Args:
+            prompt: The prompt to send
+            image: Optional single image
+            images: Optional list of images
+            return_format: Format to return the response in
+            **kwargs: Additional parameters
+            
+        Returns:
+            The generated response
+        """
+        # Add images to kwargs if provided
+        if image:
+            kwargs["image"] = image
+        if images:
+            kwargs["images"] = images
+            
+        response = self.provider.generate(prompt, **kwargs)
+        
+        return response 

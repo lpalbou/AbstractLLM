@@ -1,53 +1,35 @@
 """
-AbstractLLM: A unified interface for large language models.
+AbstractLLM: A unified interface for interacting with various LLM providers.
 """
 
 __version__ = "0.1.0"
 
-from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability
+from abstractllm.interface import (
+    AbstractLLMInterface,
+    ModelParameter,
+    ModelCapability
+)
 from abstractllm.factory import create_llm
-from abstractllm.utils.config import ConfigurationManager, create_config
-from abstractllm.exceptions import (
-    AbstractLLMError,
-    AuthenticationError,
-    QuotaExceededError,
-    UnsupportedProviderError,
-    UnsupportedModelError,
-    InvalidRequestError,
-    InvalidParameterError,
-    ModelLoadingError,
-    ProviderConnectionError,
-    ProviderAPIError,
-    RequestTimeoutError,
-    ContentFilterError,
-    ContextWindowExceededError,
-    UnsupportedFeatureError,
-    ImageProcessingError,
+from abstractllm.chain import (
+    ProviderChain,
+    create_fallback_chain,
+    create_capability_chain,
+    create_load_balanced_chain
+)
+from abstractllm.session import (
+    Session,
+    SessionManager
 )
 
 __all__ = [
-    # Core
-    "AbstractLLMInterface",
     "create_llm",
+    "AbstractLLMInterface",
     "ModelParameter",
     "ModelCapability",
-    "ConfigurationManager",
-    "create_config",  # For backward compatibility
-    
-    # Exceptions
-    "AbstractLLMError",
-    "AuthenticationError",
-    "QuotaExceededError",
-    "UnsupportedProviderError",
-    "UnsupportedModelError",
-    "InvalidRequestError",
-    "InvalidParameterError",
-    "ModelLoadingError",
-    "ProviderConnectionError",
-    "ProviderAPIError",
-    "RequestTimeoutError",
-    "ContentFilterError",
-    "ContextWindowExceededError", 
-    "UnsupportedFeatureError",
-    "ImageProcessingError",
+    "ProviderChain",
+    "create_fallback_chain",
+    "create_capability_chain",
+    "create_load_balanced_chain",
+    "Session",
+    "SessionManager",
 ] 

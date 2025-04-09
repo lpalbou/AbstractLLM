@@ -1,0 +1,13 @@
+This is a test document for AbstractLLM.
+
+It contains multiple paragraphs to test text file handling.
+The content should be processed correctly by different LLM providers.
+
+Features to test:
+- Multiple paragraphs
+- Lists and bullet points
+- Different line lengths
+- Special characters: !@#$%^&*()
+- Numbers: 123456789
+
+End of test document. 
