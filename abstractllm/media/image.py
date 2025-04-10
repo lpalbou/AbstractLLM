@@ -362,17 +362,41 @@ class ImageInput(MediaInput):
                 }
             }
         
-        # Otherwise, encode to base64
-        else:
-            base64_data = self.get_base64()
+        # For local files, read and encode
+        try:
+            import mimetypes
+            
+            # Determine MIME type
+            mime_type, _ = mimetypes.guess_type(source_str)
+            if not mime_type or not mime_type.startswith('image/'):
+                mime_type = 'image/jpeg'  # default to JPEG
+            
+            # Read file content
+            if os.path.exists(source_str):
+                with open(source_str, 'rb') as f:
+                    file_content = f.read()
+            else:
+                file_content = self.get_content()
+            
+            # Base64 encode without any additional processing
+            encoded_content = base64.b64encode(file_content).decode('utf-8')
+            
+            # Return in Anthropic's expected format
             return {
                 "type": "image",
                 "source": {
                     "type": "base64",
-                    "media_type": self.mime_type,
-                    "data": base64_data
+                    "media_type": mime_type,
+                    "data": encoded_content
                 }
             }
+            
+        except Exception as e:
+            raise ImageProcessingError(
+                f"Failed to format image for Anthropic: {e}",
+                provider="anthropic",
+                original_exception=e
+            )
     
     def _format_for_ollama(self) -> str:
         """

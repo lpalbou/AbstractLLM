@@ -33,8 +33,8 @@ VISION_CAPABLE_MODELS = [
     "claude-3-sonnet-20240229",
     "claude-3-opus-20240229", 
     "claude-3-5-sonnet-20240620",
-    "claude-3-5-sonnet-20241022",
-    "claude-3-5-haiku-20241022",
+    "claude-3-5-sonnet-20241022", # work on images
+    "claude-3-5-haiku-20241022", # did not work on images somehow...
     "claude-3-7-sonnet-20250219"
 ]
 
@@ -54,7 +54,7 @@ class AnthropicProvider(AbstractLLMInterface):
         
         # Set default configuration for Anthropic
         default_config = {
-            ModelParameter.MODEL: "claude-3-5-haiku-20241022",
+            ModelParameter.MODEL: "claude-3-5-sonnet-20241022",
             ModelParameter.TEMPERATURE: 0.7,
             ModelParameter.MAX_TOKENS: 2048,
             ModelParameter.TOP_P: 1.0,
@@ -131,14 +131,25 @@ class AnthropicProvider(AbstractLLMInterface):
         # Add system message if provided (either from config or parameter)
         system_prompt = system_prompt or self.config_manager.get_param(ModelParameter.SYSTEM_PROMPT)
         
-        # Prepare user message with files if any
+        # Prepare user message content
+        content = []
+        
+        # Add files first if any
         if processed_files:
-            content = [{"type": "text", "text": prompt}]
             for media_input in processed_files:
                 content.append(media_input.to_provider_format("anthropic"))
-            messages.append({"role": "user", "content": content})
-        else:
-            messages.append({"role": "user", "content": prompt})
+        
+        # Add text prompt after files
+        content.append({
+            "type": "text",
+            "text": prompt
+        })
+        
+        # Add the user message with the complete content array
+        messages.append({
+            "role": "user",
+            "content": content
+        })
         
         # Log request
         log_request("anthropic", prompt, {

@@ -2,7 +2,8 @@
 Ollama API implementation for AbstractLLM.
 """
 
-from typing import Dict, Any, Optional, Union, Generator, AsyncGenerator
+from typing import Dict, Any, Optional, Union, Generator, AsyncGenerator, List
+from pathlib import Path
 import os
 import json
 import asyncio
@@ -19,15 +20,16 @@ from abstractllm.utils.logging import (
     truncate_base64
 )
 from abstractllm.media.processor import MediaProcessor
-from abstractllm.exceptions import ImageProcessingError
-from abstractllm.utils.config import ConfigurationManager
+from abstractllm.exceptions import ImageProcessingError, FileProcessingError, UnsupportedFeatureError, ProviderAPIError
+from abstractllm.media.factory import MediaFactory
+from abstractllm.media.image import ImageInput
 
 # Configure logger
 logger = logging.getLogger("abstractllm.providers.ollama.OllamaProvider")
 
 # Models that support vision capabilities
 VISION_CAPABLE_MODELS = [
-    "llama3.2-vision",
+    "llama3.2-vision:latest",
     "deepseek-janus-pro",
     "erwan2/DeepSeek-Janus-Pro-7B",
     "llava",
@@ -53,17 +55,26 @@ class OllamaProvider(AbstractLLMInterface):
         """
         super().__init__(config)
         
-        # Initialize provider-specific configuration
-        self.config = ConfigurationManager.initialize_provider_config("ollama", self.config)
+        # Set default configuration for Ollama
+        default_config = {
+            ModelParameter.MODEL: "llama3.2-vision:latest",
+            ModelParameter.TEMPERATURE: 0.7,
+            ModelParameter.MAX_TOKENS: 2048,
+            ModelParameter.BASE_URL: "http://localhost:11434"
+        }
         
-        # Log provider initialization
-        model = ConfigurationManager.get_param(self.config, ModelParameter.MODEL, "phi4-mini:latest")
-        base_url = ConfigurationManager.get_param(self.config, ModelParameter.BASE_URL, "http://localhost:11434")
+        # Merge defaults with provided config
+        self.config_manager.merge_with_defaults(default_config)
+        
+        # Log initialization
+        model = self.config_manager.get_param(ModelParameter.MODEL)
+        base_url = self.config_manager.get_param(ModelParameter.BASE_URL)
         logger.info(f"Initialized Ollama provider with model: {model}, base URL: {base_url}")
     
     def generate(self, 
                 prompt: str, 
                 system_prompt: Optional[str] = None, 
+                files: Optional[List[Union[str, Path]]] = None,
                 stream: bool = False, 
                 **kwargs) -> Union[str, Generator[str, None, None]]:
         """
@@ -72,429 +83,264 @@ class OllamaProvider(AbstractLLMInterface):
         Args:
             prompt: The input prompt
             system_prompt: Override the system prompt in the config
+            files: Optional list of files to process (paths or URLs)
+                  Supported types: images (for vision models), text, markdown, CSV, TSV
             stream: Whether to stream the response
             **kwargs: Additional parameters to override configuration
-                - image: A single image (URL, file path, base64 string, or dict)
-                - images: List of images (URLs, file paths, base64 strings, or dicts)
             
         Returns:
-            The generated response or a generator if streaming
+            If stream=False: The complete generated response as a string
+            If stream=True: A generator yielding response chunks
             
         Raises:
-            Exception: If the API call fails
+            Exception: If the generation fails
         """
-        # Extract and combine parameters using the configuration manager
-        params = ConfigurationManager.extract_generation_params(
-            "ollama", self.config, kwargs, system_prompt
-        )
+        # Update config with any provided kwargs
+        if kwargs:
+            self.config_manager.update_config(kwargs)
         
-        # Extract key parameters
-        base_url = params.get("base_url", "http://localhost:11434")
-        model = params.get("model", "phi4-mini:latest")
-        temperature = params.get("temperature", 0.7)
-        system_prompt = params.get("system_prompt")
+        # Get necessary parameters from config
+        model = self.config_manager.get_param(ModelParameter.MODEL)
+        temperature = self.config_manager.get_param(ModelParameter.TEMPERATURE)
+        max_tokens = self.config_manager.get_param(ModelParameter.MAX_TOKENS)
+        base_url = self.config_manager.get_param(ModelParameter.BASE_URL)
         
-        # Log at INFO level
-        logger.info(f"Generating response with Ollama model: {model}")
+        # Process files if any
+        processed_files = []
+        if files:
+            for file_path in files:
+                try:
+                    media_input = MediaFactory.from_source(file_path)
+                    processed_files.append(media_input)
+                except Exception as e:
+                    raise FileProcessingError(
+                        f"Failed to process file {file_path}: {str(e)}",
+                        provider="ollama",
+                        original_exception=e
+                    )
         
-        # Log detailed parameters at DEBUG level
-        logger.debug(f"Using Ollama instance at: {base_url}")
-        logger.debug(f"Generation parameters: temperature={temperature}")
+        # Check for images and model compatibility
+        has_images = any(isinstance(f, ImageInput) for f in processed_files)
+        if has_images and not any(model.lower().startswith(vm.lower()) for vm in VISION_CAPABLE_MODELS):
+            raise UnsupportedFeatureError(
+                "vision",
+                "Current model does not support vision input",
+                provider="ollama"
+            )
+        
+        # Prepare request data
+        request_data = {
+            "model": model,
+            "stream": stream,
+            "options": {
+                "temperature": temperature
+            }
+        }
+        
+        # Add system prompt if provided
         if system_prompt:
-            logger.debug("Using system prompt")
+            request_data["system"] = system_prompt
         
-        # Check if model supports vision
-        has_vision = any(vision_model in model.lower() for vision_model in [vm.lower() for vm in VISION_CAPABLE_MODELS])
+        # Handle images for vision-capable models
+        if processed_files:
+            # For Ollama, we need to add images as a list of base64 strings or URLs
+            images = []
+            for media_input in processed_files:
+                if isinstance(media_input, ImageInput):
+                    images.append(media_input.to_provider_format("ollama"))
+            if images:
+                request_data["images"] = images
         
-        # Process image inputs if any
-        if "image" in params or "images" in params:
-            logger.info("Processing image inputs for vision request")
-            params = MediaProcessor.process_inputs(params, "ollama")
+        # Add prompt
+        request_data["prompt"] = prompt
         
-        # Determine endpoint based on whether this is a chat-format request or completion request
-        format_type = params.pop("format", "chat")
-        
-        if format_type == "chat":
-            # Chat API format
-            if "messages" in params:
-                # If messages are already formatted (e.g., by image preprocessing)
-                messages = params.pop("messages", [])
-            else:
-                # Format message array
-                messages = []
-                
-                # Add system message if provided
-                if system_prompt:
-                    messages.append({"role": "system", "content": system_prompt})
-                
-                # Add user message
-                messages.append({"role": "user", "content": prompt})
-            
-            # Build the request
-            request_data = {
-                "model": model,
-                "messages": messages,
-                "stream": stream,
-                "options": {
-                    "temperature": temperature
-                }
-            }
-            
-            # Add images parameter at the root level if present (needed for vision capabilities)
-            if "images" in params:
-                request_data["images"] = params.pop("images")
-            
-            # Add any additional options (removing any that might be duplicated)
-            for key, value in params.items():
-                if key not in ["model", "messages", "stream"] and key not in request_data["options"]:
-                    request_data["options"][key] = value
-            
-            endpoint = f"{base_url.rstrip('/')}/api/chat"
-        else:
-            # Completion API format (legacy format)
-            request_data = {
-                "model": model,
-                "prompt": prompt,
-                "stream": stream,
-                "options": {
-                    "temperature": temperature
-                }
-            }
-            
-            # Add system prompt if provided
-            if system_prompt:
-                request_data["system"] = system_prompt
-            
-            # Add any additional options
-            for key, value in params.items():
-                if key not in ["model", "prompt", "stream", "system"] and key not in request_data["options"]:
-                    request_data["options"][key] = value
-            
-            endpoint = f"{base_url.rstrip('/')}/api/generate"
-        
-        # Log the request
+        # Log request
         log_request("ollama", prompt, {
             "model": model,
             "temperature": temperature,
             "has_system_prompt": system_prompt is not None,
             "stream": stream,
-            "image_request": "image" in params or "images" in params,
-            "format": format_type
+            "has_files": bool(files)
         })
         
-        # Log API request URL
-        log_request_url("ollama", endpoint)
-        
-        # For image requests, create a sanitized version of request data for debug logging
-        if "image" in params or "images" in params and logger.isEnabledFor(logging.DEBUG):
-            sanitized_request = copy.deepcopy(request_data)
-            if "images" in sanitized_request:
-                image_count = len(sanitized_request["images"])
-                sanitized_request["images"] = f"[{image_count} image(s), truncated for logging]"
-            logger.debug(f"Ollama request data (sanitized): {sanitized_request}")
-        
-        # Handle streaming if requested
-        if stream:
-            logger.info("Starting streaming generation")
+        # Make API call
+        try:
+            endpoint = f"{base_url.rstrip('/')}/api/generate"
             
-            if format_type == "chat":
-                def chat_response_generator():
-                    try:
-                        response = requests.post(endpoint, json=request_data, stream=True)
-                        response.raise_for_status()
-                        
-                        # Process the streamed response
-                        for line in response.iter_lines():
-                            if line:
-                                try:
-                                    data = json.loads(line)
-                                    if "message" in data and "content" in data["message"]:
-                                        yield data["message"]["content"]
-                                    elif "done" in data and data["done"]:
-                                        # End of stream
-                                        break
-                                except json.JSONDecodeError:
-                                    logger.warning(f"Failed to parse JSON from Ollama response: {line}")
-                    except requests.RequestException as e:
-                        logger.error(f"Ollama API request failed: {str(e)}")
-                        raise
-                
-                return chat_response_generator()
-            else:
+            # Log API request URL
+            log_request_url("ollama", endpoint)
+            
+            if stream:
                 def response_generator():
-                    try:
-                        response = requests.post(endpoint, json=request_data, stream=True)
-                        response.raise_for_status()
-                        
-                        # Process the streamed response
-                        for line in response.iter_lines():
-                            if line:
+                    response = requests.post(endpoint, json=request_data, stream=True)
+                    response.raise_for_status()
+                    
+                    for line in response.iter_lines():
+                        if line:
+                            try:
+                                data = json.loads(line)
+                                if "response" in data:
+                                    yield data["response"]
+                                elif "done" in data and data["done"]:
+                                    break
+                            except json.JSONDecodeError:
+                                logger.warning(f"Failed to parse JSON from Ollama response: {line}")
+                return response_generator()
+            else:
+                response = requests.post(endpoint, json=request_data)
+                response.raise_for_status()
+                data = response.json()
+                
+                if "response" in data:
+                    result = data["response"]
+                    log_response("ollama", result)
+                    return result
+                else:
+                    logger.error(f"Unexpected response format: {data}")
+                    raise ValueError("Unexpected response format from Ollama API")
+                    
+        except requests.RequestException as e:
+            raise ProviderAPIError(
+                f"Ollama API request failed: {str(e)}",
+                provider="ollama",
+                original_exception=e
+            )
+    
+    async def generate_async(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        files: Optional[List[Union[str, Path]]] = None,
+        stream: bool = False,
+        **kwargs
+    ) -> Union[str, AsyncGenerator[str, None]]:
+        """
+        Asynchronously generate a response from the Ollama model.
+        
+        Args:
+            prompt (str): The prompt to generate from
+            system_prompt (Optional[str]): System prompt to use
+            files (Optional[List[str]]): List of file paths to process
+            stream (bool): Whether to stream the response
+            **kwargs: Additional parameters to pass to the API
+            
+        Returns:
+            Union[str, AsyncGenerator[str, None]]: Generated text or async generator for streaming
+            
+        Raises:
+            FileProcessingError: If there's an error processing input files
+            UnsupportedFeatureError: If vision features are requested but not supported
+            ProviderAPIError: If the API request fails
+        """
+        # Update config with any provided kwargs
+        if kwargs:
+            self.config_manager.update_config(kwargs)
+        
+        # Get necessary parameters from config
+        model = self.config_manager.get_param(ModelParameter.MODEL)
+        temperature = self.config_manager.get_param(ModelParameter.TEMPERATURE)
+        base_url = self.config_manager.get_param(ModelParameter.BASE_URL)
+
+        # Process files if provided
+        processed_files = []
+        if files:
+            for file_path in files:
+                try:
+                    media_input = MediaFactory.from_source(file_path)
+                    processed_files.append(media_input)
+                except Exception as e:
+                    raise FileProcessingError(
+                        f"Failed to process file {file_path}: {str(e)}",
+                        provider="ollama",
+                        original_exception=e
+                    )
+
+        # Check for images and model compatibility
+        has_images = any(isinstance(f, ImageInput) for f in processed_files)
+        if has_images and not any(model.lower().startswith(vm.lower()) for vm in VISION_CAPABLE_MODELS):
+            raise UnsupportedFeatureError(
+                "vision",
+                "Current model does not support vision input",
+                provider="ollama"
+            )
+
+        # Prepare request data
+        request_data = {
+            "model": model,
+            "stream": stream,
+            "options": {
+                "temperature": temperature
+            }
+        }
+
+        # Add system prompt if provided
+        if system_prompt:
+            request_data["system"] = system_prompt
+
+        # Handle images for vision-capable models
+        if processed_files:
+            # For Ollama, we need to add images as a list of base64 strings or URLs
+            images = []
+            for media_input in processed_files:
+                if isinstance(media_input, ImageInput):
+                    images.append(media_input.to_provider_format("ollama"))
+            if images:
+                request_data["images"] = images
+
+        # Add prompt
+        request_data["prompt"] = prompt
+
+        # Log request
+        log_request("ollama", prompt, {
+            "model": model,
+            "temperature": temperature,
+            "has_system_prompt": system_prompt is not None,
+            "stream": stream,
+            "has_files": bool(files)
+        })
+
+        # Construct API endpoint
+        api_endpoint = f"{base_url.rstrip('/')}/api/generate"
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(api_endpoint, json=request_data) as response:
+                    if not response.ok:
+                        error_msg = await response.text()
+                        logger.error(f"Ollama API error: {error_msg}")
+                        raise ProviderAPIError(f"Ollama API request failed: {error_msg}")
+
+                    if stream:
+                        async def response_generator():
+                            async for line in response.content:
+                                if not line:
+                                    continue
                                 try:
                                     data = json.loads(line)
                                     if "response" in data:
                                         yield data["response"]
                                     elif "done" in data and data["done"]:
-                                        # End of stream
                                         break
-                                except json.JSONDecodeError:
-                                    logger.warning(f"Failed to parse JSON from Ollama response: {line}")
-                    except requests.RequestException as e:
-                        logger.error(f"Ollama API request failed: {str(e)}")
-                        raise
-                
-                return response_generator()
-        else:
-            # Non-streaming request
-            logger.info("Making non-streaming request")
-            
-            try:
-                response = requests.post(endpoint, json=request_data)
-                response.raise_for_status()
-                data = response.json()
-                
-                # Extract the response text based on the format
-                if format_type == "chat":
-                    if "message" in data and "content" in data["message"]:
-                        result = data["message"]["content"]
+                                except json.JSONDecodeError as e:
+                                    logger.warning(f"Failed to parse streaming response: {e}")
+                                    continue
+                        return response_generator()
                     else:
-                        logger.error(f"Unexpected response format: {data}")
-                        raise ValueError(f"Unexpected response format from Ollama API")
-                else:
-                    if "response" in data:
-                        result = data["response"]
-                    else:
-                        logger.error(f"Unexpected response format: {data}")
-                        raise ValueError(f"Unexpected response format from Ollama API")
-                
-                # Log the response
-                log_response("ollama", result)
-                
-                return result
-                
-            except requests.RequestException as e:
-                logger.error(f"Ollama API request failed: {str(e)}")
-                raise
-    
-    async def generate_async(self, 
-                          prompt: str, 
-                          system_prompt: Optional[str] = None, 
-                          stream: bool = False, 
-                          **kwargs) -> Union[str, AsyncGenerator[str, None]]:
-        """
-        Asynchronously generate a response using Ollama API.
-        
-        Args:
-            prompt: The input prompt
-            system_prompt: Override the system prompt in the config
-            stream: Whether to stream the response
-            **kwargs: Additional parameters to override configuration
-                - image: A single image (URL, file path, base64 string, or dict)
-                - images: List of images (URLs, file paths, base64 strings, or dicts)
-            
-        Returns:
-            If stream=False: The complete generated response as a string
-            If stream=True: An async generator yielding response chunks
-            
-        Raises:
-            Exception: If the API call fails
-        """
-        # Extract and combine parameters using the configuration manager
-        params = ConfigurationManager.extract_generation_params(
-            "ollama", self.config, kwargs, system_prompt
-        )
-        
-        # Extract key parameters
-        base_url = params.get("base_url", "http://localhost:11434")
-        model = params.get("model", "phi4-mini:latest")
-        temperature = params.get("temperature", 0.7)
-        system_prompt = params.get("system_prompt")
-        
-        # Log at INFO level
-        logger.info(f"Generating async response with Ollama model: {model}")
-        
-        # Log detailed parameters at DEBUG level
-        logger.debug(f"Generation parameters: temperature={temperature}")
-        if system_prompt:
-            logger.debug("Using system prompt")
-        
-        # Check if model supports vision
-        has_vision = any(vision_model in model.lower() for vision_model in [vm.lower() for vm in VISION_CAPABLE_MODELS])
-        
-        # Process image inputs if any
-        if "image" in params or "images" in params:
-            logger.info("Processing image inputs for vision request")
-            params = MediaProcessor.process_inputs(params, "ollama")
-        
-        # Determine endpoint based on whether this is a chat-format request or completion request
-        format_type = params.pop("format", "chat")
-        
-        if format_type == "chat":
-            # Chat API format
-            if "messages" in params:
-                # If messages are already formatted (e.g., by image preprocessing)
-                messages = params.pop("messages", [])
-            else:
-                # Format message array
-                messages = []
-                
-                # Add system message if provided
-                if system_prompt:
-                    messages.append({"role": "system", "content": system_prompt})
-                
-                # Add user message
-                messages.append({"role": "user", "content": prompt})
-            
-            # Build the request
-            request_data = {
-                "model": model,
-                "messages": messages,
-                "stream": stream,
-                "options": {
-                    "temperature": temperature
-                }
-            }
-            
-            # Add images parameter at the root level if present (needed for vision capabilities)
-            if "images" in params:
-                request_data["images"] = params.pop("images")
-            
-            # Add any additional options (removing any that might be duplicated)
-            for key, value in params.items():
-                if key not in ["model", "messages", "stream"] and key not in request_data["options"]:
-                    request_data["options"][key] = value
-            
-            endpoint = f"{base_url.rstrip('/')}/api/chat"
-        else:
-            # Completion API format (legacy format)
-            request_data = {
-                "model": model,
-                "prompt": prompt,
-                "stream": stream,
-                "options": {
-                    "temperature": temperature
-                }
-            }
-            
-            # Add system prompt if provided
-            if system_prompt:
-                request_data["system"] = system_prompt
-            
-            # Add any additional options
-            for key, value in params.items():
-                if key not in ["model", "prompt", "stream", "system"] and key not in request_data["options"]:
-                    request_data["options"][key] = value
-            
-            endpoint = f"{base_url.rstrip('/')}/api/generate"
-        
-        # Log the request
-        log_request("ollama", prompt, {
-            "model": model,
-            "temperature": temperature,
-            "has_system_prompt": system_prompt is not None,
-            "stream": stream,
-            "image_request": "image" in params or "images" in params,
-            "format": format_type
-        })
-        
-        # Log API request URL
-        log_request_url("ollama", endpoint)
-        
-        # For image requests, create a sanitized version of request data for debug logging
-        if "image" in params or "images" in params and logger.isEnabledFor(logging.DEBUG):
-            sanitized_request = copy.deepcopy(request_data)
-            if "images" in sanitized_request:
-                image_count = len(sanitized_request["images"])
-                sanitized_request["images"] = f"[{image_count} image(s), truncated for logging]"
-            logger.debug(f"Ollama async request data (sanitized): {sanitized_request}")
-        
-        # Handle streaming if requested
-        if stream:
-            logger.info("Starting async streaming generation")
-            
-            if format_type == "chat":
-                async def async_chat_generator():
-                    try:
-                        async with aiohttp.ClientSession() as session:
-                            async with session.post(endpoint, json=request_data) as response:
-                                response.raise_for_status()
-                                
-                                # Process the streamed response
-                                async for line in response.content.iter_any():
-                                    if line:
-                                        line_str = line.decode('utf-8').strip()
-                                        if line_str:
-                                            for sub_line in line_str.split('\n'):
-                                                if sub_line:
-                                                    try:
-                                                        data = json.loads(sub_line)
-                                                        if "message" in data and "content" in data["message"]:
-                                                            yield data["message"]["content"]
-                                                        elif "done" in data and data["done"]:
-                                                            # End of stream
-                                                            return
-                                                    except json.JSONDecodeError:
-                                                        logger.warning(f"Failed to parse JSON from Ollama response: {sub_line}")
-                    except aiohttp.ClientError as e:
-                        logger.error(f"Ollama API request failed: {str(e)}")
-                        raise
-                
-                return async_chat_generator()
-            else:
-                async def async_generator():
-                    try:
-                        async with aiohttp.ClientSession() as session:
-                            async with session.post(endpoint, json=request_data) as response:
-                                response.raise_for_status()
-                                
-                                # Process the streamed response
-                                async for line in response.content.iter_any():
-                                    if line:
-                                        line_str = line.decode('utf-8').strip()
-                                        if line_str:
-                                            for sub_line in line_str.split('\n'):
-                                                if sub_line:
-                                                    try:
-                                                        data = json.loads(sub_line)
-                                                        if "response" in data:
-                                                            yield data["response"]
-                                                        elif "done" in data and data["done"]:
-                                                            # End of stream
-                                                            return
-                                                    except json.JSONDecodeError:
-                                                        logger.warning(f"Failed to parse JSON from Ollama response: {sub_line}")
-                    except aiohttp.ClientError as e:
-                        logger.error(f"Ollama API request failed: {str(e)}")
-                        raise
-                
-                return async_generator()
-        else:
-            # Standard non-streaming response
-            try:
-                # Set stream to False for non-streaming request
-                request_data["stream"] = False
-                
-                # Make the API request
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(endpoint, json=request_data) as response:
-                        response.raise_for_status()
                         data = await response.json()
-                
-                # Extract result based on format
-                if format_type == "chat" and "message" in data and "content" in data["message"]:
-                    result = data["message"]["content"]
-                elif "response" in data:
-                    result = data["response"]
-                else:
-                    logger.error(f"Unexpected response format from Ollama: {data}")
-                    raise ValueError(f"Unexpected response format from Ollama: {data}")
-                
-                log_response("ollama", result)
-                logger.info("Async generation completed successfully")
-                
-                return result
-            except aiohttp.ClientError as e:
-                logger.error(f"Ollama API request failed: {str(e)}")
-                raise
+                        if "response" in data:
+                            result = data["response"]
+                            log_response("ollama", result)
+                            return result
+                        else:
+                            logger.error(f"Unexpected response format: {data}")
+                            raise ValueError("Unexpected response format from Ollama API")
+
+        except aiohttp.ClientError as e:
+            logger.error(f"Network error during Ollama API request: {str(e)}")
+            raise ProviderAPIError(f"Failed to connect to Ollama API: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error during Ollama API request: {str(e)}")
+            raise ProviderAPIError(f"Unexpected error: {str(e)}")
     
     def get_capabilities(self) -> Dict[Union[str, ModelCapability], Any]:
         """
@@ -514,14 +360,14 @@ class OllamaProvider(AbstractLLMInterface):
         }
         
         # Check if the current model supports vision
-        model = ConfigurationManager.get_param(self.config, ModelParameter.MODEL, "phi4-mini:latest")
+        model = self.config_manager.get_param(ModelParameter.MODEL)
         has_vision = any(vision_model in model.lower() for vision_model in [vm.lower() for vm in VISION_CAPABLE_MODELS])
         
         # Update vision capability
         if has_vision:
             capabilities[ModelCapability.VISION] = True
             
-        return capabilities 
+        return capabilities
 
 # Simple adapter class for tests
 class OllamaLLM:
