@@ -172,6 +172,25 @@ class ProviderAPIError(AbstractLLMError):
     pass
 
 
+class GenerationError(AbstractLLMError):
+    """
+    Raised when there is an error during text generation.
+    
+    This can occur due to:
+    - Model generation failures
+    - Invalid generation parameters
+    - Resource constraints during generation
+    - Unexpected model behavior
+    
+    Args:
+        message: Description of the error
+        provider: The provider name that raised the error
+        original_exception: The original exception that was caught
+        details: Additional details about the error
+    """
+    pass
+
+
 class RequestTimeoutError(AbstractLLMError):
     """
     Raised when a request to a provider times out.
