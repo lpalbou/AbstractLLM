@@ -2,8 +2,9 @@
 Abstract interface for LLM providers.
 """
 
-from typing import Dict, Any, Optional, Union, Generator, AsyncGenerator
+from typing import Dict, Any, Optional, Union, Generator, AsyncGenerator, List
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 from abstractllm.utils.config import ConfigurationManager
 from abstractllm.enums import ModelParameter, ModelCapability
@@ -24,22 +25,25 @@ class AbstractLLMInterface(ABC):
             config: Optional configuration dictionary
         """
         # Initialize config manager
-        self.config_manager = ConfigurationManager(config)
+        self.config_manager = ConfigurationManager(config or {})
     
     @abstractmethod
     def generate(self, 
                 prompt: str, 
                 system_prompt: Optional[str] = None, 
+                files: Optional[List[Union[str, Path]]] = None,
                 stream: bool = False, 
                 **kwargs) -> Union[str, Generator[str, None, None]]:
         """
-        Generate a response to the prompt using the LLM.
+        Generate a response using the LLM.
         
         Args:
             prompt: The input prompt
             system_prompt: Override the system prompt in the config
-            stream: Whether to stream the response (default: False)
-            **kwargs: Additional parameters to override config
+            files: Optional list of files to process (paths or URLs)
+                  Supported types: images (for vision models), text, markdown, CSV, TSV
+            stream: Whether to stream the response
+            **kwargs: Additional parameters to override configuration
             
         Returns:
             If stream=False: The complete generated response as a string
@@ -54,16 +58,19 @@ class AbstractLLMInterface(ABC):
     async def generate_async(self, 
                           prompt: str, 
                           system_prompt: Optional[str] = None, 
+                          files: Optional[List[Union[str, Path]]] = None,
                           stream: bool = False, 
                           **kwargs) -> Union[str, AsyncGenerator[str, None]]:
         """
-        Asynchronously generate a response to the prompt using the LLM.
+        Asynchronously generate a response using the LLM.
         
         Args:
             prompt: The input prompt
             system_prompt: Override the system prompt in the config
-            stream: Whether to stream the response (default: False)
-            **kwargs: Additional parameters to override config
+            files: Optional list of files to process (paths or URLs)
+                  Supported types: images (for vision models), text, markdown, CSV, TSV
+            stream: Whether to stream the response
+            **kwargs: Additional parameters to override configuration
             
         Returns:
             If stream=False: The complete generated response as a string

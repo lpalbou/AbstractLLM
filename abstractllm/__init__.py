@@ -10,12 +10,6 @@ from abstractllm.interface import (
     ModelCapability
 )
 from abstractllm.factory import create_llm
-from abstractllm.chain import (
-    ProviderChain,
-    create_fallback_chain,
-    create_capability_chain,
-    create_load_balanced_chain
-)
 from abstractllm.session import (
     Session,
     SessionManager
@@ -26,7 +20,6 @@ __all__ = [
     "AbstractLLMInterface",
     "ModelParameter",
     "ModelCapability",
-    "ProviderChain",
     "create_fallback_chain",
     "create_capability_chain",
     "create_load_balanced_chain",

@@ -13,22 +13,6 @@ from abstractllm.enums import ModelParameter
 # Configure logger
 logger = logging.getLogger("abstractllm.utils.config")
 
-# Environment variable mapping for API keys
-ENV_API_KEYS = {
-    "openai": "OPENAI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "ollama": None,  # No API key needed for Ollama
-    "huggingface": "HUGGINGFACE_API_KEY"
-}
-
-# Provider base URLs
-BASE_URLS = {
-    "openai": None,  # Use default OpenAI API URL
-    "anthropic": None,  # Use default Anthropic API URL
-    "ollama": "http://localhost:11434",
-    "huggingface": None  # No base URL for HuggingFace
-}
-
 # Generic value type for configuration
 T = TypeVar('T')
 

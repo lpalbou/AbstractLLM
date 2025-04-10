@@ -201,6 +201,42 @@ class ImageProcessingError(AbstractLLMError):
     pass
 
 
+class FileProcessingError(AbstractLLMError):
+    """
+    Raised when there is an error processing a file input.
+    
+    This can occur when:
+    - File cannot be read or accessed
+    - File format is invalid or unsupported
+    - File content cannot be processed
+    - File conversion fails
+    - File size exceeds limits
+    
+    Args:
+        message: Description of the error
+        provider: The provider name that raised the error
+        original_exception: The original exception that was caught
+        details: Additional details about the error (e.g., file path, file type)
+        file_path: Path to the file that caused the error
+        file_type: Type of file that was being processed
+    """
+    
+    def __init__(self, message: str, provider: Optional[str] = None,
+                 original_exception: Optional[Exception] = None,
+                 details: Optional[Dict[str, Any]] = None,
+                 file_path: Optional[str] = None,
+                 file_type: Optional[str] = None):
+        super().__init__(message, provider, original_exception, details)
+        self.file_path = file_path
+        self.file_type = file_type
+        
+        # Add file info to details
+        if file_path:
+            self.details["file_path"] = file_path
+        if file_type:
+            self.details["file_type"] = file_type
+
+
 # Mapping of common provider-specific error codes to AbstractLLM exceptions
 # This helps normalize error handling across providers
 PROVIDER_ERROR_MAPPING = {
