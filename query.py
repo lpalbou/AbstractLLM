@@ -68,8 +68,6 @@ def main():
     parser.add_argument('--file', '-f', help='Optional file to process (image, text, csv, etc.)')
     parser.add_argument('--api-key', help='API key (can also use environment variable)')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode to log the exact payload sent to provider')
-    parser.add_argument('--implementation', choices=['transformers', 'langchain'], 
-                      help='Implementation to use for HuggingFace provider (default: transformers)')
     args = parser.parse_args()
 
     # Providers that always require API keys
@@ -108,11 +106,6 @@ def main():
                 print(f"\nInitializing {args.provider} provider with default model: {default_model}")
             else:
                 print(f"\nInitializing {args.provider} provider with system default model")
-
-        # Add HuggingFace-specific configuration
-        if args.provider == "huggingface" and args.implementation:
-            config["implementation"] = args.implementation
-            print(f"Using {args.implementation} implementation for HuggingFace")
 
         # Create provider instance
         llm = create_llm(args.provider, **config)

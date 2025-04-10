@@ -30,13 +30,12 @@ def get_llm_providers() -> list[str]:
     """
     return list(_PROVIDERS.keys())
 
-def create_llm(provider: str, implementation: Optional[str] = None, **config) -> AbstractLLMInterface:
+def create_llm(provider: str, **config) -> AbstractLLMInterface:
     """
     Create an LLM provider instance.
     
     Args:
         provider: The provider name ('openai', 'anthropic', 'ollama', 'huggingface')
-        implementation: The implementation to use (currently only for 'huggingface': 'transformers' or 'langchain')
         **config: Provider-specific configuration
         
     Returns:
@@ -68,10 +67,6 @@ def create_llm(provider: str, implementation: Optional[str] = None, **config) ->
             raise ValueError(
                 f"{provider} API key not provided. Use --api-key or set {env_var} environment variable."
             )
-    
-    # Add implementation to config if provided for HuggingFace
-    if provider == "huggingface" and implementation:
-        config["implementation"] = implementation
     
     # Create provider instance with config
     return provider_class(config) 
