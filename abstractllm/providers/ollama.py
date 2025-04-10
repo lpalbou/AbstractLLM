@@ -57,7 +57,7 @@ class OllamaProvider(AbstractLLMInterface):
         
         # Set default configuration for Ollama
         default_config = {
-            ModelParameter.MODEL: "llama3.2-vision:latest",
+            ModelParameter.MODEL: "phi4-mini:latest",
             ModelParameter.TEMPERATURE: 0.7,
             ModelParameter.MAX_TOKENS: 2048,
             ModelParameter.BASE_URL: "http://localhost:11434"
