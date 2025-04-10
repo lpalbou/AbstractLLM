@@ -2,67 +2,91 @@
 
 ## Overview
 
-AbstractLLM provides a robust system for handling various media inputs, particularly images, when interacting with LLM providers. This document explains how media handling works in AbstractLLM and how to use it in your applications.
+This document details how AbstractLLM handles various media types, with a current focus on image handling. The implementation follows a streamlined approach that prioritizes simplicity, reliability, and provider compatibility.
 
-## Architecture
-
-The media handling system consists of several key components:
+## Core Components
 
 ### MediaInput Interface
 
-The `MediaInput` abstract base class defines the interface for all media inputs:
+The base interface for all media handling:
 
 ```python
 class MediaInput(ABC):
-    """Abstract base class for all media inputs."""
-    
     @abstractmethod
     def to_provider_format(self, provider: str) -> Any:
-        """Convert the media to a format suitable for the specified provider."""
+        """Convert media to provider-specific format"""
         pass
     
     @property
     @abstractmethod
     def media_type(self) -> str:
-        """Return the type of media (image, pdf, text, etc.)."""
+        """Return media type identifier"""
         pass
     
     @property
     def metadata(self) -> Dict[str, Any]:
-        """Return metadata about the media."""
+        """Return media metadata"""
         return {}
 ```
 
 ### ImageInput Implementation
 
-The `ImageInput` class implements the `MediaInput` interface for image files:
+The concrete implementation for image handling:
 
 ```python
 class ImageInput(MediaInput):
-    """Class representing an image input."""
-    
-    def __init__(self, source: Union[str, Path], detail_level: str = "auto"):
-        """Initialize an image input."""
+    def __init__(
+        self, 
+        source: Union[str, Path], 
+        detail_level: str = "auto",
+        mime_type: Optional[str] = None
+    ):
         self.source = source
         self.detail_level = detail_level
-        # ...
+        self._mime_type = mime_type
+        self._cached_formats = {}  # Cache provider-specific formats
 ```
 
-### MediaFactory
+## Data Flow and State Transitions
 
-The `MediaFactory` class provides factory methods for creating media input objects:
+### General Flow
 
-```python
-class MediaFactory:
-    """Factory for creating media input objects."""
-    
-    @classmethod
-    def from_source(cls, source: Union[str, Path, Dict], media_type: Optional[str] = None) -> MediaInput:
-        """Create a media input object from a source."""
-        # ...
+```ascii
+Input Source ──────────────────────┐
+  │                                │
+  ▼                                │
+┌──────────────────────┐           │
+│     MediaFactory     │           │
+│    .from_source()    │           │
+└──────────┬───────────┘           │
+           ▼                       │
+┌──────────────────────┐           │
+│     ImageInput       │           │
+│    Constructor       │           │
+│ ┌──────────────────┐ │           │
+│ │    Properties    │ │           │
+│ │ source: str/Path │ │           │
+│ │ detail_level: str│ │           │
+│ │ _mime_type: str  │ │           │
+│ │ _cached_formats{}│ │           │
+│ └──────────────────┘ │           │
+└──────────┬───────────┘           │
+           ▼                       │
+┌──────────────────────┐           │
+│   MediaProcessor     │           │
+│   process_inputs()   │           │
+└──────────┬───────────┘           │
+           ▼                       │
+┌──────────────────────┐           │
+│  Provider Format     │           │
+│  to_provider_format()│           │
+└──────────┬───────────┘           │
+           ▼                       ▼
+    Provider-Specific      Original Source
+    Message Structure      (if unchanged)
 ```
 
-### MediaProcessor
+### State Transitions
 
 The `MediaProcessor` class handles the processing of media inputs for different providers:
 

@@ -2,245 +2,269 @@
 
 ## Overview
 
-This document outlines a comprehensive approach to handling vision/image and other file inputs in the AbstractLLM library. The goal is to extend the current interface to support different types of files in a way that's consistent with AbstractLLM's minimalist design philosophy, while ensuring robust cross-provider compatibility.
+This document outlines the current implementation of vision/image and file handling in AbstractLLM. The implementation follows a minimalist approach while ensuring robust cross-provider compatibility and efficient processing.
 
-## Current Status and Limitations
+## Current Implementation
 
-### Vision Implementation Status
+### Core Components
 
-The current vision capabilities in AbstractLLM have the following limitations:
+1. **MediaInput Interface**:
+   - Abstract base class for all media types
+   - Provider-agnostic format conversion
+   - Metadata handling
+   - Type identification
 
-1. **Inconsistent Provider Handling**: Each provider requires different formats for images (base64, URLs, file paths), leading to complex preprocessing logic.
-2. **Limited File Types**: Only image files are currently supported, not text files, PDFs, CSVs, etc.
-3. **Mixed Responsibilities**: The image preprocessing code handles both media format detection and provider-specific transformation.
-4. **Limited Error Handling**: The current implementation lacks robust error handling for media loading failures.
-5. **Maintenance Challenges**: The complex conditional logic makes it difficult to maintain and extend the code.
+2. **ImageInput Implementation**:
+   - Handles multiple input formats
+   - Provider-specific formatting
+   - Format caching
+   - MIME type detection
 
-### Image Processing Flow
+3. **MediaProcessor**:
+   - Message structure handling
+   - Provider-specific processing
+   - Input validation
+   - Error management
 
-Currently, image processing works by:
-1. Detecting if an image input is present in the parameters
-2. Converting the image from its source (URL, file path, or base64) to a provider-specific format
-3. Integrating the formatted image into the API request
+### Data Flow
 
-## Proposed Architecture
-
-We propose a more modular, extensible architecture for handling media inputs. The key components are:
-
-### 1. Media Input Interface
-
-Define a clear interface for different types of media inputs:
-
-```python
-from abc import ABC, abstractmethod
-from typing import Any, Dict, Union, Optional
-
-class MediaInput(ABC):
-    """Abstract base class for all media inputs."""
-    
-    @abstractmethod
-    def to_provider_format(self, provider: str) -> Any:
-        """Convert the media to a format suitable for the specified provider."""
-        pass
-    
-    @property
-    @abstractmethod
-    def media_type(self) -> str:
-        """Return the type of media (image, pdf, text, etc.)."""
-        pass
-    
-    @property
-    def metadata(self) -> Dict[str, Any]:
-        """Return metadata about the media."""
-        return {}
+```ascii
+Input Source ──────────────────────┐
+  │                                │
+  ▼                                │
+┌──────────────────────┐           │
+│     MediaFactory     │           │
+│    .from_source()    │           │
+└──────────┬───────────┘           │
+           ▼                       │
+┌──────────────────────┐           │
+│     ImageInput       │           │
+│    Constructor       │           │
+│ ┌──────────────────┐ │           │
+│ │    Properties    │ │           │
+│ │ source: str/Path │ │           │
+│ │ detail_level: str│ │           │
+│ │ _mime_type: str  │ │           │
+│ │ _cached_formats{}│ │           │
+│ └──────────────────┘ │           │
+└──────────┬───────────┘           │
+           ▼                       │
+┌──────────────────────┐           │
+│   MediaProcessor     │           │
+│   process_inputs()   │           │
+└──────────┬───────────┘           │
+           ▼                       │
+┌──────────────────────┐           │
+│  Provider Format     │           │
+│  to_provider_format()│           │
+└──────────┬───────────┘           │
+           ▼                       ▼
+    Provider-Specific      Original Source
+    Message Structure      (if unchanged)
 ```
 
-### 2. Concrete Media Implementations
+### Provider-Specific Flow (Anthropic Example)
 
-Implement concrete classes for different media types:
-
-```python
-class ImageInput(MediaInput):
-    """Class representing an image input."""
-    
-    def __init__(self, source: Union[str, Path], detail_level: str = "auto"):
-        """
-        Initialize an image input.
-        
-        Args:
-            source: File path, URL, or base64 string
-            detail_level: Detail level for image processing (high, medium, low, auto)
-        """
-        self.source = source
-        self.detail_level = detail_level
-        self._cached_formats = {}  # Cache provider-specific formats
-    
-    @property
-    def media_type(self) -> str:
-        return "image"
-    
-    def to_provider_format(self, provider: str) -> Any:
-        """Convert to provider-specific format."""
-        if provider in self._cached_formats:
-            return self._cached_formats[provider]
-        
-        result = self._convert_for_provider(provider)
-        self._cached_formats[provider] = result
-        return result
-    
-    def _convert_for_provider(self, provider: str) -> Any:
-        """Provider-specific conversion logic."""
-        # Implementation moved from format_image_for_provider
-        # with improved error handling
+```ascii
+Input Source
+    │
+    ▼
+┌───────────────────────────┐
+│      MediaFactory         │
+│      .from_source()       │
+│                          │
+│ STATE: Original format   │
+│ (path/URL/base64/dataURL)│
+└──────────┬───────────────┘
+           │
+           ▼
+┌───────────────────────────┐
+│      ImageInput           │
+│      Constructor          │
+│                          │
+│ STATE:                   │
+│ self.source: unchanged   │
+│ self.detail_level: str   │
+│ self._mime_type: str     │
+└──────────┬───────────────┘
+           │
+           ▼
+┌───────────────────────────┐
+│   to_provider_format()    │
+│   ("anthropic")          │
+│                          │
+│ STATE: Checks cache first│
+└──────────┬───────────────┘
+           │
+           ▼
+┌───────────────────────────┐
+│  _format_for_anthropic()  │
+│                          │
+│ IF URL:                  │
+│   {                      │
+│     "type": "image",     │
+│     "source": {          │
+│       "type": "url",     │
+│       "url": source_str  │
+│     }                    │
+│   }                      │
+│                          │
+│ ELSE:                    │
+│   1. Get binary content  │
+│   2. Check size (<100MB) │
+│   3. Convert to base64   │
+│   {                      │
+│     "type": "image",     │
+│     "source": {          │
+│       "type": "base64",  │
+│       "media_type": mime,│
+│       "data": b64_data   │
+│     }                    │
+│   }                      │
+└──────────┬───────────────┘
+           │
+           ▼
+┌───────────────────────────┐
+│    Final Message          │
+│    Structure             │
+│                          │
+│ {                        │
+│   "role": "user",        │
+│   "content": [           │
+│     {                    │
+│       "type": "text",    │
+│       "text": prompt     │
+│     },                   │
+│     {                    │
+│       "type": "image",   │
+│       "source": {...}    │
+│     }                    │
+│   ]                      │
+│ }                        │
+└──────────┬───────────────┘
+           │
+           ▼
+      Anthropic API
 ```
 
-### 3. File Handling Factory
+## State Transitions
 
-Create a factory for handling file detection and loading:
+### Input States
 
-```python
-class MediaFactory:
-    """Factory for creating media input objects."""
-    
-    @staticmethod
-    def from_source(source: Union[str, Path, Dict], media_type: Optional[str] = None) -> MediaInput:
-        """
-        Create a media input object from a source.
-        
-        Args:
-            source: File path, URL, base64 string, or provider-specific dict
-            media_type: Explicit media type (optional, auto-detected if not provided)
-            
-        Returns:
-            Appropriate MediaInput instance
-            
-        Raises:
-            ValueError: If the media type cannot be determined or is unsupported
-        """
-        # Implementation details
-```
+1. **File Path**:
+   - Initial: Local filesystem path
+   - Final: Base64 or kept as path (HuggingFace)
 
-### 4. Media Processor Module
+2. **URL**:
+   - Initial: HTTP/HTTPS URL
+   - Final: Kept as URL or downloaded and converted to base64
 
-Create a dedicated module for handling media processing:
+3. **Base64**:
+   - Initial: Raw base64 string
+   - Final: Validated and formatted according to provider
 
-```python
-class MediaProcessor:
-    """Process media inputs for LLM providers."""
-    
-    @staticmethod
-    def process_inputs(params: Dict[str, Any], provider: str) -> Dict[str, Any]:
-        """
-        Process all media inputs in params for the specified provider.
-        
-        Args:
-            params: Parameters that may include media inputs
-            provider: Provider name
-            
-        Returns:
-            Updated parameters with media inputs formatted for the provider
-        """
-        # Implementation details
-```
+4. **Data URL**:
+   - Initial: base64 with MIME type prefix
+   - Final: Extracted base64 or kept as is (OpenAI)
 
-## Implementation Plan
+### Provider Format States
 
-### Phase 1: Refactor Current Image Handling
+1. **OpenAI**:
+   ```python
+   {
+       "type": "image_url",
+       "image_url": {
+           "url": str,  # URL or data URL
+           "detail": str
+       }
+   }
+   ```
 
-1. **Create Media Interface**: Implement the `MediaInput` abstract base class.
-2. **Implement Image Handling**: Create `ImageInput` class that encapsulates the current image handling logic.
-3. **Implement Factory**: Create the `MediaFactory` for instantiating appropriate media objects.
-4. **Add Robust Error Handling**: Implement proper error handling with specialized exceptions.
+2. **Anthropic**:
+   ```python
+   {
+       "type": "image",
+       "source": {
+           "type": "url" | "base64",
+           "url": str | None,
+           "media_type": str | None,
+           "data": str | None
+       }
+   }
+   ```
 
-### Phase 2: Extend to Other File Types
+3. **Ollama**:
+   ```python
+   str  # URL or base64 string
+   ```
 
-1. **Implement Document Input**: Add support for text documents, PDFs, etc.
-2. **Add MIME Type Detection**: Improve media type detection based on file extensions and content.
-3. **Implement Provider-Specific Handlers**: Create specialized handlers for providers with unique requirements.
+4. **HuggingFace**:
+   ```python
+   Union[str, bytes]  # Path, URL, or binary content
+   ```
 
-### Phase 3: Integration with Provider Implementations
+## Implementation Details
 
-1. **Update Provider Classes**: Modify provider implementations to use the new media handling architecture.
-2. **Add Capability Reporting**: Ensure providers accurately report their media handling capabilities.
-3. **Implement Validation**: Add validation to ensure media inputs match provider capabilities.
+### Format Caching
 
-## Best Practices and Implementation Guidelines
+- Provider-specific formats are cached in `_cached_formats`
+- Cache key: provider name
+- Cache value: formatted data structure
+- No binary content caching for memory efficiency
 
-### Media Type Detection
+### MIME Type Detection
 
-Use a combination of methods to reliably detect media types:
-
-1. **File Extension**: Use the file extension as the first hint.
-2. **MIME Type Library**: Use Python's `mimetypes` module for robust detection.
-3. **Content Analysis**: For ambiguous cases, analyze file headers or content patterns.
-4. **Explicit Type Hints**: Allow users to explicitly specify media types.
+1. Constructor-provided type
+2. Data URL extraction
+3. File extension mapping
+4. URL extension analysis
+5. Default to 'image/jpeg'
 
 ### Error Handling
 
-Implement robust error handling specific to media processing:
+- Custom `ImageProcessingError` with provider context
+- Size validation (e.g., Anthropic's 100MB limit)
+- Format validation
+- Network error handling
+- File access error handling
 
-1. **Specialized Exceptions**: Use the existing `ImageProcessingError` and add other specialized exceptions.
-2. **Detailed Error Messages**: Provide clear error messages that help users fix issues.
-3. **Early Validation**: Validate media inputs as early as possible to fail fast.
-4. **Graceful Degradation**: Fall back to simpler formats when complex ones are unavailable.
+## Best Practices
 
-### Caching Strategy
+1. **Input Handling**:
+   - Early validation
+   - Format preservation
+   - Efficient conversion
 
-Implement efficient caching to avoid redundant processing:
+2. **Provider Compatibility**:
+   - Format requirements
+   - Size limitations
+   - Capability checking
 
-1. **Memory Caching**: Cache processed media in memory to avoid repeated processing.
-2. **Provider Format Caching**: Cache provider-specific formats separately.
-3. **Lazy Loading**: Only process media when needed by the provider.
-4. **Cache Invalidation**: Clear caches when inputs change.
+3. **Error Management**:
+   - Clear error messages
+   - Provider context
+   - Graceful fallbacks
 
-### Provider-Specific Considerations
+4. **Performance**:
+   - Format caching
+   - Lazy loading
+   - Memory efficiency
 
-Address unique requirements for each provider:
+## Future Improvements
 
-1. **OpenAI**: Supports images via URL or base64 data URLs in specific formats.
-2. **Anthropic**: Requires base64-encoded images with specific structure.
-3. **Ollama**: Accepts base64-encoded images directly in the request.
-4. **HuggingFace**: May require direct file paths for loading with PIL.
+1. **Media Types**:
+   - Document support
+   - Audio handling
+   - Video processing
+   - Tabular data
 
-## API Usage Examples
+2. **Features**:
+   - Format conversion
+   - Size optimization
+   - Metadata extraction
+   - Batch processing
 
-### Basic Image Usage
-
-```python
-from abstractllm import create_llm
-
-# Using a file path
-llm = create_llm("openai", model="gpt-4o")
-response = llm.generate("What's in this image?", image="path/to/image.jpg")
-
-# Using a URL
-response = llm.generate("Describe this image:", image="https://example.com/image.jpg")
-
-# Using multiple images
-response = llm.generate(
-    "Compare these two images:",
-    images=["path/to/image1.jpg", "https://example.com/image2.jpg"]
-)
-```
-
-### Advanced Usage with Options
-
-```python
-from abstractllm import create_llm
-from abstractllm.media import ImageInput
-
-# Creating an image input with options
-image = ImageInput("path/to/image.jpg", detail_level="high")
-
-# Using the image input
-llm = create_llm("anthropic", model="claude-3-opus-20240229")
-response = llm.generate("Analyze this image in detail:", image=image)
-```
-
-## Conclusion
-
-This proposed architecture provides a robust, extensible framework for handling various media types in AbstractLLM. By following these guidelines, we can ensure consistent behavior across providers while maintaining AbstractLLM's philosophy of simplicity and minimalism.
-
-The implementation separates concerns appropriately, allowing for easier maintenance and extension. It also provides a clear, intuitive API for users while handling the complex provider-specific details behind the scenes.
-
-Future improvements could include support for audio files, video files, and other specialized media types as provider capabilities expand. 
+3. **Provider Support**:
+   - New providers
+   - Enhanced capabilities
+   - Optimized formats 

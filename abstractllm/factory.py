@@ -5,7 +5,6 @@ Factory function for creating LLM provider instances.
 from typing import Dict, Any, Optional
 import importlib
 from abstractllm.interface import AbstractLLMInterface, ModelParameter
-from abstractllm.utils.config import ConfigurationManager
 
 
 # Provider mapping
@@ -16,6 +15,11 @@ _PROVIDERS = {
     "huggingface": "abstractllm.providers.huggingface.HuggingFaceProvider",
 }
 
+def get_llm_providers() -> list[str]:
+    """
+    Get a list of all available LLM providers.
+    """
+    return list(_PROVIDERS.keys())
 
 def create_llm(provider: str, **config) -> AbstractLLMInterface:
     """
@@ -46,9 +50,5 @@ def create_llm(provider: str, **config) -> AbstractLLMInterface:
     except (ImportError, AttributeError) as e:
         raise ImportError(f"Could not import provider {provider}: {e}")
     
-    # Create configuration with defaults and provider-specific setup
-    base_config = ConfigurationManager.create_base_config(**config)
-    provider_config = ConfigurationManager.initialize_provider_config(provider, base_config)
-    
-    # Instantiate and return the provider
-    return provider_class(config=provider_config) 
+    # Create provider instance with config
+    return provider_class(config) 
