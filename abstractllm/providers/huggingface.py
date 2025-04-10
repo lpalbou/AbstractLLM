@@ -23,9 +23,6 @@ from abstractllm.exceptions import UnsupportedOperationError, ModelNotFoundError
 # Configure logger
 logger = logging.getLogger("abstractllm.providers.huggingface")
 
-# Default model - small, usable by most systems
-DEFAULT_MODEL = "microsoft/Phi-4-mini-instruct"  # Small but capable model
-
 # Default timeout in seconds for generation
 DEFAULT_GENERATION_TIMEOUT = 60
 
@@ -55,7 +52,7 @@ class HuggingFaceProvider(AbstractLLMInterface):
         
         # Set default configuration
         default_config = {
-            ModelParameter.MODEL: DEFAULT_MODEL,
+            ModelParameter.MODEL: "microsoft/Phi-4-mini-instruct",
             ModelParameter.TEMPERATURE: 0.7,
             ModelParameter.MAX_TOKENS: 1024,
             ModelParameter.DEVICE: self._get_optimal_device(),

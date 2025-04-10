@@ -12,14 +12,6 @@ import argparse
 from abstractllm import create_llm
 from abstractllm.enums import ModelParameter
 
-# Provider-specific defaults
-PROVIDER_DEFAULTS = {
-    "openai": "gpt-4o",
-    "anthropic": "claude-3-5-haiku-20241022",
-    "ollama": "phi4-mini:latest",
-    "huggingface": "microsoft/Phi-4-mini-instruct"
-}
-
 def ensure_logs_dir():
     """Ensure the logs directory exists."""
     logs_dir = Path("logs")
@@ -95,17 +87,12 @@ def main():
             elif os.environ.get(f"{args.provider.upper()}_API_KEY"):
                 config[ModelParameter.API_KEY] = os.environ.get(f"{args.provider.upper()}_API_KEY")
             
-        # Add model only if explicitly specified, otherwise use provider default
+        # Add model only if explicitly specified
         if args.model:
             config[ModelParameter.MODEL] = args.model
             print(f"\nInitializing {args.provider} provider with specified model: {args.model}")
         else:
-            default_model = PROVIDER_DEFAULTS.get(args.provider)
-            if default_model:
-                config[ModelParameter.MODEL] = default_model
-                print(f"\nInitializing {args.provider} provider with default model: {default_model}")
-            else:
-                print(f"\nInitializing {args.provider} provider with system default model")
+            print(f"\nInitializing {args.provider} provider with default model")
 
         # Create provider instance
         llm = create_llm(args.provider, **config)
