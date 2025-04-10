@@ -107,6 +107,7 @@ class OllamaProvider(AbstractLLMInterface):
         
         # Process files if any
         processed_files = []
+        file_contents = ""
         if files:
             for file_path in files:
                 try:
@@ -141,18 +142,26 @@ class OllamaProvider(AbstractLLMInterface):
         if system_prompt:
             request_data["system"] = system_prompt
         
-        # Handle images for vision-capable models
+        # Handle files
         if processed_files:
-            # For Ollama, we need to add images as a list of base64 strings or URLs
+            # For Ollama, we need to handle files differently:
+            # - Images go into the images array
+            # - Text/tabular content gets appended to the prompt
             images = []
+            file_contents = ""
+            
             for media_input in processed_files:
                 if isinstance(media_input, ImageInput):
                     images.append(media_input.to_provider_format("ollama"))
+                else:
+                    # For text and tabular data, append to prompt
+                    file_contents += media_input.to_provider_format("ollama")
+            
             if images:
                 request_data["images"] = images
         
-        # Add prompt
-        request_data["prompt"] = prompt
+        # Add prompt with file contents
+        request_data["prompt"] = prompt + file_contents
         
         # Log request
         log_request("ollama", prompt, {

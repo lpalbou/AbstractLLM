@@ -54,7 +54,7 @@ class AnthropicProvider(AbstractLLMInterface):
         
         # Set default configuration for Anthropic
         default_config = {
-            ModelParameter.MODEL: "claude-3-5-sonnet-20241022",
+            ModelParameter.MODEL: "claude-3-5-haiku-20241022",
             ModelParameter.TEMPERATURE: 0.7,
             ModelParameter.MAX_TOKENS: 2048,
             ModelParameter.TOP_P: 1.0,

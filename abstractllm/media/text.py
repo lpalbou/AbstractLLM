@@ -172,10 +172,15 @@ class TextInput(MediaInput):
         elif provider == "anthropic":
             return {
                 "type": "text",
-                "content": content
+                "text": content
             }
         elif provider == "ollama":
-            return content
+            # For Ollama, return a format that can be appended to the prompt
+            source_name = str(self.source)
+            if isinstance(self.source, Path):
+                source_name = self.source.name
+            
+            return f"\n===== JOINT FILES ======\n\n===== {source_name} =========\n{content}\n"
         elif provider == "huggingface":
             return content
         else:

@@ -192,7 +192,7 @@ class TabularInput(MediaInput):
         elif provider == "anthropic":
             # Format as a markdown table for Anthropic
             if not data:
-                return {"type": "text", "content": ""}
+                return {"type": "text", "text": ""}
                 
             header = data[0]
             rows = data[1:]
@@ -205,7 +205,7 @@ class TabularInput(MediaInput):
                 
             return {
                 "type": "text",
-                "content": table
+                "text": table
             }
             
         elif provider == "ollama":
@@ -221,8 +221,13 @@ class TabularInput(MediaInput):
             table += "| " + " | ".join(["---"] * len(header)) + " |\n"
             for row in rows:
                 table += "| " + " | ".join(row) + " |\n"
-                
-            return table
+            
+            # For Ollama, return a format that can be appended to the prompt
+            source_name = str(self.source)
+            if isinstance(self.source, Path):
+                source_name = self.source.name
+            
+            return f"\n===== JOINT FILES ======\n\n===== {source_name} =========\n{table}\n"
             
         elif provider == "huggingface":
             # Return raw content for HuggingFace
