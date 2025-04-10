@@ -73,6 +73,44 @@ class UnsupportedModelError(AbstractLLMError):
     pass
 
 
+class ModelNotFoundError(AbstractLLMError):
+    """
+    Raised when a specific model cannot be found or loaded.
+    
+    This is different from UnsupportedModelError in that it deals with cases where
+    the model should be available but cannot be found or accessed, rather than
+    models that are explicitly not supported.
+    
+    Args:
+        model_name: Name of the model that couldn't be found
+        reason: Optional reason why the model couldn't be found
+        search_path: Optional path or repository where the model was searched for
+    """
+    
+    def __init__(self, model_name: str, reason: Optional[str] = None,
+                 search_path: Optional[str] = None, provider: Optional[str] = None,
+                 original_exception: Optional[Exception] = None,
+                 details: Optional[Dict[str, Any]] = None):
+        self.model_name = model_name
+        self.reason = reason
+        self.search_path = search_path
+        
+        # Build message
+        message = f"Model '{model_name}' not found"
+        if reason:
+            message += f": {reason}"
+        if search_path:
+            message += f" (searched in: {search_path})"
+            
+        # Add search path to details if provided
+        if search_path and details is None:
+            details = {"search_path": search_path}
+        elif search_path:
+            details["search_path"] = search_path
+            
+        super().__init__(message, provider, original_exception, details)
+
+
 class InvalidRequestError(AbstractLLMError):
     """
     Raised when a request to the provider is invalid.
@@ -190,6 +228,34 @@ class UnsupportedFeatureError(AbstractLLMError):
         # Build default message if not provided
         if message is None:
             message = f"Feature '{feature}' is not supported by this provider/model"
+            
+        super().__init__(message, provider, original_exception, details)
+
+
+class UnsupportedOperationError(AbstractLLMError):
+    """
+    Raised when attempting to perform an operation that is not supported.
+    
+    This is different from UnsupportedFeatureError in that it deals with
+    specific operations rather than general features. For example, a model
+    might support the vision feature but not support certain operations
+    with images.
+    
+    Args:
+        operation: The unsupported operation name
+        reason: Optional reason why the operation is not supported
+    """
+    
+    def __init__(self, operation: str, reason: Optional[str] = None,
+                 provider: Optional[str] = None, original_exception: Optional[Exception] = None,
+                 details: Optional[Dict[str, Any]] = None):
+        self.operation = operation
+        self.reason = reason
+        
+        # Build message
+        message = f"Operation '{operation}' is not supported"
+        if reason:
+            message += f": {reason}"
             
         super().__init__(message, provider, original_exception, details)
 

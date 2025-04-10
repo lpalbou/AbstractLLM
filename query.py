@@ -12,6 +12,14 @@ import argparse
 from abstractllm import create_llm
 from abstractllm.enums import ModelParameter
 
+# Provider-specific defaults
+PROVIDER_DEFAULTS = {
+    "openai": "gpt-4o",
+    "anthropic": "claude-3-5-haiku-20241022",
+    "ollama": "phi4-mini:latest",
+    "huggingface": "microsoft/Phi-4-mini-instruct"
+}
+
 def ensure_logs_dir():
     """Ensure the logs directory exists."""
     logs_dir = Path("logs")
@@ -60,38 +68,51 @@ def main():
     parser.add_argument('--file', '-f', help='Optional file to process (image, text, csv, etc.)')
     parser.add_argument('--api-key', help='API key (can also use environment variable)')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode to log the exact payload sent to provider')
+    parser.add_argument('--implementation', choices=['transformers', 'langchain'], 
+                      help='Implementation to use for HuggingFace provider (default: transformers)')
     args = parser.parse_args()
 
-    # Determine which environment variable to check based on provider
-    env_var_map = {
+    # Providers that always require API keys
+    required_api_keys = {
         "openai": "OPENAI_API_KEY",
-        "anthropic": "ANTHROPIC_API_KEY",
-        "huggingface": "HUGGINGFACE_API_KEY"
+        "anthropic": "ANTHROPIC_API_KEY"
     }
 
-    # Get API key from args or environment
-    env_var = env_var_map.get(args.provider)
-    api_key = None
-    if env_var:
-        api_key = args.api_key or os.environ.get(env_var)
-        if not api_key:
-            print(f"Error: {args.provider} API key not provided. Use --api-key or set {env_var} environment variable.")
-            sys.exit(1)
-
     try:
-        # Create provider configuration (empty by default)
+        # Create provider configuration
         config = {}
         
-        # Add API key if provided
-        if api_key:
+        # Handle API key for providers that require it
+        if args.provider in required_api_keys:
+            env_var = required_api_keys[args.provider]
+            api_key = args.api_key or os.environ.get(env_var)
+            if not api_key:
+                print(f"Error: {args.provider} API key not provided. Use --api-key or set {env_var} environment variable.")
+                sys.exit(1)
             config[ModelParameter.API_KEY] = api_key
+        else:
+            # For other providers, add API key only if explicitly provided
+            if args.api_key:
+                config[ModelParameter.API_KEY] = args.api_key
+            elif os.environ.get(f"{args.provider.upper()}_API_KEY"):
+                config[ModelParameter.API_KEY] = os.environ.get(f"{args.provider.upper()}_API_KEY")
             
-        # Add model only if explicitly specified
+        # Add model only if explicitly specified, otherwise use provider default
         if args.model:
             config[ModelParameter.MODEL] = args.model
             print(f"\nInitializing {args.provider} provider with specified model: {args.model}")
         else:
-            print(f"\nInitializing {args.provider} provider with default model")
+            default_model = PROVIDER_DEFAULTS.get(args.provider)
+            if default_model:
+                config[ModelParameter.MODEL] = default_model
+                print(f"\nInitializing {args.provider} provider with default model: {default_model}")
+            else:
+                print(f"\nInitializing {args.provider} provider with system default model")
+
+        # Add HuggingFace-specific configuration
+        if args.provider == "huggingface" and args.implementation:
+            config["implementation"] = args.implementation
+            print(f"Using {args.implementation} implementation for HuggingFace")
 
         # Create provider instance
         llm = create_llm(args.provider, **config)

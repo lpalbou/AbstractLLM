@@ -4,8 +4,11 @@ Factory function for creating LLM provider instances.
 
 from typing import Dict, Any, Optional
 import importlib
+import logging
 from abstractllm.interface import AbstractLLMInterface, ModelParameter
 
+# Configure logger
+logger = logging.getLogger("abstractllm.factory")
 
 # Provider mapping
 _PROVIDERS = {
@@ -15,18 +18,25 @@ _PROVIDERS = {
     "huggingface": "abstractllm.providers.huggingface.HuggingFaceProvider",
 }
 
+# Providers that always require API keys
+_REQUIRED_API_KEYS = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY"
+}
+
 def get_llm_providers() -> list[str]:
     """
     Get a list of all available LLM providers.
     """
     return list(_PROVIDERS.keys())
 
-def create_llm(provider: str, **config) -> AbstractLLMInterface:
+def create_llm(provider: str, implementation: Optional[str] = None, **config) -> AbstractLLMInterface:
     """
     Create an LLM provider instance.
     
     Args:
         provider: The provider name ('openai', 'anthropic', 'ollama', 'huggingface')
+        implementation: The implementation to use (currently only for 'huggingface': 'transformers' or 'langchain')
         **config: Provider-specific configuration
         
     Returns:
@@ -49,6 +59,19 @@ def create_llm(provider: str, **config) -> AbstractLLMInterface:
         provider_class = getattr(module, class_name)
     except (ImportError, AttributeError) as e:
         raise ImportError(f"Could not import provider {provider}: {e}")
+    
+    # Check for required API key (only for providers that always need it)
+    if provider in _REQUIRED_API_KEYS:
+        api_key = config.get(ModelParameter.API_KEY) or config.get("api_key")
+        if not api_key:
+            env_var = _REQUIRED_API_KEYS[provider]
+            raise ValueError(
+                f"{provider} API key not provided. Use --api-key or set {env_var} environment variable."
+            )
+    
+    # Add implementation to config if provided for HuggingFace
+    if provider == "huggingface" and implementation:
+        config["implementation"] = implementation
     
     # Create provider instance with config
     return provider_class(config) 

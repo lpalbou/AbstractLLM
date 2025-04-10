@@ -22,16 +22,21 @@ from abstractllm.utils.logging import (
     log_request_url
 )
 from abstractllm.media.processor import MediaProcessor
-from abstractllm.utils.config import ConfigurationManager
+from abstractllm.media.factory import MediaFactory
+from abstractllm.exceptions import UnsupportedOperationError, ModelNotFoundError
 
 # Configure logger with specific class path
 logger = logging.getLogger("abstractllm.providers.huggingface.HuggingFaceProvider")
 
 # Default model - small, usable by most systems
-DEFAULT_MODEL = "bartowski/microsoft_Phi-4-mini-instruct-GGUF"
+#DEFAULT_MODEL = "microsoft/Phi-3-mini-128k-instruct"  # Changed from GGUF format to standard HF model
+DEFAULT_MODEL = "bartowski/microsoft_Phi-4-mini-instruct-GGUF"  
 
 # Default timeout in seconds for generation (preventing infinite loops)
 DEFAULT_GENERATION_TIMEOUT = 60
+
+# Default generation batch size
+DEFAULT_BATCH_SIZE = 1
 
 # Models that support vision capabilities
 VISION_CAPABLE_MODELS = [
@@ -107,28 +112,31 @@ class HuggingFaceProvider(AbstractLLMInterface):
         Initialize the Hugging Face provider.
         
         Args:
-            config (dict): Configuration for the provider.
-                Required keys:
-                - model: The model ID or path to load
-                
-                Optional keys:
-                - device: The device to load the model on (e.g., 'cpu', 'cuda', 'cuda:0')
-                - load_in_8bit/load_in_4bit: Whether to quantize the model
-                - max_tokens: Maximum number of tokens to generate
-                - temperature: Temperature for sampling
-                - top_p: Top-p sampling parameter
-                - system_prompt: Default system prompt to use
-                - trust_remote_code: Whether to trust remote code when loading the model
-                - auto_load: Whether to load the model during initialization
-                - auto_warmup: Whether to run a warmup pass after loading
+            config: Configuration dictionary
         """
         super().__init__(config)
         
-        # Initialize provider-specific configuration
-        self.config = ConfigurationManager.initialize_provider_config("huggingface", self.config)
+        # Set default configuration
+        default_config = {
+            ModelParameter.MODEL: DEFAULT_MODEL,
+            ModelParameter.TEMPERATURE: 0.7,
+            ModelParameter.MAX_TOKENS: 1024,  # Reduced from 2048
+            ModelParameter.DEVICE: _get_optimal_device(),
+            ModelParameter.CACHE_DIR: self.DEFAULT_CACHE_DIR,
+            "trust_remote_code": True,
+            "load_in_8bit": True,  # Enable 8-bit quantization by default
+            "load_in_4bit": False,
+            "device_map": "auto",
+            "attn_implementation": "flash_attention_2",  # More memory efficient attention
+            "load_timeout": 300,  # 5 minutes default timeout
+            "generation_timeout": DEFAULT_GENERATION_TIMEOUT,
+            "torch_dtype": "auto",  # Let the model decide best dtype
+            "low_cpu_mem_usage": True,  # More memory efficient loading
+            "batch_size": DEFAULT_BATCH_SIZE
+        }
         
-        # Store device preference (will be used later when loading model)
-        self._device = ConfigurationManager.get_param(self.config, ModelParameter.DEVICE, _get_optimal_device())
+        # Merge defaults with provided config
+        self.config_manager.merge_with_defaults(default_config)
         
         # Initialize model and tokenizer objects to None (will be loaded on demand)
         self._model = None
@@ -137,16 +145,16 @@ class HuggingFaceProvider(AbstractLLMInterface):
         self._model_loaded = False
         self._warmup_completed = False
         
-        # Log provider initialization
-        model_name = ConfigurationManager.get_param(self.config, ModelParameter.MODEL, DEFAULT_MODEL)
-        logger.info(f"Initialized HuggingFace provider with model: {model_name}")
+        # Log initialization
+        model = self.config_manager.get_param(ModelParameter.MODEL)
+        logger.info(f"Initialized HuggingFace provider with model: {model}")
         
         # Preload the model if auto_load is set
-        if self.config.get("auto_load", False):
+        if self.config_manager.get_param("auto_load", False):
             self.load_model()
             
             # Run warmup if auto_warmup is set
-            if self.config.get("auto_warmup", False):
+            if self.config_manager.get_param("auto_warmup", False):
                 self.warmup()
     
     def preload(self) -> None:
@@ -204,10 +212,10 @@ class HuggingFaceProvider(AbstractLLMInterface):
         Returns:
             A tuple that can be used as a dictionary key for the model cache
         """
-        model_name = ConfigurationManager.get_param(self.config, ModelParameter.MODEL, DEFAULT_MODEL)
-        device_map = self.config.get("device_map", "auto")
-        load_in_8bit = self.config.get("load_in_8bit", False)
-        load_in_4bit = self.config.get("load_in_4bit", False)
+        model_name = self.config_manager.get_param(ModelParameter.MODEL, DEFAULT_MODEL)
+        device_map = self.config_manager.get_param("device_map", "auto")
+        load_in_8bit = self.config_manager.get_param("load_in_8bit", False)
+        load_in_4bit = self.config_manager.get_param("load_in_4bit", False)
         return (model_name, str(device_map), load_in_8bit, load_in_4bit)
     
     def _clean_model_cache_if_needed(self) -> None:
@@ -273,7 +281,7 @@ class HuggingFaceProvider(AbstractLLMInterface):
         from pathlib import Path
             
         # Get model name
-        model_name = ConfigurationManager.get_param(self.config, ModelParameter.MODEL, DEFAULT_MODEL)
+        model_name = self.config_manager.get_param(ModelParameter.MODEL, DEFAULT_MODEL)
         if not model_name:
             raise ValueError("Model name must be provided in configuration")
         
@@ -295,55 +303,64 @@ class HuggingFaceProvider(AbstractLLMInterface):
         # Log model loading at INFO level
         logger.info(f"Loading HuggingFace model: {model_name}{' (vision-capable)' if is_vision_capable else ''}")
         
-        # Extract parameters for model loading
-        load_in_8bit = self.config.get("load_in_8bit", False)
-        load_in_4bit = self.config.get("load_in_4bit", False)
+        # Get configuration parameters
+        cache_dir = self.config_manager.get_param(ModelParameter.CACHE_DIR, self.DEFAULT_CACHE_DIR)
+        trust_remote_code = self.config_manager.get_param("trust_remote_code", True)
+        device_map = self.config_manager.get_param("device_map", "auto")
+        load_in_8bit = self.config_manager.get_param("load_in_8bit", False)
+        load_in_4bit = self.config_manager.get_param("load_in_4bit", False)
+        attn_implementation = self.config_manager.get_param("attn_implementation", "eager")
+        timeout = self.config_manager.get_param("load_timeout", 300)  # 5 minutes default timeout
         
-        # Let the user override the device_map if needed
-        device_map = self.config.get("device_map", None)
-        # If no device_map is specified, use the optimal device
-        if device_map is None:
-            device = self._device
-            device_map = device
-            logger.debug(f"Using device: {device_map}")
-            
-        # Other loading parameters
-        cache_dir = self.config.get("cache_dir", HuggingFaceProvider.DEFAULT_CACHE_DIR)
-        # Expand user directory in path if it exists
+        # Expand user directory in cache path if it exists
         if cache_dir and '~' in cache_dir:
             cache_dir = os.path.expanduser(cache_dir)
             # Create cache directory if it doesn't exist
             os.makedirs(cache_dir, exist_ok=True)
             
-        timeout = self.config.get("load_timeout", 300)  # 5 minutes default
-        trust_remote_code = self.config.get("trust_remote_code", False)
-        
-        # Check if FlashAttention should be disabled
-        disable_flash_attn = self.config.get("disable_flash_attn", True)
-        
-        # Add to model kwargs if needed 
-        attn_implementation = "eager" if disable_flash_attn else "flash_attention_2"
-        
-        # Log detailed configuration at DEBUG level
-        logger.debug(f"Model loading configuration: load_in_8bit={load_in_8bit}, load_in_4bit={load_in_4bit}, device_map={device_map}")
-        logger.debug(f"FlashAttention disabled: {disable_flash_attn}, using attention implementation: {attn_implementation}")
-        if cache_dir:
-            logger.debug(f"Using custom cache directory: {cache_dir}")
-        
-        # Start a timer for timeout tracking
+        # Record start time for timeout tracking
         start_time = time.time()
         
         try:
-            # First check if the model exists on Hugging Face Hub
+            # First check if the model exists locally in the cache
+            local_model_exists = False
             try:
-                from huggingface_hub import HfApi
-                api = HfApi()
-                # Try to get model info to verify it exists and is accessible
-                model_info = api.model_info(model_name)
-                logger.debug(f"Model exists on HF Hub: {model_name}")
+                from huggingface_hub import scan_cache_dir
+                if os.path.exists(cache_dir):
+                    cache_info = scan_cache_dir(cache_dir)
+                    for repo in cache_info.repos:
+                        if repo.repo_id == model_name:
+                            local_model_exists = True
+                            break
             except Exception as e:
-                logger.warning(f"Could not verify model existence on HF Hub: {e}")
-                # Continue anyway, as the model might be local or use a custom format
+                logger.debug(f"Could not check local cache: {e}")
+            
+            # If model is not local, check if we need to download from Hub
+            if not local_model_exists:
+                try:
+                    from huggingface_hub import HfApi
+                    api = HfApi()
+                    
+                    # Check if model requires authentication
+                    try:
+                        model_info = api.model_info(model_name)
+                        if model_info.private:
+                            # Model requires authentication, check for API key
+                            api_key = self.config_manager.get_param(ModelParameter.API_KEY)
+                            if not api_key:
+                                api_key = os.environ.get("HUGGINGFACE_API_KEY")
+                            if not api_key:
+                                raise ValueError(
+                                    f"Model {model_name} is private and requires authentication. "
+                                    "Please provide a HuggingFace API key via configuration or "
+                                    "set the HUGGINGFACE_API_KEY environment variable."
+                                )
+                    except Exception as e:
+                        logger.debug(f"Could not verify model access requirements: {e}")
+                        # Continue anyway, as the model might be public or local
+                except Exception as e:
+                    logger.debug(f"Could not verify model on HF Hub: {e}")
+                    # Continue anyway, as the model might be local or use a custom format
             
             # For vision models, try to load processor first
             if is_vision_capable:
@@ -550,228 +567,159 @@ class HuggingFaceProvider(AbstractLLMInterface):
             logger.error(f"Failed to load model {model_name}: {e}")
             raise
     
-    def generate(self, 
-                prompt: str, 
-                system_prompt: Optional[str] = None, 
-                stream: bool = False, 
-                **kwargs) -> Union[str, Generator[str, None, None]]:
+    def generate(self, prompt: str, files: Optional[List[Union[str, Path]]] = None, **kwargs) -> str:
         """
-        Generate a response using HuggingFace model.
+        Generate text using the model.
         
         Args:
             prompt: The input prompt
-            system_prompt: Override the system prompt in the config
-            stream: Whether to stream the response
-            **kwargs: Additional parameters to override configuration
-                - image: A single image (URL, file path, base64 string, or dict)
-                - images: List of images (URLs, file paths, base64 strings, or dicts)
+            files: Optional list of file paths to process (images, etc.)
+            **kwargs: Additional keyword arguments for generation
             
         Returns:
-            The generated response or a generator if streaming
+            Generated text response
             
         Raises:
-            Exception: If the generation fails
+            UnsupportedOperationError: If files are provided but model doesn't support vision
+            Exception: For other generation errors
         """
-        # Load model if not already loaded
+        # Process files if provided
+        if files:
+            try:
+                # Check if model supports vision
+                model_name = self.config_manager.get_param(ModelParameter.MODEL, DEFAULT_MODEL)
+                is_vision_capable = any(vision_model in model_name.lower() for vision_model in VISION_CAPABLE_MODELS)
+                
+                if not is_vision_capable:
+                    raise UnsupportedOperationError(
+                        f"Model {model_name} does not support vision capabilities. "
+                        f"Please use one of: {', '.join(VISION_CAPABLE_MODELS)}"
+                    )
+                
+                # Process files using MediaFactory
+                media_factory = MediaFactory()
+                processed_files = media_factory.process_files(files)
+                
+                if processed_files:
+                    logger.info(f"Processing {len(processed_files)} files for vision model")
+                    # Add processed files to the prompt or model inputs as needed
+                    # This will depend on the specific vision model being used
+                    if self._processor:
+                        inputs = self._processor(images=processed_files, text=prompt, return_tensors="pt")
+                    else:
+                        raise UnsupportedOperationError(
+                            f"Model {model_name} supports vision but processor not available"
+                        )
+            except Exception as e:
+                logger.error(f"Error processing files: {e}")
+                raise
+        
+        # Ensure model is loaded
         if not self._model_loaded:
             self.load_model()
         
-        # Extract and combine parameters using the configuration manager
-        params = ConfigurationManager.extract_generation_params(
-            "huggingface", self.config, kwargs, system_prompt
-        )
-        
-        # Extract key parameters
-        model_name = ConfigurationManager.get_param(self.config, ModelParameter.MODEL, DEFAULT_MODEL)
-        temperature = params.get("temperature", 0.7)
-        max_tokens = params.get("max_tokens", 2048)
-        system_prompt = params.get("system_prompt")
-        top_p = params.get("top_p", 1.0)
-        repetition_penalty = params.get("repetition_penalty", 1.0)
-        timeout = params.get("generation_timeout", DEFAULT_GENERATION_TIMEOUT)
-        
-        # Process image inputs if any
-        if "image" in params or "images" in params:
-            logger.info("Processing image inputs for vision request")
-            params = MediaProcessor.process_inputs(params, "huggingface")
-        
-        # Log the request
-        log_request("huggingface", prompt, {
-            "model": model_name,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "has_system_prompt": system_prompt is not None,
-            "stream": stream,
-            "image_request": "image" in params or "images" in params
-        })
-        
-        # Handle special case for multimodal generation
-        if "image" in params or "images" in params:
-            # Check if the model is vision-capable
-            if not any(vision_model in model_name for vision_model in VISION_CAPABLE_MODELS):
-                raise ValueError(f"Model {model_name} does not support vision. Choose a vision-capable model.")
+        try:
+            # Get generation parameters
+            max_tokens = kwargs.get('max_tokens', self.config_manager.get_param(ModelParameter.MAX_TOKENS, 2048))
+            temperature = kwargs.get('temperature', self.config_manager.get_param(ModelParameter.TEMPERATURE, 0.7))
+            timeout = kwargs.get('timeout', self.config_manager.get_param("generation_timeout", DEFAULT_GENERATION_TIMEOUT))
             
-            # Process image(s)
-            image_data = None
-            if "image" in params:
-                image_data = params["image"]
-            elif "images" in params and params["images"]:
-                # Take the first image if multiple are provided
-                image_data = params["images"][0]
-                if len(params["images"]) > 1:
-                    logger.warning("Multiple images provided, but only the first one will be used.")
+            # Prepare inputs
+            if not files:
+                inputs = self._tokenizer(prompt, return_tensors="pt")
             
-            # Detect phi4-multimodal models which need special handling
-            is_phi4_vision = "phi-4-multimodal" in model_name.lower() or "phi4-multimodal" in model_name.lower()
+            # Move inputs to the correct device
+            device = self._model.device
+            logger.info(f"Using device: {device}")
             
-            # Handle phi4-multimodal models
-            if is_phi4_vision:
-                return self._generate_phi4_vision(prompt, image_data, system_prompt, stream, max_tokens, temperature, top_p, repetition_penalty, timeout)
-            
-            # Handle other vision models (placeholder for different model-specific implementations)
-            else:
-                # Return this for now
-                raise NotImplementedError(f"Vision generation not implemented for {model_name}. Currently only Phi-4-multimodal is supported.")
-        
-        # Create the input
-        input_text = prompt
-        if system_prompt:
-            # Try to follow a common format for system instruction
-            input_text = f"<|system|>\n{system_prompt}\n<|user|>\n{prompt}\n<|assistant|>"
-            
-        # Define generation config
-        generation_config = {
-            "max_new_tokens": max_tokens,
-            "temperature": temperature,
-            "top_p": top_p,
-            "repetition_penalty": repetition_penalty,
-            "do_sample": temperature > 0.0001,  # Only use sampling if temperature is non-zero
-        }
-        
-        # Add pad_token_id if available
-        if hasattr(self._tokenizer, 'pad_token_id') and self._tokenizer.pad_token_id is not None:
-            generation_config["pad_token_id"] = self._tokenizer.pad_token_id
-            
-        # Add stopping criteria if requested
-        stop_sequences = params.get("stop", None)
-        if stop_sequences:
-            stopping_criteria = self._create_stopping_criteria(stop_sequences, input_text)
-            generation_config["stopping_criteria"] = stopping_criteria
-            
-        # Encode input text
-        inputs = self._tokenizer(input_text, return_tensors="pt")
-        inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
-        
-        # Handle streaming if requested
-        if stream:
-            logger.info("Starting streaming generation")
-            
-            # Use the phi4 multimodal generator if it's the phi4 model (without image)
-            is_phi4 = "phi-4" in model_name.lower() or "phi4" in model_name.lower()
-            if is_phi4:
-                generator = self._phi4_multimodal_stream_generator(inputs, generation_config, timeout)
-            else:
-                generator = self._stream_generator(inputs, generation_config, timeout)
-                
-            return generator
-        else:
-            # Standard non-streaming generation
             try:
-                # Set up timeout
-                import signal
-                
-                class TimeoutException(Exception):
-                    pass
-                
-                def timeout_handler(signum, frame):
-                    raise TimeoutException("Generation timed out")
-                
-                # Set the timeout
-                original_handler = signal.signal(signal.SIGALRM, timeout_handler)
-                signal.alarm(timeout)
-                
-                try:
-                    # Generate output
-                    with torch.no_grad():
-                        outputs = self._model.generate(**inputs, **generation_config)
-                    
-                    # Decode and return result
-                    output_text = self._tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
-                    
-                    # Clean the output text
-                    output_text = output_text.strip()
-                    
-                    # Log the result
-                    log_response("huggingface", output_text)
-                    logger.info("Generation completed successfully")
-                    
-                    return output_text
-                except TimeoutException:
-                    logger.error(f"Generation timed out after {timeout} seconds")
-                    raise RuntimeError(f"Generation timed out after {timeout} seconds")
-                finally:
-                    # Restore the original alarm handler
-                    signal.signal(signal.SIGALRM, original_handler)
-                    signal.alarm(0)
+                inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
             except Exception as e:
-                logger.error(f"Error during generation: {str(e)}")
-                raise
-    
-    async def generate_async(self, 
-                        prompt: str, 
-                        system_prompt: Optional[str] = None, 
-                        stream: bool = False, 
-                        **kwargs) -> Union[str, AsyncGenerator[str, None]]:
+                logger.error(f"Error moving inputs to device {device}: {e}")
+                # Try falling back to CPU if GPU fails
+                if str(device) != "cpu":
+                    logger.warning("Falling back to CPU")
+                    device = "cpu"
+                    self._model = self._model.to(device)
+                    inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+            
+            # Configure generation parameters
+            generation_config = {
+                "max_new_tokens": max_tokens,
+                "temperature": temperature,
+                "do_sample": temperature > 0,
+                "pad_token_id": self._tokenizer.pad_token_id if hasattr(self._tokenizer, 'pad_token_id') else None,
+                "eos_token_id": self._tokenizer.eos_token_id if hasattr(self._tokenizer, 'eos_token_id') else None,
+                # Add more conservative memory settings
+                "use_cache": True,
+                "early_stopping": True
+            }
+            
+            # Generate response
+            start_time = time.time()
+            logger.info("Starting generation...")
+            
+            try:
+                with torch.inference_mode():  # More memory efficient than no_grad
+                    outputs = self._model.generate(**inputs, **generation_config)
+            except torch.cuda.OutOfMemoryError:
+                # If we hit OOM, try to recover
+                logger.warning("GPU out of memory, attempting recovery...")
+                if hasattr(torch.cuda, 'empty_cache'):
+                    torch.cuda.empty_cache()
+                if str(device) != "cpu":
+                    logger.warning("Moving model to CPU and retrying")
+                    self._model = self._model.to("cpu")
+                    inputs = {k: v.to("cpu") if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+                    with torch.inference_mode():
+                        outputs = self._model.generate(**inputs, **generation_config)
+            
+            # Decode response
+            if files and self._processor:
+                response = self._processor.decode(outputs[0], skip_special_tokens=True)
+            else:
+                response = self._tokenizer.decode(outputs[0], skip_special_tokens=True)
+            
+            # Remove prompt from response if present
+            if response.startswith(prompt):
+                response = response[len(prompt):].lstrip()
+            
+            generation_time = time.time() - start_time
+            logger.info(f"Generated response in {generation_time:.2f}s")
+            
+            # Clean up to help with memory
+            del outputs
+            if hasattr(torch.cuda, 'empty_cache'):
+                torch.cuda.empty_cache()
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error generating response: {e}")
+            # Try to clean up memory
+            if hasattr(torch.cuda, 'empty_cache'):
+                torch.cuda.empty_cache()
+            raise
+
+    async def generate_async(self, prompt: str, files: Optional[List[Union[str, Path]]] = None, **kwargs) -> str:
         """
-        Generate a response using HuggingFace model asynchronously.
+        Generate text using the model asynchronously.
         
         Args:
             prompt: The input prompt
-            system_prompt: Override the system prompt in the config
-            stream: Whether to stream the response
-            **kwargs: Additional parameters to override configuration
-                - image: A single image (URL, file path, base64 string, or dict)
-                - images: List of images (URLs, file paths, base64 strings, or dicts)
-                
-        Returns:
-            The generated response or an async generator if streaming
-        """
-        # Import required modules for async execution
-        import asyncio
-        from concurrent.futures import ThreadPoolExecutor
-        
-        # Load model if not already loaded
-        if not self._model_loaded:
-            # Load model in a thread to avoid blocking the event loop
-            with ThreadPoolExecutor() as executor:
-                await asyncio.get_event_loop().run_in_executor(
-                    executor, self.load_model
-                )
-        
-        # Extract and combine parameters using the configuration manager
-        params = ConfigurationManager.extract_generation_params(
-            "huggingface", self.config, kwargs, system_prompt
-        )
-        
-        # Process stream parameter
-        if stream:
-            # Define an async generator that wraps the sync generator
-            async def async_stream_wrapper():
-                sync_gen = self.generate(prompt, system_prompt, stream=True, **kwargs)
-                for chunk in sync_gen:
-                    yield chunk
-                    # Add a small sleep to allow other async tasks to run
-                    await asyncio.sleep(0.01)
+            files: Optional list of file paths to process (images, etc.)
+            **kwargs: Additional keyword arguments for generation
             
-            return async_stream_wrapper()
-        else:
-            # Run the synchronous generate method in a thread pool
-            with ThreadPoolExecutor() as executor:
-                result = await asyncio.get_event_loop().run_in_executor(
-                    executor, 
-                    lambda: self.generate(prompt, system_prompt, stream=False, **kwargs)
-                )
-                return result
+        Returns:
+            Generated text response
+            
+        Raises:
+            UnsupportedOperationError: If files are provided but model doesn't support vision
+            Exception: For other generation errors
+        """
+        # For now, we'll use the synchronous implementation since HF doesn't have native async support
+        # In the future, we could implement proper async processing if HF adds support
+        return self.generate(prompt, files, **kwargs)
     
     def get_capabilities(self) -> Dict[Union[str, ModelCapability], Any]:
         """
@@ -781,7 +729,7 @@ class HuggingFaceProvider(AbstractLLMInterface):
             Dictionary of capabilities
         """
         # Get model name from config
-        model_name = ConfigurationManager.get_param(self.config, ModelParameter.MODEL, DEFAULT_MODEL)
+        model_name = self.config_manager.get_param(ModelParameter.MODEL, DEFAULT_MODEL)
         
         # Check if this is a vision-capable model
         is_vision_capable = any(vision_model in model_name for vision_model in VISION_CAPABLE_MODELS) if model_name else False
