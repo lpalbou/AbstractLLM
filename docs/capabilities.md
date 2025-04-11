@@ -1,131 +1,287 @@
 # Model Capabilities in AbstractLLM
 
-AbstractLLM provides a way to inspect and utilize the capabilities of different LLM providers through the `ModelCapability` enum and the `get_capabilities()` method.
+## Overview
 
-## Available Capabilities
+AbstractLLM provides a comprehensive capability inspection system through the `ModelCapability` enum and the `get_capabilities()` method. This system allows you to dynamically check what features are available for each provider and model combination.
 
-The following capabilities are defined in the `ModelCapability` enum:
+## Core Capabilities
 
-| Capability | Description |
-|------------|-------------|
-| `STREAMING` | Supports streaming responses chunk by chunk |
-| `MAX_TOKENS` | Maximum supported tokens for context + generation |
-| `SYSTEM_PROMPT` | Supports system prompts for controlling behavior |
-| `ASYNC` | Supports asynchronous generation |
-| `FUNCTION_CALLING` | Supports function/tool calling |
-| `VISION` | Supports image input processing |
-| `FINE_TUNING` | Supports fine-tuning |
-| `EMBEDDINGS` | Supports embedding generation |
-| `MULTILINGUAL` | Supports multiple languages |
-| `RAG` | Supports Retrieval Augmented Generation |
-| `MULTI_TURN` | Supports multi-turn conversations |
-| `PARALLEL_INFERENCE` | Supports parallel inference |
-| `IMAGE_GENERATION` | Supports generating images |
-| `AUDIO_PROCESSING` | Supports audio input/output |
-| `JSON_MODE` | Supports structured JSON output |
+| Capability | Description | OpenAI | Anthropic | HuggingFace | Ollama |
+|------------|-------------|---------|-----------|-------------|---------|
+| `STREAMING` | Stream responses | ✅ | ✅ | ✅ | ✅ |
+| `VISION` | Process images | ✅* | ✅* | ✅* | ✅* |
+| `SYSTEM_PROMPT` | Support system prompts | ✅ | ✅ | ✅ | ✅ |
+| `ASYNC` | Async generation | ✅ | ✅ | ✅ | ✅ |
+| `FUNCTION_CALLING` | Function/tool use | ✅ | ❌ | ❌ | ❌ |
+| `JSON_MODE` | Structured JSON output | ✅ | ✅ | ❌ | ❌ |
+| `MULTI_TURN` | Conversation history | ✅ | ✅ | ❌ | ❌ |
+
+\* Vision support depends on the specific model being used
 
 ## Checking Capabilities
 
-You can check if a provider has a specific capability using the `get_capabilities()` method:
+### Basic Capability Check
 
 ```python
 from abstractllm import create_llm, ModelCapability
 
-# Create an LLM instance
-llm = create_llm("openai")
+# Create provider instance
+llm = create_llm("openai", model="gpt-4o")
 
-# Get capabilities
+# Get all capabilities
 capabilities = llm.get_capabilities()
 
-# Check for specific capabilities
-if capabilities.get(ModelCapability.STREAMING):
-    print("This provider supports streaming")
-    
-if capabilities.get(ModelCapability.VISION):
-    print("This provider supports vision input")
-    
-if capabilities.get(ModelCapability.JSON_MODE):
-    print("This provider supports JSON mode")
+# Check specific capabilities
+if capabilities[ModelCapability.VISION]:
+    # Process images
+    response = llm.generate("Describe this:", files=["image.jpg"])
+
+if capabilities[ModelCapability.STREAMING]:
+    # Use streaming
+    for chunk in llm.generate("Tell me a story", stream=True):
+        print(chunk, end="")
 ```
 
-## Using JSON Mode
+### Vision Capabilities
 
-Providers that support JSON mode (like OpenAI) can be instructed to return structured JSON output by setting the `json_mode` parameter to `True`:
+Each provider has specific models that support vision:
 
 ```python
-from abstractllm import create_llm
+# OpenAI Vision Models
+llm = create_llm("openai", model="gpt-4o")  # Latest GPT-4 with vision
+llm = create_llm("openai", model="gpt-4-vision-preview")  # Preview version
 
-llm = create_llm("openai")
+# Anthropic Vision Models
+llm = create_llm("anthropic", model="claude-3-5-sonnet-20241022")  # Latest Claude
+llm = create_llm("anthropic", model="claude-3-opus-20240229")  # High capability
 
-# Generate a structured JSON response
-response = llm.generate(
-    "Create a user profile with name, age, and favorite foods.",
-    json_mode=True
-)
+# HuggingFace Vision Models
+llm = create_llm("huggingface", model="Salesforce/blip-image-captioning-base")
+llm = create_llm("huggingface", model="liuhaotian/llava-v1.5-7b")
 
-# Parse the response
-import json
-user_profile = json.loads(response)
-print(f"Name: {user_profile['name']}")
-print(f"Age: {user_profile['age']}")
-print(f"Favorite Foods: {', '.join(user_profile['favorite_foods'])}")
+# Ollama Vision Models
+llm = create_llm("ollama", model="llama3.2-vision:latest")
+llm = create_llm("ollama", model="bakllava:latest")
 ```
 
-## Provider-Specific Capability Notes
+### Streaming Support
+
+All providers support streaming, but with different implementations:
+
+```python
+# Synchronous streaming
+for chunk in llm.generate("Tell me a story", stream=True):
+    print(chunk, end="")
+
+# Asynchronous streaming
+async for chunk in llm.generate_async("Tell me a story", stream=True):
+    print(chunk, end="")
+```
+
+### Function Calling
+
+Currently supported by OpenAI:
+
+```python
+# Define functions
+functions = [{
+    "name": "get_weather",
+    "description": "Get the weather for a location",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "location": {"type": "string"},
+            "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+        },
+        "required": ["location"]
+    }
+}]
+
+# Use function calling
+response = llm.generate(
+    "What's the weather in Paris?",
+    functions=functions,
+    function_call="auto"
+)
+```
+
+### JSON Mode
+
+For providers that support structured JSON output:
+
+```python
+# OpenAI JSON mode
+response = llm.generate(
+    "List three colors with their hex codes",
+    response_format={"type": "json_object"}
+)
+
+# Anthropic JSON mode
+response = llm.generate(
+    "List three colors with their hex codes",
+    system_prompt="Return response as valid JSON"
+)
+```
+
+## Provider-Specific Capabilities
 
 ### OpenAI
 
-- Supports streaming responses
-- Supports system prompts
-- Supports asynchronous generation
-- Supports function calling
-- Supports JSON mode
-- Vision support depends on the model (e.g., GPT-4V, GPT-4o)
+```python
+llm = create_llm("openai", model="gpt-4o")
+capabilities = llm.get_capabilities()
+
+# Available capabilities
+print(f"""
+Vision Support: {capabilities[ModelCapability.VISION]}
+Max Tokens: {capabilities[ModelCapability.MAX_TOKENS]}
+Function Calling: {capabilities[ModelCapability.FUNCTION_CALLING]}
+JSON Mode: {capabilities[ModelCapability.JSON_MODE]}
+""")
+```
 
 ### Anthropic
 
-- Supports streaming responses
-- Supports system prompts
-- Supports asynchronous generation
-- Vision support depends on the model (Claude 3 models support vision)
-- Does not support JSON mode in the same way as OpenAI
+```python
+llm = create_llm("anthropic", model="claude-3-5-sonnet-20241022")
+capabilities = llm.get_capabilities()
 
-### Ollama
-
-- Supports streaming responses
-- Supports system prompts on models that support it
-- Supports asynchronous generation
-- Vision support depends on the model
+# Claude-specific capabilities
+print(f"""
+Vision Support: {capabilities[ModelCapability.VISION]}
+Max Tokens: {capabilities[ModelCapability.MAX_TOKENS]}
+Multi-turn: {capabilities[ModelCapability.MULTI_TURN]}
+JSON Mode: {capabilities[ModelCapability.JSON_MODE]}
+""")
+```
 
 ### HuggingFace
 
-- Supports streaming responses
-- System prompt support varies by model
-- Supports asynchronous generation
-- Vision support depends on the model
+```python
+llm = create_llm("huggingface", model="microsoft/phi-2")
+capabilities = llm.get_capabilities()
+
+# Local model capabilities
+print(f"""
+Device Support: {capabilities["device_support"]}
+Quantization: {capabilities["quantization_support"]}
+Vision Support: {capabilities[ModelCapability.VISION]}
+""")
+```
+
+### Ollama
+
+```python
+llm = create_llm("ollama", model="llama3.2-vision:latest")
+capabilities = llm.get_capabilities()
+
+# Ollama-specific capabilities
+print(f"""
+Vision Support: {capabilities[ModelCapability.VISION]}
+GPU Acceleration: {capabilities["gpu_acceleration"]}
+Quantization: {capabilities["quantization_support"]}
+""")
+```
 
 ## Capability-Aware Code
 
-You can write capability-aware code that adapts to the provider's capabilities:
+Write code that adapts to available capabilities:
 
 ```python
 from abstractllm import create_llm, ModelCapability
+from typing import Optional, List, Union
+from pathlib import Path
 
-def process_with_llm(llm, prompt, image_path=None):
-    # Check capabilities
+def process_with_llm(
+    llm,
+    prompt: str,
+    files: Optional[List[Union[str, Path]]] = None,
+    stream: bool = False,
+    json_output: bool = False
+) -> Union[str, Generator[str, None, None]]:
+    """Process input with capability-aware handling."""
     capabilities = llm.get_capabilities()
     
-    # If image is provided but vision not supported, warn and ignore image
-    if image_path and not capabilities.get(ModelCapability.VISION):
-        print("Warning: Provider does not support vision. Ignoring image input.")
-        return llm.generate(prompt)
-    elif image_path:
-        return llm.generate(prompt, image=image_path)
+    # Handle files if provided
+    if files and not capabilities[ModelCapability.VISION]:
+        print("Warning: Provider does not support vision. Ignoring files.")
+        files = None
     
-    # If JSON mode is requested and supported
-    if need_json and capabilities.get(ModelCapability.JSON_MODE):
-        return llm.generate(prompt, json_mode=True)
+    # Handle JSON output
+    if json_output and not capabilities[ModelCapability.JSON_MODE]:
+        print("Warning: JSON mode not supported. Using standard output.")
+        json_output = False
     
-    # Default case
-    return llm.generate(prompt)
-``` 
+    # Handle streaming
+    if stream and not capabilities[ModelCapability.STREAMING]:
+        print("Warning: Streaming not supported. Using standard generation.")
+        stream = False
+    
+    # Generate response with appropriate parameters
+    kwargs = {
+        "stream": stream,
+        "files": files,
+    }
+    
+    if json_output:
+        kwargs["response_format"] = {"type": "json_object"}
+    
+    return llm.generate(prompt, **kwargs)
+```
+
+## Best Practices
+
+1. **Always Check Capabilities**
+   ```python
+   capabilities = llm.get_capabilities()
+   if not capabilities[ModelCapability.VISION]:
+       raise UnsupportedFeatureError("Vision not supported")
+   ```
+
+2. **Provide Fallbacks**
+   ```python
+   if not capabilities[ModelCapability.JSON_MODE]:
+       # Use system prompt to request structured output
+       system_prompt = "Format response as JSON"
+   ```
+
+3. **Handle Model-Specific Features**
+   ```python
+   if capabilities[ModelCapability.FUNCTION_CALLING]:
+       # Use function calling
+       kwargs["functions"] = functions
+   else:
+       # Use text-based function simulation
+       prompt = format_function_as_text(prompt, functions)
+   ```
+
+4. **Check Token Limits**
+   ```python
+   max_tokens = capabilities[ModelCapability.MAX_TOKENS]
+   if max_tokens and token_count > max_tokens:
+       raise ContextWindowExceededError(max_tokens, token_count)
+   ```
+
+## Future Capabilities
+
+Planned capability enhancements:
+
+1. **Audio Processing**
+   - Speech-to-text
+   - Text-to-speech
+   - Audio analysis
+
+2. **Advanced Vision**
+   - Object detection
+   - Image generation
+   - Video processing
+
+3. **Enhanced Tools**
+   - Code execution
+   - Database integration
+   - External API access
+
+4. **Memory and Context**
+   - Long-term memory
+   - Document retrieval
+   - Knowledge graph integration 

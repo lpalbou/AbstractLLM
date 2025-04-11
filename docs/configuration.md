@@ -2,185 +2,229 @@
 
 ## Overview
 
-AbstractLLM uses a centralized configuration management system to handle parameters consistently across providers. This system is implemented in the `ConfigurationManager` class in `abstractllm/utils/config.py`.
+AbstractLLM uses a centralized configuration management system through the `ConfigurationManager` class in `abstractllm/utils/config.py`. This system provides a unified approach to handling parameters across all providers, ensuring consistency and type safety.
 
-## Key Features
+## Core Features
 
-- Unified parameter handling across all providers
-- Support for both enum and string parameter keys
-- Default values for common parameters
-- Environment variable integration for API keys
-- Provider-specific parameter extraction
-- Parameter validation and deprecation warnings
+- **Unified Parameter Handling**: Common parameters normalized across providers
+- **Type-Safe Parameters**: Support for both enum and string parameter keys
+- **Provider-Specific Defaults**: Each provider has appropriate default values
+- **Environment Variable Integration**: Automatic API key handling from environment
+- **Runtime Configuration Updates**: Parameters can be updated during execution
+- **Parameter Validation**: Type and value validation for all parameters
+- **Caching Settings**: Configuration for model and response caching
+- **Device Management**: Automatic device selection for local models
 
 ## Configuration Flow
 
-1. **Base Configuration**: Default parameters are set in `create_base_config()`
-2. **Provider-Specific Initialization**: Provider-specific defaults are applied in `initialize_provider_config()`
-3. **Generation Parameters**: For each generation request, parameters are extracted and combined with the base configuration in `extract_generation_params()`
-
 ```mermaid
 flowchart TD
-    A[User code] -->|kwargs| B[create_llm]
-    B -->|config| C[ConfigurationManager.create_base_config]
-    C -->|base_config| D[ConfigurationManager.initialize_provider_config]
-    D -->|provider_config| E[provider instance]
+    A[User Code] -->|kwargs| B[create_llm]
+    B -->|config| C[ConfigurationManager]
+    C -->|validate| D[Provider Instance]
+    D -->|merge defaults| E[Final Config]
     
-    F[User code] -->|prompt, kwargs| G[provider.generate]
-    G -->|config, kwargs| H[ConfigurationManager.extract_generation_params]
-    H -->|generation_params| I[API request or model inference]
+    F[Environment] -->|API keys| C
+    G[Provider Defaults] -->|merge| C
 ```
 
-## Using Configuration
+## Parameter Types
 
-### Creating a Provider with Configuration
-
-```python
-from abstractllm import create_llm, ModelParameter
-
-# Using enum keys (recommended for type checking)
-llm = create_llm("openai", **{
-    ModelParameter.TEMPERATURE: 0.7,
-    ModelParameter.MAX_TOKENS: 1000,
-    ModelParameter.MODEL: "gpt-4o"
-})
-
-# Using string keys (more convenient for dynamic configuration)
-llm = create_llm("openai", temperature=0.7, max_tokens=1000, model="gpt-4o")
-```
-
-### Overriding Configuration for a Single Generate Call
-
-```python
-# Base configuration
-llm = create_llm("openai", temperature=0.7)
-
-# Override temperature just for this call
-response = llm.generate("Hello, world!", temperature=0.9)
-```
-
-### Getting and Updating Configuration
-
-```python
-# Get current configuration
-config = llm.get_config()
-
-# Update configuration
-llm.set_config(temperature=0.5, max_tokens=2000)
-
-# Update with a dictionary
-llm.update_config({
-    ModelParameter.TEMPERATURE: 0.5,
-    ModelParameter.MAX_TOKENS: 2000
-})
-```
-
-## Common Parameters
+### Common Parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `temperature` | float | 0.7 | Controls randomness in generation |
 | `max_tokens` | int | 2048 | Maximum tokens to generate |
-| `top_p` | float | 1.0 | Alternative to temperature for nucleus sampling |
 | `system_prompt` | str | None | System instruction for the model |
 | `model` | str | Provider-specific | Model identifier/name |
 | `api_key` | str | From env var | API key for provider authentication |
+| `timeout` | int | 120 | Request timeout in seconds |
+| `retry_count` | int | 3 | Number of retries on failure |
 
-## Provider-Specific Parameters
+### Vision Parameters
 
-Each provider may have additional parameters specific to its implementation:
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `image` | str/Path | None | Single image input |
+| `images` | List[str/Path] | None | Multiple image inputs |
+| `image_detail` | str | "auto" | Detail level for vision models |
+
+### Local Model Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `device` | str | "auto" | Device for model loading |
+| `device_map` | str | "auto" | Device mapping strategy |
+| `load_in_8bit` | bool | False | Use 8-bit quantization |
+| `load_in_4bit` | bool | False | Use 4-bit quantization |
+| `torch_dtype` | str | "auto" | PyTorch data type |
+| `trust_remote_code` | bool | True | Allow remote code execution |
+
+## Provider-Specific Configuration
 
 ### OpenAI
 
-- `organization`: Organization ID for API calls
-- `image_detail`: Detail level for image analysis in vision models
-- `user`: User identifier for request attribution
-
-### HuggingFace
-
-- `device`: Device to run model on (e.g., "cpu", "cuda")
-- `load_in_8bit`: Whether to use 8-bit quantization
-- `trust_remote_code`: Whether to allow remote code execution
-- `cache_dir`: Directory for model caching
-
-### Ollama
-
-- `base_url`: URL of the Ollama service
+```python
+llm = create_llm("openai", **{
+    ModelParameter.MODEL: "gpt-4o"
+    ModelParameter.API_KEY: "your-api-key",
+    ModelParameter.TEMPERATURE: 0.7,
+    ModelParameter.MAX_TOKENS: 1000,
+})
+```
 
 ### Anthropic
 
-- (No major provider-specific parameters currently)
+```python
+llm = create_llm("anthropic", **{
+    ModelParameter.MODEL: "claude-3-5-sonnet-20241022",
+    ModelParameter.API_KEY: "your-api-key",
+    ModelParameter.MAX_TOKENS: 4096,  # Higher limits for Claude 3
+})
+```
+
+### HuggingFace
+
+```python
+llm = create_llm("huggingface", **{
+    ModelParameter.MODEL: "microsoft/phi-2",
+    ModelParameter.DEVICE: "cuda",
+    ModelParameter.LOAD_IN_8BIT: True,
+    ModelParameter.DEVICE_MAP: "auto",
+    ModelParameter.TORCH_DTYPE: "float16",
+    ModelParameter.TRUST_REMOTE_CODE: True,
+})
+```
+
+### Ollama
+
+```python
+llm = create_llm("ollama", **{
+    ModelParameter.MODEL: "phi4-mini:latest",
+    ModelParameter.BASE_URL: "http://localhost:11434",
+})
+```
 
 ## Environment Variables
 
 The configuration system automatically checks for these environment variables:
 
-- `OPENAI_API_KEY`: API key for OpenAI
-- `ANTHROPIC_API_KEY`: API key for Anthropic
-- `HUGGINGFACE_API_KEY`: API key for HuggingFace Hub (optional)
-- `OLLAMA_BASE_URL`: Base URL for Ollama service (default: http://localhost:11434)
+```bash
+# API Keys
+OPENAI_API_KEY="your-openai-key"
+ANTHROPIC_API_KEY="your-anthropic-key"
+HUGGINGFACE_API_KEY="your-huggingface-key"  # Optional
 
-## ConfigurationManager API
+# Provider URLs
+OLLAMA_BASE_URL="http://localhost:11434"  # Default for Ollama
 
-### `create_base_config(**kwargs)`
-
-Creates a configuration dictionary with default values and applies any overrides provided in kwargs.
-
-```python
-config = ConfigurationManager.create_base_config(temperature=0.5)
+# Logging
+ABSTRACTLLM_LOG_LEVEL="INFO"  # Default logging level
+ABSTRACTLLM_LOG_DIR="/path/to/logs"  # Log directory
 ```
 
-### `initialize_provider_config(provider_name, config=None)`
+## Runtime Configuration
 
-Initializes a provider-specific configuration with appropriate defaults.
-
-```python
-config = ConfigurationManager.initialize_provider_config("openai", existing_config)
-```
-
-### `get_param(config, param, default=None)`
-
-Gets a parameter value from the configuration, supporting both enum and string keys.
+Configuration can be updated during runtime:
 
 ```python
-temperature = ConfigurationManager.get_param(config, ModelParameter.TEMPERATURE, 0.7)
-```
+# Update single parameter
+llm.set_config(temperature=0.9)
 
-### `update_config(config, updates)`
+# Update multiple parameters
+llm.update_config({
+    ModelParameter.TEMPERATURE: 0.8,
+    ModelParameter.MAX_TOKENS: 1000,
+})
 
-Updates a configuration dictionary with new values.
-
-```python
-new_config = ConfigurationManager.update_config(original_config, updates)
-```
-
-### `extract_generation_params(provider, config, kwargs, system_prompt=None)`
-
-Extracts and combines parameters for generation from config and kwargs.
-
-```python
-params = ConfigurationManager.extract_generation_params(
-    "openai", provider.config, kwargs, system_prompt
+# Per-request configuration
+response = llm.generate(
+    "Hello",
+    temperature=0.9,
+    max_tokens=500,
 )
 ```
 
-## Configuration Best Practices
+## Best Practices
 
-1. Use `ModelParameter` enum keys when possible for better type checking
-2. Set common configuration when creating the provider
-3. Override only specific parameters in generate calls
-4. Use environment variables for API keys in development
-5. Explicitly pass API keys in production deployments
+1. **Use Enum Parameters**
+   ```python
+   # Prefer this (type-safe)
+   config = {ModelParameter.TEMPERATURE: 0.7}
+   
+   # Over this (string-based)
+   config = {"temperature": 0.7}
+   ```
 
-## Implementation Details
+2. **API Key Management**
+   ```python
+   # Development: Use environment variables
+   llm = create_llm("openai")  # Reads from OPENAI_API_KEY
+   
+   # Production: Explicitly pass keys
+   llm = create_llm("openai", api_key=get_secret("openai_key"))
+   ```
 
-The `ConfigurationManager` class is implemented as a collection of static methods, allowing it to be used without instantiation. This design choice makes it easier to use the configuration utilities throughout the codebase without managing instances.
+3. **Device Management**
+   ```python
+   # Let AbstractLLM choose optimal device
+   llm = create_llm("huggingface", device="auto")
+   
+   # Or specify explicitly for control
+   llm = create_llm("huggingface", device="cuda:0")
+   ```
 
-Parameter extraction includes several key steps:
+4. **Memory Management**
+   ```python
+   # For large models, use quantization
+   llm = create_llm("huggingface", **{
+       ModelParameter.LOAD_IN_8BIT: True,
+       ModelParameter.LOW_CPU_MEM_USAGE: True,
+   })
+   ```
 
-1. Combining the base configuration with request-specific overrides
-2. Handling both enum and string parameter keys
-3. Applying provider-specific transformations and defaults
-4. Processing special parameters like images for vision requests
+5. **Error Handling**
+   ```python
+   # Set appropriate timeouts and retries
+   llm = create_llm("openai", **{
+       ModelParameter.TIMEOUT: 30,
+       ModelParameter.RETRY_COUNT: 3,
+   })
+   ```
 
-This centralized approach ensures consistent parameter handling across all providers and eliminates configuration duplication throughout the codebase. 
+## Configuration Validation
+
+The configuration system validates parameters to ensure they are appropriate for each provider:
+
+```python
+# This will raise InvalidParameterError
+llm = create_llm("openai", temperature=2.0)  # Temperature must be 0-1
+
+# This will raise UnsupportedFeatureError
+llm = create_llm("anthropic", model="gpt-4")  # Wrong provider's model
+```
+
+## Caching Configuration
+
+For providers that support local models (HuggingFace, Ollama):
+
+```python
+llm = create_llm("huggingface", **{
+    ModelParameter.CACHE_DIR: "/path/to/cache",
+    ModelParameter.MAX_CACHE_SIZE: "10GB",
+    ModelParameter.CACHE_IMPLEMENTATION: "disk",
+})
+```
+
+## Logging Configuration
+
+Configure logging behavior:
+
+```python
+llm = create_llm("openai", **{
+    ModelParameter.LOGGING_ENABLED: True,
+    ModelParameter.LOG_LEVEL: "DEBUG",
+    ModelParameter.LOG_DIR: "/path/to/logs",
+})
+```

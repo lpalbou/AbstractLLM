@@ -2,250 +2,295 @@
 
 ## Overview
 
-This document details how AbstractLLM handles various media types, with a current focus on image handling. The implementation follows a streamlined approach that prioritizes simplicity, reliability, and provider compatibility.
+AbstractLLM provides a robust media handling system through the `MediaFactory` class, which standardizes the processing of various media types across different providers. The system is designed to be extensible, efficient, and provider-agnostic.
 
-## Core Components
+## Architecture
+
+```mermaid
+flowchart TD
+    A[Input Source] -->|File/URL/Base64| B[MediaFactory]
+    B -->|Detect Type| C{Media Type}
+    C -->|Image| D[ImageInput]
+    C -->|Text| E[TextInput]
+    C -->|Tabular| F[TabularInput]
+    D -->|Format| G[Provider Format]
+    E -->|Format| G
+    F -->|Format| G
+    G -->|Generate| H[LLM Provider]
+```
+
+## Media Types
+
+### 1. Images
+- **Formats**: PNG, JPEG, GIF, WebP, BMP
+- **Sources**: File paths, URLs, base64 strings, data URLs
+- **Processing**:
+  - Automatic format detection
+  - Provider-specific formatting
+  - Resolution optimization
+  - Vision model compatibility checks
+  - Format caching for performance
+
+### 2. Text Files
+- **Formats**: Plain text, Markdown, source code
+- **Features**:
+  - Encoding detection
+  - Line ending normalization
+  - Content type detection
+  - Provider-specific formatting
+  - Large file handling
+
+### 3. Tabular Data
+- **Formats**: CSV, TSV
+- **Features**:
+  - Delimiter detection
+  - Header handling
+  - Data type inference
+  - Markdown table conversion
+  - Provider-specific formatting
+
+## Using MediaFactory
+
+### Basic Usage
+
+```python
+from abstractllm import create_llm
+from abstractllm.media.factory import MediaFactory
+
+# Process a single file
+media_input = MediaFactory.from_source("image.png")
+response = llm.generate("Describe this:", files=[media_input])
+
+# Process multiple files
+media_inputs = MediaFactory.from_sources([
+    "image.png",
+    "document.txt",
+    "data.csv"
+])
+response = llm.generate("Analyze these:", files=media_inputs)
+```
+
+### Provider-Specific Processing
+
+```python
+# OpenAI Format
+image = MediaFactory.from_source("image.jpg")
+openai_format = image.to_provider_format("openai")
+# Result: {"type": "image_url", "image_url": {"url": "...", "detail": "auto"}}
+
+# Anthropic Format
+anthropic_format = image.to_provider_format("anthropic")
+# Result: {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "..."}}
+
+# Ollama Format
+ollama_format = image.to_provider_format("ollama")
+# Result: base64 string or URL
+
+# HuggingFace Format
+huggingface_format = image.to_provider_format("huggingface")
+# Result: PIL Image or file path
+```
+
+## Provider Support Matrix
+
+| Feature | OpenAI | Anthropic | Ollama | HuggingFace |
+|---------|--------|-----------|---------|-------------|
+| Images | ✅ | ✅ | ✅ | ✅ |
+| Text Files | ✅ | ✅ | ✅ | ✅ |
+| Tabular Data | ✅ | ✅ | ✅ | ✅ |
+| Multiple Files | ✅ | ✅ | ✅ | ❌ |
+| Base64 Input | ✅ | ✅ | ✅ | ❌ |
+| URL Input | ✅ | ✅ | ✅ | ✅ |
+| Format Caching | ✅ | ✅ | ✅ | ✅ |
+
+## Image Processing
+
+### Format Detection
+
+```python
+# Automatic format detection
+image = MediaFactory.from_source("image.jpg")
+print(image.mime_type)  # "image/jpeg"
+
+# Explicit format
+image = MediaFactory.from_source("image.dat", media_type="image")
+```
+
+### Size Optimization
+
+```python
+# Automatic size optimization
+image = MediaFactory.from_source(
+    "large_image.jpg",
+    detail_level="auto"  # "low", "medium", "high", or "auto"
+)
+```
+
+### Vision Model Support
+
+```python
+# Check vision capabilities
+if llm.get_capabilities()[ModelCapability.VISION]:
+    image = MediaFactory.from_source("image.jpg")
+    response = llm.generate("Describe this:", files=[image])
+```
+
+## Text Processing
+
+### File Handling
+
+```python
+# Process text file
+text = MediaFactory.from_source(
+    "document.txt",
+    encoding="utf-8"
+)
+
+# Process with specific options
+text = MediaFactory.from_source(
+    "code.py",
+    mime_type="text/x-python"
+)
+```
+
+### Tabular Data
+
+```python
+# Process CSV file
+table = MediaFactory.from_source(
+    "data.csv",
+    delimiter=","
+)
+
+# Process TSV file
+table = MediaFactory.from_source(
+    "data.tsv",
+    delimiter="\t"
+)
+```
+
+## Error Handling
+
+```python
+from abstractllm.exceptions import (
+    FileProcessingError,
+    UnsupportedFeatureError,
+    ImageProcessingError
+)
+
+try:
+    media = MediaFactory.from_source("image.jpg")
+except FileProcessingError as e:
+    print(f"File error: {e}")
+except UnsupportedFeatureError as e:
+    print(f"Feature not supported: {e}")
+except ImageProcessingError as e:
+    print(f"Image processing error: {e}")
+```
+
+## Best Practices
+
+### 1. File Handling
+```python
+# Use pathlib for cross-platform compatibility
+from pathlib import Path
+image = MediaFactory.from_source(Path("images/photo.jpg"))
+
+# Handle multiple files efficiently
+files = MediaFactory.from_sources([
+    "image1.jpg",
+    "image2.png",
+    "document.txt"
+])
+```
+
+### 2. Memory Management
+```python
+# Process large files efficiently
+text = MediaFactory.from_source(
+    "large_file.txt",
+    chunk_size=1024 * 1024  # 1MB chunks
+)
+
+# Clean up resources
+del text  # Releases file handles
+```
+
+### 3. Format Caching
+```python
+# Cache formats for reuse
+image = MediaFactory.from_source("image.jpg")
+openai_format = image.to_provider_format("openai")  # Cached
+anthropic_format = image.to_provider_format("anthropic")  # Cached
+```
+
+### 4. Error Recovery
+```python
+def process_media(file_path):
+    try:
+        return MediaFactory.from_source(file_path)
+    except FileProcessingError:
+        # Try alternative processing
+        return MediaFactory.from_source(
+            file_path,
+            fallback_type="text"
+        )
+```
+
+## Implementation Details
 
 ### MediaInput Interface
-
-The base interface for all media handling:
-
 ```python
 class MediaInput(ABC):
     @abstractmethod
     def to_provider_format(self, provider: str) -> Any:
-        """Convert media to provider-specific format"""
+        """Convert to provider-specific format"""
         pass
     
     @property
     @abstractmethod
     def media_type(self) -> str:
-        """Return media type identifier"""
+        """Return media type"""
         pass
     
     @property
     def metadata(self) -> Dict[str, Any]:
-        """Return media metadata"""
-        return {}
+        """Return metadata"""
+        pass
 ```
 
-### ImageInput Implementation
-
-The concrete implementation for image handling:
-
+### Provider-Specific Formatting
 ```python
 class ImageInput(MediaInput):
-    def __init__(
-        self, 
-        source: Union[str, Path], 
-        detail_level: str = "auto",
-        mime_type: Optional[str] = None
-    ):
-        self.source = source
-        self.detail_level = detail_level
-        self._mime_type = mime_type
-        self._cached_formats = {}  # Cache provider-specific formats
+    def to_provider_format(self, provider: str) -> Any:
+        if provider == "openai":
+            return self._format_for_openai()
+        elif provider == "anthropic":
+            return self._format_for_anthropic()
+        elif provider == "ollama":
+            return self._format_for_ollama()
+        elif provider == "huggingface":
+            return self._format_for_huggingface()
 ```
 
-## Data Flow and State Transitions
+## Future Enhancements
 
-### General Flow
+1. **Audio Support**
+   - Speech transcription
+   - Audio analysis
+   - Music processing
 
-```ascii
-Input Source ──────────────────────┐
-  │                                │
-  ▼                                │
-┌──────────────────────┐           │
-│     MediaFactory     │           │
-│    .from_source()    │           │
-└──────────┬───────────┘           │
-           ▼                       │
-┌──────────────────────┐           │
-│     ImageInput       │           │
-│    Constructor       │           │
-│ ┌──────────────────┐ │           │
-│ │    Properties    │ │           │
-│ │ source: str/Path │ │           │
-│ │ detail_level: str│ │           │
-│ │ _mime_type: str  │ │           │
-│ │ _cached_formats{}│ │           │
-│ └──────────────────┘ │           │
-└──────────┬───────────┘           │
-           ▼                       │
-┌──────────────────────┐           │
-│   MediaProcessor     │           │
-│   process_inputs()   │           │
-└──────────┬───────────┘           │
-           ▼                       │
-┌──────────────────────┐           │
-│  Provider Format     │           │
-│  to_provider_format()│           │
-└──────────┬───────────┘           │
-           ▼                       ▼
-    Provider-Specific      Original Source
-    Message Structure      (if unchanged)
-```
+2. **Video Support**
+   - Frame extraction
+   - Video summarization
+   - Motion analysis
 
-### State Transitions
+3. **Advanced Processing**
+   - Parallel processing
+   - Streaming support
+   - Format conversion
 
-The `MediaProcessor` class handles the processing of media inputs for different providers:
-
-```python
-class MediaProcessor:
-    """Process media inputs for LLM providers."""
-    
-    @classmethod
-    def process_inputs(cls, params: Dict[str, Any], provider: str) -> Dict[str, Any]:
-        """Process all media inputs in params for the specified provider."""
-        # ...
-```
-
-## Provider-Specific Handling
-
-Each provider has unique requirements for how media inputs should be formatted:
-
-### OpenAI
-
-- Images are included in the content array of a message
-- Each item in the content array has a type ("text" or "image_url")
-- Images can be provided as URLs or base64-encoded data URIs
-
-### Anthropic
-
-- Images are included in the content array of a message
-- Each item in the content array has a type ("text" or "image")
-- Images can be provided as URLs or base64-encoded data
-
-### Ollama
-
-- Images are provided in a separate "images" array in the request
-- Images can be URLs or base64-encoded strings
-- Only certain models support image inputs (e.g., llava, bakllava)
-
-### HuggingFace
-
-- Images are typically provided as a single parameter ("image")
-- Most models only support one image at a time
-- Some advanced models like LLaVA-NeXT and IDEFICS support multiple images
-
-## Usage Examples
-
-### Basic Usage
-
-The simplest way to use media inputs is directly through the `generate` method:
-
-```python
-from abstractllm import create_llm
-
-# Create an LLM instance with a vision-capable model
-llm = create_llm("openai", model="gpt-4o")
-
-# Generate a response with an image from a URL
-response = llm.generate(
-    "What's in this image?",
-    image="https://example.com/image.jpg"
-)
-
-# Or with a local image file
-response = llm.generate(
-    "Describe this image in detail.",
-    image="path/to/local/image.jpg"
-)
-
-# Or with multiple images
-response = llm.generate(
-    "Compare these two images.",
-    images=["https://example.com/image1.jpg", "path/to/local/image2.jpg"]
-)
-```
-
-### Advanced Usage with ImageInput
-
-For more control, you can use the `ImageInput` class directly:
-
-```python
-from abstractllm import create_llm
-from abstractllm.media import ImageInput
-
-# Create an image input with specific options
-image = ImageInput("path/to/image.jpg", detail_level="high")
-
-# Use it with the LLM
-llm = create_llm("anthropic", model="claude-3-opus-20240229")
-response = llm.generate("Analyze this image in detail:", image=image)
-```
-
-### Handling Multiple Images
-
-Different providers have different levels of support for multiple images:
-
-```python
-from abstractllm import create_llm
-from abstractllm.media import ImageInput
-
-# Create image inputs
-image1 = ImageInput("path/to/image1.jpg")
-image2 = ImageInput("path/to/image2.jpg")
-
-# For providers that support multiple images (OpenAI, Anthropic, Ollama)
-llm = create_llm("openai", model="gpt-4o")
-response = llm.generate("Compare these images:", images=[image1, image2])
-
-# HuggingFace typically only supports one image at a time
-llm = create_llm("huggingface", model="microsoft/Phi-4-multimodal-instruct")
-response = llm.generate("Describe this image:", image=image1)
-```
-
-## Error Handling
-
-The media handling system includes robust error handling:
-
-```python
-from abstractllm import create_llm
-from abstractllm.exceptions import ImageProcessingError
-
-llm = create_llm("openai", model="gpt-4o")
-
-try:
-    response = llm.generate("What's in this image?", image="nonexistent/image.jpg")
-except ImageProcessingError as e:
-    print(f"Error processing image: {e}")
-    # Fallback to text-only prompt
-    response = llm.generate("Sorry, I couldn't process your image. Please describe what you wanted to show.")
-```
-
-## Capability Checking
-
-You can check if a model supports vision capabilities:
-
-```python
-from abstractllm import create_llm, ModelCapability
-
-llm = create_llm("openai", model="gpt-3.5-turbo")
-capabilities = llm.get_capabilities()
-
-if capabilities.get(ModelCapability.VISION):
-    print("This model supports vision inputs")
-else:
-    print("This model does not support vision inputs")
-```
-
-## Best Practices
-
-1. **Check Vision Capability**: Always check if a model supports vision before sending image inputs.
-
-2. **Handle Large Images**: Large images may exceed context limits; consider resizing or compressing images.
-
-3. **Use Appropriate Detail Level**: For high-resolution images, consider using "low" or "medium" detail level to reduce token usage.
-
-4. **Provider Awareness**: Be aware of provider-specific limitations and capabilities (e.g., HuggingFace generally supports only one image).
-
-5. **Error Handling**: Implement proper error handling for image processing failures.
-
-6. **Caching Consideration**: The `ImageInput` class caches formatted images, which can help performance but might increase memory usage for large images.
-
-## Limitations
-
-- Currently, only image files are supported. Future versions may add support for other media types like audio or video.
-- Some providers have limitations on the number of images they can process simultaneously.
-- Token usage increases significantly with image inputs, especially with high detail levels. 
+4. **Memory Optimization**
+   - Lazy loading
+   - Resource pooling
+   - Cleanup strategies 

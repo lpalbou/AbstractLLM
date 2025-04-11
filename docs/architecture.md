@@ -1,347 +1,301 @@
-# AbstractLLM Architecture
+# AbstractLLM Architecture Overview
 
-This document provides a detailed overview of the AbstractLLM architecture, design patterns, and component interactions.
+## Core Architecture
 
-## System Architecture Overview
-
-AbstractLLM follows a clean architectural pattern that separates interface definitions from provider-specific implementations. The architecture is designed around the following key principles:
-
-1. **Interface-based Abstraction**: A common interface that all providers must implement
-2. **Factory Pattern**: A factory function that creates provider instances
-3. **Configuration Management**: A unified configuration system
-4. **Capability Inspection**: Dynamic capability discovery
-5. **Error Handling and Logging**: Consistent error handling and logging across all providers
-6. **Media Handling**: Modular system for processing different media types
-
-The following diagram illustrates the high-level architecture:
+AbstractLLM follows a modular, provider-based architecture that emphasizes extensibility, maintainability, and ease of use. The system is designed to provide a unified interface for interacting with various LLM providers while maintaining provider-specific optimizations.
 
 ```mermaid
-classDiagram
-    class AbstractLLMInterface {
-        <<abstract>>
-        -dict config
-        +__init__(config: dict)
-        +generate(prompt: str, system_prompt: str, stream: bool, **kwargs): str|Generator
-        +generate_async(prompt: str, system_prompt: str, stream: bool, **kwargs): str|AsyncGenerator
-        +get_capabilities(): dict
-        +set_config(**kwargs): void
-        +update_config(config: dict): void
-        +get_config(): dict
-    }
-    
-    class ModelParameter {
-        <<enum>>
-        +TEMPERATURE
-        +MAX_TOKENS
-        +SYSTEM_PROMPT
-        +MODEL
-        +API_KEY
-        +etc...
-    }
-    
-    class ModelCapability {
-        <<enum>>
-        +STREAMING
-        +MAX_TOKENS
-        +SYSTEM_PROMPT
-        +ASYNC
-        +FUNCTION_CALLING
-        +VISION
-        +etc...
-    }
-    
-    class ConfigurationManager {
-        <<static>>
-        +create_base_config(**kwargs): dict
-        +initialize_provider_config(provider_name: str, config: dict): dict
-        +get_param(config: dict, param: ModelParameter, default: Any): Any
-        +update_config(config: dict, updates: dict): dict
-        +extract_generation_params(provider: str, config: dict, kwargs: dict, system_prompt: str): dict
-    }
-    
-    class OpenAIProvider {
-        +__init__(config: dict)
-        +generate(prompt: str, **kwargs): str|Generator
-        +generate_async(prompt: str, **kwargs): str|AsyncGenerator
-        +get_capabilities(): dict
-    }
-    
-    class AnthropicProvider {
-        +__init__(config: dict)
-        +generate(prompt: str, **kwargs): str|Generator
-        +generate_async(prompt: str, **kwargs): str|AsyncGenerator
-        +get_capabilities(): dict
-    }
-    
-    class OllamaProvider {
-        +__init__(config: dict)
-        +generate(prompt: str, **kwargs): str|Generator
-        +generate_async(prompt: str, **kwargs): str|AsyncGenerator
-        +get_capabilities(): dict
-    }
-    
-    class HuggingFaceProvider {
-        -_model
-        -_tokenizer
-        -_model_cache
-        +__init__(config: dict)
-        +load_model(): void
-        +warmup(): void
-        +generate(prompt: str, **kwargs): str|Generator
-        +generate_async(prompt: str, **kwargs): str|AsyncGenerator
-        +get_capabilities(): dict
-    }
-    
-    class Factory {
-        +create_llm(provider: str, **config): AbstractLLMInterface
-    }
-    
-    class LoggingUtils {
-        +log_request(provider: str, prompt: str, parameters: dict): void
-        +log_response(provider: str, response: str): void
-        +setup_logging(level: int): void
-    }
-    
-    class MediaInput {
-        <<abstract>>
-        +to_provider_format(provider: str): Any
-        +media_type(): str
-        +metadata(): dict
-    }
-    
-    class ImageInput {
-        +source: str|Path
-        +detail_level: str
-        +to_provider_format(provider: str): Any
-        +media_type(): str
-        +get_base64(): str
-        +get_content(): bytes
-    }
-    
-    class MediaFactory {
-        +from_source(source, media_type): MediaInput
-        +from_sources(sources, media_type): List[MediaInput]
-    }
-    
-    class MediaProcessor {
-        +process_inputs(params: dict, provider: str): dict
-    }
-    
-    AbstractLLMInterface <|-- OpenAIProvider
-    AbstractLLMInterface <|-- AnthropicProvider
-    AbstractLLMInterface <|-- OllamaProvider
-    AbstractLLMInterface <|-- HuggingFaceProvider
-    
-    AbstractLLMInterface -- ModelParameter
-    AbstractLLMInterface -- ModelCapability
-    
-    Factory ..> AbstractLLMInterface: creates
-    Factory ..> OpenAIProvider: creates
-    Factory ..> AnthropicProvider: creates
-    Factory ..> OllamaProvider: creates
-    Factory ..> HuggingFaceProvider: creates
-    
-    Factory ..> ConfigurationManager: uses
-    AbstractLLMInterface ..> ConfigurationManager: uses
-    OpenAIProvider ..> ConfigurationManager: uses
-    AnthropicProvider ..> ConfigurationManager: uses
-    OllamaProvider ..> ConfigurationManager: uses
-    HuggingFaceProvider ..> ConfigurationManager: uses
-    
-    LoggingUtils <.. OpenAIProvider: uses
-    LoggingUtils <.. AnthropicProvider: uses
-    LoggingUtils <.. OllamaProvider: uses
-    LoggingUtils <.. HuggingFaceProvider: uses
-    
-    MediaInput <|-- ImageInput
-    MediaFactory ..> MediaInput: creates
-    MediaFactory ..> ImageInput: creates
-    MediaProcessor ..> MediaFactory: uses
-    
-    MediaProcessor <.. OpenAIProvider: uses
-    MediaProcessor <.. AnthropicProvider: uses
-    MediaProcessor <.. OllamaProvider: uses
-    MediaProcessor <.. HuggingFaceProvider: uses
+flowchart TD
+    A[User Code] -->|create_llm| B[LLM Factory]
+    B -->|instantiate| C[Base Provider]
+    C -->|implements| D[Provider Interface]
+    D -->|uses| E[Configuration Manager]
+    D -->|uses| F[Media Factory]
+    D -->|uses| G[Token Counter]
+    E -->|manages| H[Provider Config]
+    F -->|processes| I[Media Inputs]
+    G -->|estimates| J[Token Usage]
 ```
 
-## Package Structure
+## Component Overview
 
-The package is organized into the following directory structure:
+### 1. Provider System
 
-```
-abstractllm/
-├── __init__.py                # Package exports and version
-├── interface.py               # Abstract base class and parameter definitions
-├── factory.py                 # Factory for creating provider instances
-├── providers/
-│   ├── __init__.py            # Provider registry
-│   ├── openai.py              # OpenAI implementation
-│   ├── anthropic.py           # Anthropic implementation
-│   ├── ollama.py              # Ollama implementation
-│   └── huggingface.py         # Hugging Face implementation
-├── media/
-│   ├── __init__.py            # Media handling exports
-│   ├── interface.py           # MediaInput abstract base class
-│   ├── image.py               # ImageInput implementation
-│   ├── factory.py             # MediaFactory implementation
-│   └── processor.py           # MediaProcessor implementation
-├── utils/
-│   ├── __init__.py
-│   ├── config.py              # Centralized configuration management
-│   ├── logging.py             # Logging utilities
-│   └── image.py               # Legacy image processing utilities
-└── exceptions.py              # Custom exception classes
+The provider system is the core of AbstractLLM, implementing a clean abstraction layer for different LLM services:
+
+```python
+class BaseProvider:
+    def __init__(self, config_manager: ConfigurationManager):
+        self.config_manager = config_manager
+        self.initialize()
+
+    @abstractmethod
+    def generate(self, prompt: str, **kwargs) -> str:
+        """Generate text from prompt"""
+        pass
+
+    @abstractmethod
+    def generate_async(self, prompt: str, **kwargs) -> Awaitable[str]:
+        """Generate text asynchronously"""
+        pass
 ```
 
-## Data Flow Diagrams
+Key Features:
+- Unified interface for all providers
+- Consistent error handling
+- Standardized configuration management
+- Automatic token counting
+- Media input processing
+- Streaming support
+- Async/sync implementations
 
-### General Request Flow
+### 2. Configuration Management
 
-The following diagram illustrates the general flow of a generation request through the system:
+The configuration system provides a centralized way to manage provider settings:
+
+```python
+class ConfigurationManager:
+    def __init__(self, provider: str, **kwargs):
+        self.provider = provider
+        self.config = self._create_config(**kwargs)
+        self._validate_config()
+
+    def get_param(self, key: str, default: Any = None) -> Any:
+        """Get configuration parameter"""
+        return self.config.get(key, default)
+
+    def update_config(self, **kwargs) -> None:
+        """Update configuration parameters"""
+        self.config.update(kwargs)
+        self._validate_config()
+```
+
+Features:
+- Parameter validation
+- Environment variable integration
+- Provider-specific defaults
+- Runtime configuration updates
+- Type safety
+- Caching settings
+
+### 3. Media Factory
+
+The media handling system processes various input types:
+
+```python
+class MediaFactory:
+    @classmethod
+    def process_files(cls, files: List[str], **kwargs) -> List[MediaInput]:
+        """Process multiple files"""
+        return [cls.process_file(f, **kwargs) for f in files]
+
+    @classmethod
+    def process_file(cls, file_path: str, **kwargs) -> MediaInput:
+        """Process single file"""
+        media_type = cls._detect_media_type(file_path)
+        return cls._create_processor(media_type).process(file_path, **kwargs)
+```
+
+Capabilities:
+- Automatic format detection
+- Provider-specific formatting
+- Image processing and optimization
+- Text file handling
+- Future audio/video support
+- Caching mechanisms
+
+### 4. Token Counter
+
+The token counting system provides accurate token estimates:
+
+```python
+class TokenCounter:
+    def __init__(self, provider: str, model: str):
+        self.provider = provider
+        self.model = model
+        self._initialize_tokenizer()
+
+    def count_tokens(self, text: str) -> int:
+        """Count tokens in text"""
+        return self._tokenizer.count_tokens(text)
+
+    def estimate_tokens(self, **kwargs) -> int:
+        """Estimate tokens for generation"""
+        return self._estimate_completion_tokens(**kwargs)
+```
+
+Features:
+- Provider-specific tokenizers
+- Accurate token estimation
+- Completion token prediction
+- Cache optimization
+- Model-specific counting
+
+## Data Flow
+
+### 1. Generation Flow
 
 ```mermaid
-flowchart TB
-    User[User Code] --> Factory["create_llm(provider, **config)"]
-    Factory --> ConfigManager["ConfigurationManager.create_base_config()"]
-    ConfigManager --> ProviderConfig["ConfigurationManager.initialize_provider_config()"]
-    ProviderConfig --> |"create provider instance"| Provider[LLM Provider]
-    
-    User --> |"prompt, system_prompt, stream, image, images, **kwargs"| Generate["provider.generate()"]
-    
-    subgraph Generation
-        Generate --> ExtractParams["ConfigurationManager.extract_generation_params()"]
-        ExtractParams --> CheckImage[Check for media inputs]
-        
-        CheckImage --> |"if media present"| ProcessMedia[MediaProcessor.process_inputs()]
-        CheckImage --> |"if no media"| PrepareRequest
-        
-        ProcessMedia --> |"Create MediaInput objects"| MediaFactory[MediaFactory.from_source()]
-        MediaFactory --> FormatMedia[MediaInput.to_provider_format()]
-        FormatMedia --> PrepareRequest[Prepare API request]
-        
-        PrepareRequest --> LogRequest[Log request]
-        
-        LogRequest --> |"if stream=True"| StreamRequest[Create streaming request]
-        LogRequest --> |"if stream=False"| StandardRequest[Create standard request]
-        
-        StreamRequest --> |"via generator"| ReturnStreaming[Return response chunks]
-        StandardRequest --> ProcessResponse[Process complete response]
-        
-        ProcessResponse --> LogResponse[Log response]
-        LogResponse --> ReturnComplete[Return complete response]
-    end
-    
-    ReturnStreaming --> User
-    ReturnComplete --> User
+sequenceDiagram
+    participant User
+    participant Provider
+    participant Config
+    participant Media
+    participant Tokens
+
+    User->>Provider: generate(prompt, **kwargs)
+    Provider->>Config: get_generation_params()
+    Provider->>Media: process_inputs(files)
+    Provider->>Tokens: estimate_tokens()
+    Provider->>Provider: _prepare_request()
+    Provider->>API: send_request()
+    API->>Provider: response
+    Provider->>User: formatted_response
 ```
 
-### Provider-Specific Vision Flows
-
-The following diagram illustrates how image data flows through the system for vision-capable models:
+### 2. Configuration Flow
 
 ```mermaid
-flowchart TB
-    Input[Image Input] --> DetectType[Detect Input Type]
-    
-    DetectType --> |"URL"| ProcessURL[Process URL]
-    DetectType --> |"File Path"| ProcessFile[Process File Path]
-    DetectType --> |"Base64"| ProcessBase64[Process Base64 String]
-    
-    ProcessURL --> FormatProvider[Format for Provider]
-    ProcessFile --> EncodeBase64[Encode to Base64]
-    EncodeBase64 --> FormatProvider
-    ProcessBase64 --> FormatProvider
-    
-    FormatProvider --> |"OpenAI"| OpenAIFormat["{ type: 'image_url', image_url: { url: ... } }"]
-    FormatProvider --> |"Anthropic"| AnthropicFormat["{ type: 'image', source: { type: '...', ... } }"]
-    FormatProvider --> |"Ollama"| OllamaFormat["base64 string or URL"]
-    FormatProvider --> |"HuggingFace"| HuggingFaceFormat["file path or URL"]
-    
-    OpenAIFormat --> IntegrateRequest[Integrate into API Request]
-    AnthropicFormat --> IntegrateRequest
-    OllamaFormat --> IntegrateRequest
-    HuggingFaceFormat --> IntegrateRequest
-    
-    IntegrateRequest --> SendRequest[Send to LLM]
+sequenceDiagram
+    participant User
+    participant Factory
+    participant Config
+    participant Provider
+
+    User->>Factory: create_llm(provider, **kwargs)
+    Factory->>Config: create_config_manager(provider, kwargs)
+    Config->>Config: validate_config()
+    Config->>Provider: initialize(config)
+    Provider->>User: llm_instance
 ```
 
-## Core Components
+## Provider Implementation
 
-### AbstractLLMInterface
+### Base Structure
 
-The core of the package is the `AbstractLLMInterface` abstract base class, which defines the common interface that all provider implementations must follow. It includes:
+Each provider implements the following interface:
 
-- Initialization with configuration
-- Methods for text generation (sync and async)
-- Methods for capability inspection
-- Configuration management
+```python
+class ProviderInterface(Protocol):
+    def generate(self, prompt: str, **kwargs) -> str:
+        """Generate completion"""
+        pass
 
-### ModelParameter and ModelCapability Enums
+    def generate_async(self, prompt: str, **kwargs) -> Awaitable[str]:
+        """Generate completion asynchronously"""
+        pass
 
-The package uses enumerated types to provide type-safe parameter handling:
+    def count_tokens(self, text: str) -> int:
+        """Count tokens in text"""
+        pass
 
-1. **ModelParameter**: Defines available configuration parameters (temperature, max_tokens, etc.)
-2. **ModelCapability**: Defines capabilities that models may support (streaming, vision, etc.)
-
-### ConfigurationManager
-
-The `ConfigurationManager` class provides centralized configuration management through a set of static methods:
-
-1. **Base Configuration Creation**: Creates a configuration dictionary with appropriate defaults
-2. **Provider-Specific Initialization**: Applies provider-specific defaults and environment variables
-3. **Parameter Extraction**: Extracts and combines parameters for API calls
-4. **Parameter Access**: Provides a consistent way to access parameters regardless of key type (enum or string)
-
-This centralized approach eliminates configuration duplication across providers and ensures consistent parameter handling throughout the library.
-
-### Factory Function
-
-The `create_llm` factory function provides a clean way to instantiate the appropriate provider based on the provider name. This allows for a consistent instantiation pattern regardless of the underlying provider.
-
-### Provider Implementations
-
-Each provider implementation (OpenAI, Anthropic, Ollama, HuggingFace) extends the `AbstractLLMInterface` and implements the required methods according to the specific provider's API and requirements.
-
-The HuggingFace provider is unique in that it manages local models rather than making API calls, and includes additional functionality for model loading, caching, and warmup.
-
-## Memory Management
-
-The HuggingFace provider implements a sophisticated model caching mechanism to efficiently manage memory resources:
-
-```mermaid
-flowchart TB
-    LoadModel[Load Model Request] --> CacheCheck[Check Class-Level Cache]
-    
-    CacheCheck --> |"Cache Hit"| CacheHit[Retrieve from Cache]
-    CacheHit --> UpdateTime[Update Last Access Time]
-    
-    CacheCheck --> |"Cache Miss"| CacheMiss[Check if Cache Full]
-    CacheMiss --> |"if full"| EvictOldest[Evict Oldest Models]
-    EvictOldest --> LoadNew[Load New Model]
-    CacheMiss --> |"if not full"| LoadNew
-    
-    LoadNew --> SaveToCache[Save to Cache]
-    SaveToCache --> SetTime[Set Last Access Time]
-    
-    UpdateTime --> ReturnModel[Return Model]
-    SetTime --> ReturnModel
+    def get_capabilities(self) -> Dict[str, bool]:
+        """Get provider capabilities"""
+        pass
 ```
 
-The cache uses a least-recently-used (LRU) eviction policy to ensure that memory is used efficiently.
+### Provider-Specific Features
 
-## Error Handling
+1. **OpenAI**
+   - GPT-4V support
+   - Function calling
+   - Streaming responses
+   - System messages
 
-AbstractLLM implements a consistent error handling strategy:
+2. **Anthropic**
+   - Claude 3 support
+   - Multi-turn conversations
+   - Image analysis
+   - Tool use
 
-1. Provider-specific errors are caught and wrapped in appropriate exceptions
-2. Timeouts are implemented at multiple levels
-3. Invalid parameter combinations are detected and reported
-4. Network errors are properly handled and reported
+3. **HuggingFace**
+   - Local model support
+   - Custom model loading
+   - Vision models
+   - Quantization
 
-## Cross-Provider Compatibility
+4. **Ollama**
+   - Local deployment
+   - Model management
+   - Custom models
+   - GPU acceleration
 
-The architecture is designed to maintain a consistent interface while accommodating provider-specific requirements:
+## Extension Points
 
-1. Common parameters are mapped to provider-specific formats
-2. Provider-specific features are exposed through a consistent interface where possible
-3. Capability inspection allows code to adapt to provider capabilities dynamically 
+The system provides several extension points for customization:
+
+1. **Custom Providers**
+   ```python
+   class CustomProvider(BaseProvider):
+       def generate(self, prompt: str, **kwargs) -> str:
+           # Custom implementation
+           pass
+   ```
+
+2. **Media Processors**
+   ```python
+   class CustomMediaProcessor(MediaProcessor):
+       def process(self, input_data: Any) -> MediaInput:
+           # Custom processing
+           pass
+   ```
+
+3. **Token Counters**
+   ```python
+   class CustomTokenCounter(TokenCounter):
+       def count_tokens(self, text: str) -> int:
+           # Custom counting logic
+           pass
+   ```
+
+## Best Practices
+
+1. **Provider Implementation**
+   - Implement both sync and async methods
+   - Handle rate limiting gracefully
+   - Provide meaningful error messages
+   - Support streaming when possible
+
+2. **Configuration Management**
+   - Use environment variables for secrets
+   - Validate all inputs
+   - Provide sensible defaults
+   - Document all parameters
+
+3. **Media Handling**
+   - Process files efficiently
+   - Implement proper cleanup
+   - Handle large files carefully
+   - Support common formats
+
+4. **Error Handling**
+   - Use custom exceptions
+   - Provide context in errors
+   - Implement retries
+   - Log meaningful information
+
+## Future Enhancements
+
+1. **Provider Enhancements**
+   - Additional provider support
+   - Enhanced streaming capabilities
+   - Better error recovery
+   - Advanced caching
+
+2. **Media Support**
+   - Audio processing
+   - Video handling
+   - Document parsing
+   - Format conversion
+
+3. **Performance**
+   - Parallel processing
+   - Better caching
+   - Memory optimization
+   - Response streaming
+
+4. **Developer Experience**
+   - Enhanced debugging
+   - Better documentation
+   - More examples
+   - Testing utilities 
