@@ -6,7 +6,7 @@
 
 A lightweight, unified interface for interacting with multiple Large Language Model providers.
 
-[THIS IS A WORK IN PROGRESS, STAY TUNED !]
+Version: 0.4.0
 
 ## Features
 
@@ -21,6 +21,55 @@ A lightweight, unified interface for interacting with multiple Large Language Mo
 - 🔄 **Provider Chains**: Create fallback chains and load balancing across multiple providers
 - 💬 **Session Management**: Maintain conversation context when switching between providers
 - 🛑 **Unified Error Handling**: Consistent error handling across all providers
+
+## Command-Line Examples
+
+### Text Generation
+```bash
+# Using OpenAI
+python query.py "what is AI ?" --provider openai  
+
+# Using Anthropic
+python query.py "what is AI ?" --provider anthropic
+
+# Using Ollama
+python query.py "what is AI ?" --provider ollama  
+```
+
+### Text File Analysis
+```bash
+# Using OpenAI
+python query.py "describe the content of this file ?" -f tests/examples/test_data.csv --provider openai  
+
+# Using Anthropic
+python query.py "describe the content of this file ?" -f tests/examples/test_data.csv --provider anthropic
+
+# Using Ollama
+python query.py "describe the content of this file ?" -f tests/examples/test_data.csv --provider ollama  
+```
+
+### Image Analysis
+```bash
+# Using Anthropic with Claude 3
+python query.py "describe this image with a set of keywords" -f tests/examples/mountain_path.jpg --provider anthropic --model claude-3-5-sonnet-20241022
+
+# Using Ollama with LLaVA
+python query.py "describe this image with a set of keywords" -f tests/examples/mountain_path.jpg --provider ollama --model llama3.2-vision:latest
+
+# Using OpenAI with GPT-4 Vision
+python query.py "describe this image with a set of keywords" -f tests/examples/mountain_path.jpg --provider openai  
+```
+
+## Important Notes
+
+### HuggingFace Support (Work in Progress)
+The HuggingFace provider is currently under active development. While basic functionality is implemented, you may encounter some limitations and issues:
+- Device handling (CPU/CUDA/MPS) is being refined
+- Some model architectures may not work as expected
+- Vision model support is experimental
+- Memory management is being optimized
+
+We recommend using the OpenAI, Anthropic, or Ollama providers for production use while HuggingFace support is being finalized.
 
 ## Installation
 

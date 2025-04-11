@@ -4,9 +4,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "abstractllm"
-version = "0.1.0"
+version = "0.4.0"
 authors = [
-    { name = "lpalbou", email = "lpalbou@gmail.com" },
+    { name = "Laurent-Philippe Albou", email = "lpalbou@gmail.com" },
 ]
 description = "A Python library for abstracting LLM interactions"
 readme = "README.md"
