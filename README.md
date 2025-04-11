@@ -147,6 +147,24 @@ llm = create_llm("huggingface",
                 })
 ```
 
+#### Important Note About HuggingFace Models
+
+Many models on HuggingFace Hub require accepting a license before use. This is especially true for popular models like:
+- Meta's Llama models
+- Google's Gemma models
+- Mistral models
+- And many others
+
+To use these models:
+   - Visit the model's page on HuggingFace Hub (e.g., https://huggingface.co/meta-llama/Llama-2-7b)
+   - Sign in with your HuggingFace account
+   - Click "Agree and access repository" to accept the license
+   - Some models (like Llama) may require additional approval from the model owners
+   - Wait for approval if required
+   - After accepting the license and receiving any necessary approvals, you can use the model
+   - The script will guide you through this process if you haven't completed these steps
+
+
 ## Configuration
 
 You can configure the LLM's behavior in several ways:
