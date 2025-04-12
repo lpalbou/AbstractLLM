@@ -26,14 +26,14 @@ Version: 0.4.0
 
 ### Text Generation
 ```bash
-# Using OpenAI
-python query.py "what is AI ?" --provider openai  
+# Using OpenAI with logging
+python query.py "what is AI ?" --provider openai --log-dir ./logs --log-level DEBUG --console-output
 
-# Using Anthropic
-python query.py "what is AI ?" --provider anthropic
+# Using Anthropic with custom log directory
+python query.py "what is AI ?" --provider anthropic --log-dir /var/log/myapp/llm
 
-# Using Ollama
-python query.py "what is AI ?" --provider ollama  
+# Using Ollama with debug logging
+python query.py "what is AI ?" --provider ollama --log-level DEBUG
 ```
 
 ### Text File Analysis
@@ -59,6 +59,43 @@ python query.py "describe this image with a set of keywords" -f tests/examples/m
 # Using OpenAI with GPT-4 Vision
 python query.py "describe this image with a set of keywords" -f tests/examples/mountain_path.jpg --provider openai  
 ```
+
+### Logging Configuration
+
+The command-line tool supports flexible logging configuration:
+
+```bash
+# Basic logging (to logs/ directory)
+python query.py "Hello" --provider openai
+
+# Custom log directory
+python query.py "Hello" --provider openai --log-dir /path/to/logs
+
+# Debug level logging
+python query.py "Hello" --provider openai --log-level DEBUG
+
+# Force console output with file logging
+python query.py "Hello" --provider openai --console-output
+
+# Full logging configuration
+python query.py "Hello" --provider openai \
+    --log-dir /var/log/myapp/llm \
+    --log-level DEBUG \
+    --console-output
+```
+
+The logging system provides:
+- Request/response logging in JSON format
+- Automatic log directory creation
+- Log rotation support
+- Configurable log levels (DEBUG, INFO, WARNING, ERROR)
+- Optional console output alongside file logging
+- Secure handling of sensitive data (API keys never logged)
+
+Log files are organized as follows:
+- `abstractllm_YYYYMMDD_HHMMSS.log`: Main log file with all events
+- `{provider}_request_YYYYMMDD_HHMMSS.json`: Individual request details
+- `{provider}_response_YYYYMMDD_HHMMSS.json`: Individual response details
 
 ## Important Notes
 

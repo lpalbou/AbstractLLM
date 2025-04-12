@@ -14,9 +14,134 @@ from pathlib import Path
 # Configure logger
 logger = logging.getLogger("abstractllm")
 
-# Default log directory
-DEFAULT_LOG_DIR = "/tmp/logs/abstractllm"
+# Global configuration
+class LogConfig:
+    """Global logging configuration."""
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(LogConfig, cls).__new__(cls)
+            # Default configuration
+            cls._instance._log_dir = os.getenv("ABSTRACTLLM_LOG_DIR")
+            cls._instance._log_level = logging.INFO
+            cls._instance._provider_level = None
+            cls._instance._console_output = None
+            cls._instance._initialized = False
+        return cls._instance
+    
+    @property
+    def log_dir(self) -> Optional[str]:
+        """Get the current log directory."""
+        return self._log_dir
+    
+    @log_dir.setter
+    def log_dir(self, value: Optional[str]) -> None:
+        """Set the log directory."""
+        self._log_dir = value
+        if value:
+            os.makedirs(value, exist_ok=True)
+            logger.info(f"Log directory set to: {value}")
+    
+    @property
+    def log_level(self) -> int:
+        """Get the current log level."""
+        return self._log_level
+    
+    @log_level.setter
+    def log_level(self, value: int) -> None:
+        """Set the log level."""
+        self._log_level = value
+        if self._initialized:
+            logger.setLevel(value)
+    
+    @property
+    def provider_level(self) -> Optional[int]:
+        """Get the provider-specific log level."""
+        return self._provider_level
+    
+    @provider_level.setter
+    def provider_level(self, value: Optional[int]) -> None:
+        """Set the provider-specific log level."""
+        self._provider_level = value
+        if self._initialized:
+            logging.getLogger("abstractllm.providers").setLevel(value or self._log_level)
+    
+    @property
+    def console_output(self) -> Optional[bool]:
+        """Get the console output setting."""
+        return self._console_output
+    
+    @console_output.setter
+    def console_output(self, value: Optional[bool]) -> None:
+        """Set the console output setting."""
+        self._console_output = value
+    
+    def initialize(self) -> None:
+        """Initialize logging with current configuration."""
+        if not self._initialized:
+            setup_logging(
+                level=self._log_level,
+                provider_level=self._provider_level,
+                log_dir=self._log_dir,
+                console_output=self._console_output
+            )
+            self._initialized = True
 
+# Global configuration instance
+config = LogConfig()
+
+def configure_logging(
+    log_dir: Optional[str] = None,
+    log_level: Optional[int] = None,
+    provider_level: Optional[int] = None,
+    console_output: Optional[bool] = None
+) -> None:
+    """
+    Configure global logging settings for AbstractLLM.
+    
+    This is the main function that external programs should use to configure logging.
+    
+    Args:
+        log_dir: Directory to store log files (default: ABSTRACTLLM_LOG_DIR env var)
+                If not set, no file logging occurs unless forced
+        log_level: Default logging level for all loggers (default: INFO)
+        provider_level: Specific level for provider loggers (default: same as log_level)
+        console_output: Control console output:
+            - None (default): automatic (console if no log_dir, no console if log_dir)
+            - True: Force console output regardless of log_dir
+            - False: Force no console output regardless of log_dir
+    
+    Example:
+        >>> from abstractllm import configure_logging
+        >>> import logging
+        >>> 
+        >>> # Development: Everything to console
+        >>> configure_logging(log_level=logging.DEBUG)
+        >>> 
+        >>> # Production: Everything to files
+        >>> configure_logging(
+        ...     log_dir="/var/log/abstractllm",
+        ...     log_level=logging.INFO
+        ... )
+        >>> 
+        >>> # Both: Console and file output
+        >>> configure_logging(
+        ...     log_dir="/var/log/abstractllm",
+        ...     console_output=True
+        ... )
+    """
+    if log_dir is not None:
+        config.log_dir = log_dir
+    if log_level is not None:
+        config.log_level = log_level
+    if provider_level is not None:
+        config.provider_level = provider_level
+    if console_output is not None:
+        config.console_output = console_output
+    
+    # Initialize or reinitialize logging
+    config.initialize()
 
 def truncate_base64(data: Any, max_length: int = 50) -> Any:
     """
@@ -47,44 +172,54 @@ def truncate_base64(data: Any, max_length: int = 50) -> Any:
     return data
 
 
-def ensure_log_directory(log_dir: str = DEFAULT_LOG_DIR) -> str:
+def ensure_log_directory(log_dir: Optional[str] = None) -> Optional[str]:
     """
     Ensure log directory exists and return the path.
     
     Args:
-        log_dir: Directory to store log files (default: /tmp/logs/abstractllm)
+        log_dir: Directory to store log files (default: use global config)
         
     Returns:
-        Path to the log directory
+        Path to the log directory or None if no directory is configured
     """
-    os.makedirs(log_dir, exist_ok=True)
-    return log_dir
+    directory = log_dir or config.log_dir
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+        return directory
+    return None
 
 
-def get_log_filename(provider: str, log_type: str, log_dir: str = DEFAULT_LOG_DIR) -> str:
+def get_log_filename(provider: str, log_type: str, log_dir: Optional[str] = None) -> Optional[str]:
     """
     Generate a filename for a log file.
     
     Args:
         provider: Provider name
         log_type: Type of log (e.g., 'request', 'response')
-        log_dir: Directory to store log files
+        log_dir: Directory to store log files (default: use global config)
         
     Returns:
-        Full path to the log file
+        Full path to the log file or None if no directory is configured
     """
+    directory = ensure_log_directory(log_dir)
+    if not directory:
+        return None
+        
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    return os.path.join(log_dir, f"{provider}_{log_type}_{timestamp}.json")
+    return os.path.join(directory, f"{provider}_{log_type}_{timestamp}.json")
 
 
-def write_to_log_file(data: Dict[str, Any], filename: str) -> None:
+def write_to_log_file(data: Dict[str, Any], filename: Optional[str]) -> None:
     """
     Write data to a log file in JSON format.
     
     Args:
         data: Data to write
-        filename: Path to log file
+        filename: Path to log file (if None, no file is written)
     """
+    if not filename:
+        return
+        
     try:
         with open(filename, 'w') as f:
             json.dump(data, f, indent=2, default=str)
@@ -115,7 +250,7 @@ def log_api_key_missing(provider: str, env_var_name: str) -> None:
     logger.warning(f"{provider} API key not found in environment variable {env_var_name}")
 
 
-def log_request(provider: str, prompt: str, parameters: Dict[str, Any]) -> None:
+def log_request(provider: str, prompt: str, parameters: Dict[str, Any], log_dir: Optional[str] = None) -> None:
     """
     Log an LLM request.
     
@@ -123,9 +258,9 @@ def log_request(provider: str, prompt: str, parameters: Dict[str, Any]) -> None:
         provider: Provider name
         prompt: The request prompt
         parameters: Request parameters
+        log_dir: Optional override for log directory
     """
     timestamp = datetime.now().isoformat()
-    logger.debug(f"REQUEST [{provider}]: {timestamp}")
     
     # Create a safe copy of parameters for logging
     safe_parameters = parameters.copy()
@@ -157,53 +292,53 @@ def log_request(provider: str, prompt: str, parameters: Dict[str, Any]) -> None:
     # Now apply general base64 truncation on any remaining fields
     safe_parameters = truncate_base64(safe_parameters)
     
-    # For console output, use the safe version with hidden data
-    logger.debug(f"Parameters: {safe_parameters}")
-    logger.debug(f"Prompt: {prompt}")
+    # Log to console if enabled
+    if any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
+        logger.debug(f"REQUEST [{provider}]: {timestamp}")
+        logger.debug(f"Parameters: {safe_parameters}")
+        logger.debug(f"Prompt: {prompt}")
     
-    # For file logging, write the complete data
-    log_dir = ensure_log_directory()
+    # Write to file if directory is configured
     log_filename = get_log_filename(provider, "request", log_dir)
-    
-    log_data = {
-        "timestamp": timestamp,
-        "provider": provider,
-        "prompt": prompt,
-        "parameters": parameters  # Original, non-truncated parameters
-    }
-    
-    write_to_log_file(log_data, log_filename)
+    if log_filename:
+        log_data = {
+            "timestamp": timestamp,
+            "provider": provider,
+            "prompt": prompt,
+            "parameters": parameters  # Original, non-truncated parameters
+        }
+        write_to_log_file(log_data, log_filename)
 
 
-def log_response(provider: str, response: str) -> None:
+def log_response(provider: str, response: str, log_dir: Optional[str] = None) -> None:
     """
     Log an LLM response.
     
     Args:
         provider: Provider name
         response: The response text
+        log_dir: Optional override for log directory
     """
     timestamp = datetime.now().isoformat()
-    logger.debug(f"RESPONSE [{provider}]: {timestamp}")
     
-    # Truncate very long responses for console logging
-    if len(response) > 1000:
-        truncated_response = response[:1000] + f"... [truncated, total length: {len(response)} chars]"
-        logger.debug(f"Response: {truncated_response}")
-    else:
-        logger.debug(f"Response: {response}")
+    # Log to console if enabled
+    if any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
+        logger.debug(f"RESPONSE [{provider}]: {timestamp}")
+        if len(response) > 10000:
+            truncated_response = response[:10000] + f"... [truncated, total length: {len(response)} chars]"
+            logger.debug(f"Response: {truncated_response}")
+        else:
+            logger.debug(f"Response: {response}")
     
-    # Write full response to log file
-    log_dir = ensure_log_directory()
+    # Write to file if directory is configured
     log_filename = get_log_filename(provider, "response", log_dir)
-    
-    log_data = {
-        "timestamp": timestamp,
-        "provider": provider,
-        "response": response  # Original, full response
-    }
-    
-    write_to_log_file(log_data, log_filename)
+    if log_filename:
+        log_data = {
+            "timestamp": timestamp,
+            "provider": provider,
+            "response": response  # Original, full response
+        }
+        write_to_log_file(log_data, log_filename)
 
 
 def log_request_url(provider: str, url: str, method: str = "POST") -> None:
@@ -215,17 +350,24 @@ def log_request_url(provider: str, url: str, method: str = "POST") -> None:
         url: The request URL
         method: HTTP method (default: POST)
     """
-    logger.debug(f"API Request [{provider}]: {method} {url}")
+    if any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
+        logger.debug(f"API Request [{provider}]: {method} {url}")
 
 
-def setup_logging(level: int = logging.INFO, provider_level: int = None, log_dir: str = DEFAULT_LOG_DIR) -> None:
+def setup_logging(
+    level: int = logging.INFO,
+    provider_level: Optional[int] = None,
+    log_dir: Optional[str] = None,
+    console_output: Optional[bool] = None
+) -> None:
     """
     Set up logging configuration for AbstractLLM.
     
     Args:
         level: Default logging level for all loggers (default: INFO)
         provider_level: Specific level for provider loggers (default: same as level)
-        log_dir: Directory to store log files (default: /tmp/logs/abstractllm)
+        log_dir: Directory to store log files (default: None)
+        console_output: Whether to output to console (default: automatic based on log_dir)
     """
     # Use the same level for providers if not specified
     if provider_level is None:
@@ -237,8 +379,16 @@ def setup_logging(level: int = logging.INFO, provider_level: int = None, log_dir
     # Set up provider-specific loggers
     logging.getLogger("abstractllm.providers").setLevel(provider_level)
     
+    # Remove all existing handlers
+    logger.handlers.clear()
+    
+    # Determine if we should output to console
+    should_console = True if console_output is True else (
+        False if console_output is False else (log_dir is None)
+    )
+    
     # Create console handler if needed
-    if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
+    if should_console:
         console_handler = logging.StreamHandler()
         console_handler.setLevel(level)
         
@@ -249,25 +399,26 @@ def setup_logging(level: int = logging.INFO, provider_level: int = None, log_dir
         # Add handler to the logger
         logger.addHandler(console_handler)
     
-    # Create file handler for detailed logging
-    try:
-        # Ensure log directory exists
-        ensure_log_directory(log_dir)
-        
-        # Create a file handler for detailed logs
-        log_file = os.path.join(log_dir, f"abstractllm_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setLevel(min(level, logging.DEBUG))  # Always capture at least DEBUG level in files
-        
-        # Create formatter with more details for file logs
-        file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        file_handler.setFormatter(file_formatter)
-        
-        # Add file handler to the logger
-        logger.addHandler(file_handler)
-        
-        logger.info(f"Detailed logs will be written to: {log_file}")
-        logger.info(f"Request and response payloads will be stored in: {log_dir}")
-        
-    except Exception as e:
-        logger.warning(f"Could not set up file logging: {e}") 
+    # Create file handler for detailed logging if we have a directory
+    if log_dir:
+        try:
+            # Ensure log directory exists
+            directory = ensure_log_directory(log_dir)
+            
+            # Create a file handler for detailed logs
+            log_file = os.path.join(directory, f"abstractllm_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setLevel(min(level, logging.DEBUG))  # Always capture at least DEBUG level in files
+            
+            # Create formatter with more details for file logs
+            file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            file_handler.setFormatter(file_formatter)
+            
+            # Add file handler to the logger
+            logger.addHandler(file_handler)
+            
+            logger.info(f"Detailed logs will be written to: {log_file}")
+            logger.info(f"Request and response payloads will be stored in: {directory}")
+            
+        except Exception as e:
+            logger.warning(f"Could not set up file logging: {e}") 

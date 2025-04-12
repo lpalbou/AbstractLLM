@@ -14,6 +14,7 @@ from abstractllm.session import (
     Session,
     SessionManager
 )
+from abstractllm.utils.logging import configure_logging
 
 __all__ = [
     "create_llm",
@@ -25,4 +26,5 @@ __all__ = [
     "create_load_balanced_chain",
     "Session",
     "SessionManager",
+    "configure_logging",
 ] 

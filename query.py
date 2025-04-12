@@ -6,10 +6,11 @@ Simple test script for AbstractLLM providers.
 import os
 import sys
 import json
+import logging
 from pathlib import Path
 import argparse
 
-from abstractllm import create_llm
+from abstractllm import create_llm, configure_logging
 from abstractllm.enums import ModelParameter
 
 def ensure_logs_dir():
@@ -60,7 +61,29 @@ def main():
     parser.add_argument('--file', '-f', help='Optional file to process (image, text, csv, etc.)')
     parser.add_argument('--api-key', help='API key (can also use environment variable)')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode to log the exact payload sent to provider')
+    parser.add_argument('--log-dir', help='Directory to store logs (default: logs/ in current directory)')
+    parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], default='INFO',
+                      help='Logging level (default: INFO)')
+    parser.add_argument('--console-output', action='store_true', help='Force console output even when logging to files')
     args = parser.parse_args()
+
+    # Configure logging
+    log_level = getattr(logging, args.log_level)
+    log_dir = args.log_dir or os.path.join(os.getcwd(), "logs")
+    
+    # Set up logging configuration
+    configure_logging(
+        log_dir=log_dir,
+        log_level=log_level,
+        provider_level=log_level,
+        console_output=args.console_output
+    )
+    
+    # Log the configuration
+    logger = logging.getLogger("abstractllm")
+    logger.info(f"Logging to directory: {log_dir}")
+    logger.info(f"Log level: {args.log_level}")
+    logger.info(f"Console output: {'enabled' if args.console_output else 'auto'}")
 
     # Providers that always require API keys
     required_api_keys = {
@@ -90,9 +113,9 @@ def main():
         # Add model only if explicitly specified
         if args.model:
             config[ModelParameter.MODEL] = args.model
-            print(f"\nInitializing {args.provider} provider with specified model: {args.model}")
+            logger.info(f"Using specified model: {args.model}")
         else:
-            print(f"\nInitializing {args.provider} provider with default model")
+            logger.info("Using default model for provider")
 
         # Create provider instance
         llm = create_llm(args.provider, **config)
@@ -144,7 +167,7 @@ def main():
             write_debug_info(args.provider, payload)
 
         # Generate response
-        print(f"\nSending request to {args.provider}...")
+        logger.info(f"Sending request to {args.provider}...")
         response = llm.generate(
             prompt=args.prompt,
             files=files
@@ -156,7 +179,7 @@ def main():
         print("=" * 40)
 
     except Exception as e:
-        print(f"\nError: {str(e)}")
+        logger.error(f"Error: {str(e)}")
         sys.exit(1)
 
 if __name__ == '__main__':
