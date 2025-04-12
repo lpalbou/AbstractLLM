@@ -34,6 +34,12 @@ python query.py "what is AI ?" --provider anthropic --log-dir /var/log/myapp/llm
 
 # Using Ollama with debug logging
 python query.py "what is AI ?" --provider ollama --log-level DEBUG
+
+# Using HuggingFace with GGUF model
+python query.py "what is AI ?" --provider huggingface --model https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_L.gguf
+
+# Using HuggingFace with regular model
+python query.py "what is AI ?" --provider huggingface --model ibm-granite/granite-3.2-2b-instruct
 ```
 
 ### Text File Analysis
@@ -46,6 +52,9 @@ python query.py "describe the content of this file ?" -f tests/examples/test_dat
 
 # Using Ollama
 python query.py "describe the content of this file ?" -f tests/examples/test_data.csv --provider ollama  
+
+# Using HuggingFace
+python query.py "describe the content of this file ?" -f tests/examples/test_data.csv --provider huggingface --model ibm-granite/granite-3.2-2b-instruct
 ```
 
 ### Image Analysis
@@ -96,17 +105,6 @@ Log files are organized as follows:
 - `abstractllm_YYYYMMDD_HHMMSS.log`: Main log file with all events
 - `{provider}_request_YYYYMMDD_HHMMSS.json`: Individual request details
 - `{provider}_response_YYYYMMDD_HHMMSS.json`: Individual response details
-
-## Important Notes
-
-### HuggingFace Support (Work in Progress)
-The HuggingFace provider is currently under active development. While basic functionality is implemented, you may encounter some limitations and issues:
-- Device handling (CPU/CUDA/MPS) is being refined
-- Some model architectures may not work as expected
-- Vision model support is experimental
-- Memory management is being optimized
-
-We recommend using the OpenAI, Anthropic, or Ollama providers for production use while HuggingFace support is being finalized.
 
 ## Installation
 
@@ -222,71 +220,89 @@ llm = create_llm("ollama",
 
 ### Hugging Face
 
+The HuggingFace provider offers robust support for both regular HuggingFace models and GGUF quantized models:
+
 ```python
 from abstractllm import create_llm, ModelParameter
 
-# Using a HuggingFace model directly
+# Using a regular HuggingFace model
 llm = create_llm("huggingface", 
                 **{
                     ModelParameter.MODEL: "ibm-granite/granite-3.2-2b-instruct",
-                    # Device will be automatically detected (CUDA, MPS, or CPU)
-                    ModelParameter.DEVICE: "auto",
+                    ModelParameter.DEVICE: "auto",  # Automatic device detection
                     ModelParameter.TEMPERATURE: 0.7
                 })
 
-# Using a pre-quantized GGUF model from HuggingFace
+# Using a GGUF model (direct URL)
 llm = create_llm("huggingface", 
                 **{
                     ModelParameter.MODEL: "https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_L.gguf",
-                    # Device will be automatically detected for GGUF models
-                    ModelParameter.DEVICE: "auto"
+                    ModelParameter.DEVICE: "auto"  # Supports CPU, CUDA, MPS (Metal)
                 })
 
-# Using on-the-fly quantization
+# Using a local GGUF model
 llm = create_llm("huggingface", 
                 **{
-                    ModelParameter.MODEL: "microsoft/Phi-4-mini-instruct",
-                    ModelParameter.LOAD_IN_4BIT: True,  # Enable 4-bit quantization
-                    ModelParameter.DEVICE_MAP: "auto"  # Automatic device mapping
+                    ModelParameter.MODEL: "/path/to/local/model.gguf",
+                    ModelParameter.DEVICE: "auto"
                 })
 ```
 
-The HuggingFace provider supports:
-- Automatic device detection (CUDA for NVIDIA GPUs, MPS for Apple Silicon, CPU fallback)
-- Direct loading of HuggingFace models
-- Loading pre-quantized GGUF models
-- On-the-fly quantization (4-bit and 8-bit)
-- Automatic device mapping for large models
+Key Features:
+- **Device Support**: 
+  - Automatic detection of CUDA (NVIDIA GPUs)
+  - MPS support for Apple Silicon
+  - CPU fallback when needed
+- **Model Types**:
+  - Regular HuggingFace models
+  - GGUF quantized models (4-bit to 8-bit)
+  - Local model files
+  - Direct URL loading
+- **Caching**: Automatic model caching and management
+- **Memory Optimization**: Configurable memory usage and device mapping
+- **Prompt Formatting**: Automatic formatting based on model type
 
 Command-line examples:
 ```bash
-# Using a HuggingFace model directly
+# Using a regular HuggingFace model
 python query.py "what is AI ?" --provider huggingface --model ibm-granite/granite-3.2-2b-instruct
 
-# Using a pre-quantized GGUF model
+# Using a GGUF model (direct URL)
 python query.py "what is AI ?" --provider huggingface --model https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_L.gguf
 
-# Using a higher quality quantized model
+# Using a higher quality GGUF model
 python query.py "what is AI ?" --provider huggingface --model https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q6_K_L.gguf
 ```
 
-#### Important Note About HuggingFace Models
+#### Important Notes
 
-Many models on HuggingFace Hub require accepting a license before use. This is especially true for popular models like:
-- Meta's Llama models
-- Google's Gemma models
-- Mistral models
-- And many others
+1. **Device Selection**:
+   - The provider automatically detects and uses the best available device
+   - For GGUF models on macOS, Metal acceleration is automatically enabled
+   - For GGUF models on Linux/Windows, CUDA is automatically enabled if available
 
-To use these models:
-   - Visit the model's page on HuggingFace Hub (e.g., https://huggingface.co/meta-llama/Llama-2-7b)
-   - Sign in with your HuggingFace account
-   - Click "Agree and access repository" to accept the license
-   - Some models (like Llama) may require additional approval from the model owners
-   - Wait for approval if required
-   - After accepting the license and receiving any necessary approvals, you can use the model
-   - The script will guide you through this process if you haven't completed these steps
+2. **GGUF Models**:
+   - Support direct loading from URLs
+   - Automatic caching in `~/.cache/abstractllm/models`
+   - Verification of downloaded model integrity
+   - Progress tracking for large downloads
 
+3. **Memory Management**:
+   - Configurable thread count for CPU operations
+   - Automatic GPU layer optimization
+   - Low memory usage options available
+
+4. **Model Compatibility**:
+   - Most HuggingFace models are supported
+   - GGUF models require the `llama-cpp-python` package
+   - Install with: `pip install llama-cpp-python`
+
+5. **Performance**:
+   - GGUF models offer excellent performance with lower memory usage
+   - Automatic optimization based on hardware
+   - Progress logging for long operations
+
+The HuggingFace provider is fully functional and production-ready, particularly with GGUF models which offer excellent performance and memory efficiency.
 
 ## Configuration
 
