@@ -182,7 +182,11 @@ class TextInput(MediaInput):
             
             return f"\n===== JOINT FILES ======\n\n===== {source_name} =========\n{content}\n"
         elif provider == "huggingface":
-            return content
+            return {
+                "type": "text",
+                "content": content,
+                "mime_type": self.mime_type
+            }
         else:
             raise ValueError(f"Unsupported provider: {provider}")
     

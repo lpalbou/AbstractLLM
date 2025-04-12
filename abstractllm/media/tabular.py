@@ -230,8 +230,30 @@ class TabularInput(MediaInput):
             return f"\n===== JOINT FILES ======\n\n===== {source_name} =========\n{table}\n"
             
         elif provider == "huggingface":
-            # Return raw content for HuggingFace
-            return self.get_content()
+            # Format as a markdown table for HuggingFace
+            if not data:
+                return {
+                    "type": "tabular",
+                    "content": "",
+                    "mime_type": self.mime_type,
+                    "delimiter": self.delimiter
+                }
+                
+            header = data[0]
+            rows = data[1:]
+            
+            # Create markdown table
+            table = "| " + " | ".join(header) + " |\n"
+            table += "| " + " | ".join(["---"] * len(header)) + " |\n"
+            for row in rows:
+                table += "| " + " | ".join(row) + " |\n"
+                
+            return {
+                "type": "tabular",
+                "content": table,
+                "mime_type": self.mime_type,
+                "delimiter": self.delimiter
+            }
             
         else:
             raise ValueError(f"Unsupported provider: {provider}")

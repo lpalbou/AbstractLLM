@@ -48,6 +48,8 @@ from abstractllm.exceptions import (
 from abstractllm.media.image import ImageInput
 from abstractllm.utils.config import ConfigurationManager
 
+from abstractllm.media.interface import MediaInput
+
 # Configure logger
 logger = logging.getLogger("abstractllm.providers.huggingface")
 
@@ -58,7 +60,6 @@ DEFAULT_GENERATION_TIMEOUT = 60
 VISION_CAPABLE_MODELS = {
     "Salesforce/blip-image-captioning-base": "vision_seq2seq",
     "Salesforce/blip-image-captioning-large": "vision_seq2seq",
-    "liuhaotian/llava-v1.5-7b": "llava",
     "llava-hf/llava-1.5-7b-hf": "llava",
     "llava-hf/llava-v1.6-mistral-7b-hf": "llava",
     "microsoft/git-base": "vision_encoder",
@@ -97,7 +98,8 @@ class HuggingFaceProvider(AbstractLLMInterface):
         
         # Set default configuration for HuggingFace
         default_config = {
-            ModelParameter.MODEL: "microsoft/Phi-4-mini-instruct",
+            ModelParameter.MODEL: "https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_L.gguf",
+            # ModelParameter.MODEL: "microsoft/Phi-4-mini-instruct",
             # ModelParameter.MODEL: "ibm-granite/granite-3.2-2b-instruct",
             ModelParameter.TEMPERATURE: 0.7,
             ModelParameter.MAX_TOKENS: 1024,
@@ -707,6 +709,180 @@ class HuggingFaceProvider(AbstractLLMInterface):
             logger.error(f"Failed to get generation config: {e}")
             raise RuntimeError(f"Failed to get generation config: {e}")
 
+    def _process_media_input(self, media_input: MediaInput) -> Any:
+        """
+        Process a media input for HuggingFace models.
+        
+        Args:
+            media_input: MediaInput instance to process
+            
+        Returns:
+            Processed input suitable for the model
+            
+        Raises:
+            ImageProcessingError: If there's an error processing an image
+            FileProcessingError: If there's an error processing a file
+        """
+        try:
+            formatted = media_input.to_provider_format("huggingface")
+            
+            if formatted["type"] == "text":
+                logger.debug(f"Processing text input with MIME type: {formatted['mime_type']}")
+                # For text, we'll return the raw content to be combined with the prompt
+                return {
+                    "type": "text",
+                    "content": formatted["content"]
+                }
+            
+            elif formatted["type"] == "tabular":
+                logger.debug(f"Processing tabular input with MIME type: {formatted['mime_type']}")
+                # For tabular data, return the formatted table
+                return {
+                    "type": "text",
+                    "content": formatted["content"]
+                }
+            
+            elif formatted["type"] == "image":
+                logger.debug(f"Processing image input with source type: {formatted['source_type']}")
+                try:
+                    from PIL import Image
+                    import requests
+                    from io import BytesIO
+                    
+                    # Get image data based on source type
+                    if formatted["source_type"] == "path":
+                        image = Image.open(formatted["content"])
+                    elif formatted["source_type"] == "url":
+                        response = requests.get(formatted["content"])
+                        response.raise_for_status()
+                        image = Image.open(BytesIO(response.content))
+                    else:  # binary
+                        image = Image.open(BytesIO(formatted["content"]))
+                    
+                    # Process image based on model type
+                    if self._model_type in ["vision_seq2seq", "llava"]:
+                        return {
+                            "type": "image",
+                            "pixel_values": self._processor(images=image, return_tensors="pt")["pixel_values"]
+                        }
+                    else:
+                        raise UnsupportedFeatureError(
+                            "vision",
+                            "Current model does not support vision input",
+                            provider="huggingface"
+                        )
+                        
+                except ImportError as e:
+                    raise ImageProcessingError(
+                        "Required packages not available. Install with: pip install Pillow requests",
+                        provider="huggingface",
+                        original_exception=e
+                    )
+                except Exception as e:
+                    raise ImageProcessingError(
+                        f"Failed to process image: {str(e)}",
+                        provider="huggingface",
+                        original_exception=e
+                    )
+            
+            else:
+                raise ValueError(f"Unsupported media type: {formatted['type']}")
+            
+        except Exception as e:
+            if isinstance(e, (ImageProcessingError, UnsupportedFeatureError)):
+                raise
+            raise FileProcessingError(
+                f"Failed to process media input: {str(e)}",
+                provider="huggingface",
+                original_exception=e
+            )
+
+    def _format_file_content(self, text_inputs: List[Dict[str, str]], prompt: str) -> str:
+        """
+        Format file content with the prompt in a way that's clear for the model.
+        
+        Args:
+            text_inputs: List of text inputs to format
+            prompt: The original prompt
+            
+        Returns:
+            Formatted prompt with file content
+        """
+        # Start with the user's question
+        formatted = prompt.strip()
+        
+        # If we have file content, add it in a clear structured way
+        if text_inputs:
+            formatted += "\n\nHere is the content of the file(s):\n"
+            formatted += "```\n"  # Use markdown-style code blocks
+            for text_input in text_inputs:
+                formatted += text_input["content"].strip()
+            formatted += "\n```\n\n"
+            # Repeat the question to make it clear what we want
+            formatted += f"Based on this content, {prompt}"
+        
+        return formatted
+
+    def _combine_inputs(self, processed_inputs: List[Dict[str, Any]], prompt: str) -> Dict[str, Any]:
+        """
+        Combine processed inputs with the prompt.
+        
+        Args:
+            processed_inputs: List of processed media inputs
+            prompt: The text prompt
+            
+        Returns:
+            Combined input suitable for the model
+            
+        Raises:
+            ValueError: If inputs cannot be combined
+        """
+        # Handle different cases based on input types
+        text_inputs = [p for p in processed_inputs if p["type"] == "text"]
+        image_inputs = [p for p in processed_inputs if p["type"] == "image"]
+        
+        # Format the prompt with file content
+        formatted_prompt = self._format_file_content(text_inputs, prompt)
+        logger.debug(f"Formatted prompt with file content: {formatted_prompt}")
+        
+        # For GGUF models, handle differently
+        if hasattr(self._model, 'model_path'):
+            return formatted_prompt
+        
+        # For vision models
+        if image_inputs:
+            if len(image_inputs) > 1:
+                raise ValueError("Multiple images are not supported for this model")
+            if self._model_type in ["vision_seq2seq", "llava"]:
+                # For vision models, we need both the image and the prompt
+                return {
+                    "pixel_values": image_inputs[0]["pixel_values"],
+                    "input_ids": self._tokenizer(formatted_prompt, return_tensors="pt", 
+                                              truncation=True, max_length=512)["input_ids"]
+                }
+        
+        # For text-only inputs with regular HF models
+        tokenizer_kwargs = {
+            "return_tensors": "pt",
+            "truncation": True,
+            "padding": True,
+            "max_length": self.config_manager.get_param("max_length", 2048),
+            "add_special_tokens": True  # Ensure special tokens are added
+        }
+        
+        # Add model-specific handling
+        if hasattr(self._tokenizer, "pad_token") and self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
+        
+        # Tokenize with attention mask
+        inputs = self._tokenizer(formatted_prompt, **tokenizer_kwargs)
+        
+        # Ensure we have attention mask
+        if "attention_mask" not in inputs:
+            inputs["attention_mask"] = torch.ones_like(inputs["input_ids"])
+        
+        return inputs
+
     def generate(self, 
                 prompt: str, 
                 system_prompt: Optional[str] = None, 
@@ -722,40 +898,23 @@ class HuggingFaceProvider(AbstractLLMInterface):
         # Get device from config
         device = self.config_manager.get_param("device", "cpu")
         logger.debug("Using device: %s", device)
-            
+        
         # Process files if provided
+        processed_inputs = []
         if files:
             logger.debug("Processing %d files", len(files))
             try:
-                processed_files = []
                 for file_path in files:
                     media_input = MediaFactory.from_source(file_path)
-                    processed_files.append(media_input)
-                
-                # For vision models, we only support one image at a time currently
-                if self._model_type in ["vision_seq2seq", "llava"]:
-                    if len(processed_files) > 1:
-                        raise ValueError("Vision models currently support only one image at a time")
-                    if not any(isinstance(f, ImageInput) for f in processed_files):
-                        raise ValueError("No valid image file found in the provided files")
-                    image_file = next(f for f in processed_files if isinstance(f, ImageInput))
-                    image = Image.open(image_file.source)
-                else:
-                    # For text models, we append file contents to the prompt
-                    file_contents = []
-                    for file in processed_files:
-                        if file.media_type != "text":
-                            logger.warning(f"Skipping non-text file {file.source} for text model")
-                            continue
-                        with open(file.source, 'r') as f:
-                            file_contents.append("\n===== " + file.source + " =========\n" + f.read() + "\n")
-                    if file_contents:
-                        prompt = prompt + "\n\n===== JOINT FILES ======\n" + "\n".join(file_contents)
-                        
+                    processed = self._process_media_input(media_input)
+                    processed_inputs.append(processed)
+                    logger.debug(f"Processed file {file_path}")
             except Exception as e:
-                error_msg = f"Error processing files: {str(e)}"
-                logger.error(error_msg)
-                raise ValueError(error_msg) from e
+                raise FileProcessingError(
+                    f"Failed to process files: {str(e)}",
+                    provider="huggingface",
+                    original_exception=e
+                )
 
         try:
             # Verify model state
@@ -784,6 +943,11 @@ class HuggingFaceProvider(AbstractLLMInterface):
             
             # Handle GGUF models differently
             if hasattr(self._model, 'model_path'):
+                # Combine prompt with processed inputs
+                if processed_inputs:
+                    formatted_prompt = self._combine_inputs(processed_inputs, formatted_prompt)
+                    logger.debug(f"Combined prompt for GGUF: {formatted_prompt}")
+                
                 # Generate using llama-cpp-python
                 completion = self._model.create_completion(
                     formatted_prompt,
@@ -806,13 +970,16 @@ class HuggingFaceProvider(AbstractLLMInterface):
                 # Get generation parameters for PyTorch models
                 params = self._get_generation_config()
                 
-                # Prepare inputs based on model type
+                # Prepare inputs based on model type and processed files
                 logger.debug("Preparing inputs for model type: %s", self._model_type)
-                if self._model_type in ["vision_seq2seq", "llava"]:
-                    inputs = self._processor(images=image, text=formatted_prompt, return_tensors="pt")
+                if processed_inputs:
+                    # Combine prompt with processed inputs
+                    inputs = self._combine_inputs(processed_inputs, formatted_prompt)
                 else:
+                    # Just tokenize the prompt
                     inputs = self._tokenizer(formatted_prompt, return_tensors="pt", padding=True)
-                    logger.debug("Input shape: %s", {k: v.shape for k, v in inputs.items()})
+                
+                logger.debug("Input shape: %s", {k: v.shape for k, v in inputs.items()})
                 
                 # Move inputs to the same device as model
                 model_device = next(self._model.parameters()).device
@@ -855,7 +1022,7 @@ class HuggingFaceProvider(AbstractLLMInterface):
                 logger.debug("Generation successful. Result: %s", result)
                 log_response("huggingface", result)
                 return result
-                
+
         except Exception as e:
             error_msg = f"Generation failed: {str(e)}"
             logger.error(error_msg, exc_info=True)  # Include full traceback

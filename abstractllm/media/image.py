@@ -278,7 +278,25 @@ class ImageInput(MediaInput):
             elif provider == "ollama":
                 format_result = self._format_for_ollama()
             elif provider == "huggingface":
-                format_result = self._format_for_huggingface()
+                source_str = str(self.source)
+                
+                # Determine source type and content
+                if os.path.exists(source_str):
+                    source_type = "path"
+                    content = source_str
+                elif source_str.startswith(('http://', 'https://')):
+                    source_type = "url"
+                    content = source_str
+                else:
+                    source_type = "binary"
+                    content = self.get_content()
+                
+                format_result = {
+                    "type": "image",
+                    "content": content,
+                    "mime_type": self.mime_type,
+                    "source_type": source_type
+                }
             else:
                 raise ValueError(f"Unsupported provider: {provider}")
             
