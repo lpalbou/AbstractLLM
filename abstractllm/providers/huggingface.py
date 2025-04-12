@@ -102,15 +102,16 @@ class HuggingFaceProvider(AbstractLLMInterface):
             # ModelParameter.MODEL: "microsoft/Phi-4-mini-instruct",
             # ModelParameter.MODEL: "ibm-granite/granite-3.2-2b-instruct",
             ModelParameter.TEMPERATURE: 0.7,
-            ModelParameter.MAX_TOKENS: 1024,
+            ModelParameter.MAX_TOKENS: 2048,
             ModelParameter.DEVICE: self._get_optimal_device(),
+            ModelParameter.TIMEOUT: 60,
+            "generation_timeout": DEFAULT_GENERATION_TIMEOUT,
+            "load_timeout": 300,
             "trust_remote_code": True,
             "load_in_8bit": False,  # Enable 8-bit quantization by default
             "load_in_4bit": True,
             "device_map": "auto",
             "attn_implementation": "flash_attention_2",  # More memory efficient attention
-            "load_timeout": 300,
-            "generation_timeout": DEFAULT_GENERATION_TIMEOUT,
             "torch_dtype": "auto",
             "low_cpu_mem_usage": True,
             # Add new quantization parameters with defaults
