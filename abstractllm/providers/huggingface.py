@@ -405,6 +405,7 @@ class HuggingFaceProvider(AbstractLLMInterface):
             self._model_loaded = False
             
             model_name = self.config_manager.get_param(ModelParameter.MODEL)
+            device = self.config_manager.get_param("device", "cpu")
             
             # Check if this is a direct URL
             if self._is_direct_url(model_name):
@@ -445,21 +446,32 @@ class HuggingFaceProvider(AbstractLLMInterface):
                 start_time = time.time()
             
             try:
-                # Load the model with appropriate quantization
+                # Prepare model loading parameters
+                model_kwargs = {
+                    "trust_remote_code": self.config_manager.get_param("trust_remote_code", True),
+                    "torch_dtype": self.config_manager.get_param("torch_dtype", "auto"),
+                    "low_cpu_mem_usage": self.config_manager.get_param("low_cpu_mem_usage", True)
+                }
+                
+                # Add device mapping if not CPU
+                if device != "cpu":
+                    model_kwargs["device_map"] = "auto"
+                
+                # Add quantization parameters if specified
                 if load_in_4bit:
-                    model = AutoModelForCausalLM.from_pretrained(
-                        model_name,
-                        device_map="auto",
-                        load_in_4bit=True
-                    )
+                    model_kwargs["load_in_4bit"] = True
                 elif load_in_8bit:
-                    model = AutoModelForCausalLM.from_pretrained(
-                        model_name,
-                        device_map="auto",
-                        load_in_8bit=True
-                    )
-                else:
-                    model = AutoModelForCausalLM.from_pretrained(model_name)
+                    model_kwargs["load_in_8bit"] = True
+                
+                # Load the model
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    **model_kwargs
+                )
+                
+                # Move model to device if not using device_map="auto"
+                if device != "cpu" and "device_map" not in model_kwargs:
+                    model = model.to(device)
                 
                 # Load tokenizer
                 tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -669,7 +681,6 @@ class HuggingFaceProvider(AbstractLLMInterface):
                 "top_k": 50,
                 "num_return_sequences": 1,
                 "do_sample": True,
-                "min_new_tokens": 1,
                 "max_new_tokens": self.config_manager.get_param(ModelParameter.MAX_TOKENS, 2048),
             }
             
@@ -680,13 +691,13 @@ class HuggingFaceProvider(AbstractLLMInterface):
                 
                 # Update with model's defaults while preserving our parameters
                 for k, v in gen_config.to_dict().items():
-                    if k not in params:
+                    if k not in params and k not in ["max_length", "min_length"]:  # Skip length params
                         params[k] = v
             
             # Ensure we have token IDs
-            if self._tokenizer.pad_token_id is not None:
+            if hasattr(self._tokenizer, "pad_token_id") and self._tokenizer.pad_token_id is not None:
                 params["pad_token_id"] = self._tokenizer.pad_token_id
-            if self._tokenizer.eos_token_id is not None:
+            if hasattr(self._tokenizer, "eos_token_id") and self._tokenizer.eos_token_id is not None:
                 params["eos_token_id"] = self._tokenizer.eos_token_id
             
             logger.debug(f"Final generation parameters: {params}")
@@ -791,9 +802,10 @@ class HuggingFaceProvider(AbstractLLMInterface):
                     inputs = self._tokenizer(formatted_prompt, return_tensors="pt", padding=True)
                     logger.debug("Input shape: %s", {k: v.shape for k, v in inputs.items()})
                 
-                # Move inputs to the correct device
-                logger.debug("Moving inputs to device: %s", device)
-                inputs = self._move_inputs_to_device(inputs, device)
+                # Move inputs to the same device as model
+                model_device = next(self._model.parameters()).device
+                inputs = {k: v.to(model_device) for k, v in inputs.items()}
+                logger.debug(f"Moved inputs to model device: {model_device}")
                 
                 # Generate
                 logger.debug("Starting model.generate()...")
