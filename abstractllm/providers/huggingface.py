@@ -32,6 +32,7 @@ from PIL import Image
 import psutil
 import requests
 from urllib.parse import urlparse
+import json
 
 from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability
 from abstractllm.utils.logging import log_request, log_response, log_request_url
@@ -118,12 +119,12 @@ class HuggingFaceProvider(AbstractLLMInterface):
         # Merge defaults with provided config
         self.config_manager.merge_with_defaults(default_config)
         
-        # Initialize model components
+        # Initialize model components with clear state
         self._model = None
         self._tokenizer = None
         self._processor = None
         self._model_loaded = False
-        self._model_type = "causal"  # Default model type
+        self._model_type = None  # Will be set during loading
         
         # Log initialization
         model = self.config_manager.get_param(ModelParameter.MODEL)
@@ -243,44 +244,47 @@ class HuggingFaceProvider(AbstractLLMInterface):
 
             # Download the file
             logger.info(f"Downloading model from {url}")
-            response = requests.get(url, stream=True)
-            response.raise_for_status()
-
-            # Write the file with progress tracking
+            
+            # Create a temporary file first
+            temp_path = local_path + ".tmp"
             downloaded = 0
             last_log_time = time.time()
             log_interval = 5  # Log every 5 seconds
             
-            with open(local_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192*1024):  # 8MB chunks
-                    if not chunk:
-                        continue
-                    downloaded += len(chunk)
-                    f.write(chunk)
-                    
-                    # Log progress periodically
-                    current_time = time.time()
-                    if current_time - last_log_time >= log_interval:
-                        progress = (downloaded / expected_size) * 100
-                        speed = downloaded / (current_time - last_log_time) / (1024*1024)  # MB/s
-                        logger.info(f"Download progress: {progress:.1f}% ({speed:.1f} MB/s)")
-                        last_log_time = current_time
+            with requests.get(url, stream=True) as response:
+                response.raise_for_status()
+                with open(temp_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192*1024):  # 8MB chunks
+                        if not chunk:
+                            continue
+                        downloaded += len(chunk)
+                        f.write(chunk)
+                        
+                        # Log progress periodically
+                        current_time = time.time()
+                        if current_time - last_log_time >= log_interval:
+                            progress = (downloaded / expected_size) * 100
+                            speed = downloaded / (current_time - last_log_time) / (1024*1024)  # MB/s
+                            logger.info(f"Download progress: {progress:.1f}% ({speed:.1f} MB/s)")
+                            last_log_time = current_time
 
             # Verify final file size
-            actual_size = os.path.getsize(local_path)
+            actual_size = os.path.getsize(temp_path)
             if actual_size != expected_size:
-                os.remove(local_path)
+                os.remove(temp_path)
                 raise RuntimeError(
                     f"Downloaded file size ({actual_size}) does not match expected size ({expected_size})"
                 )
 
+            # Move temporary file to final location
+            os.replace(temp_path, local_path)
             logger.info(f"Model successfully downloaded to {local_path}")
             return local_path
 
         except Exception as e:
-            # Clean up partial download if it exists
-            if 'local_path' in locals() and os.path.exists(local_path):
-                os.remove(local_path)
+            # Clean up temporary file if it exists
+            if 'temp_path' in locals() and os.path.exists(temp_path):
+                os.remove(temp_path)
             raise RuntimeError(f"Failed to download model: {str(e)}") from e
 
     def _load_gguf_model(self, model_path: str) -> None:
@@ -317,23 +321,46 @@ class HuggingFaceProvider(AbstractLLMInterface):
                 else:
                     logger.warning(f"Unsupported device {device} for {system}, falling back to CPU")
             
+            # Get model parameters from config
+            context_size = self.config_manager.get_param("context_size", 2048)
+            n_threads = self.config_manager.get_param("n_threads", os.cpu_count())
+            
             # Initialize model with appropriate parameters
-            self._model = Llama(
+            model = Llama(
                 model_path=model_path,
-                n_ctx=2048,  # Context window
-                n_threads=os.cpu_count(),  # Use all available CPU threads
+                n_ctx=context_size,  # Context window
+                n_threads=n_threads,  # CPU threads
                 n_gpu_layers=n_gpu_layers,  # GPU acceleration if enabled
                 seed=self.config_manager.get_param("seed", 0),  # Random seed
                 verbose=self.config_manager.get_param("verbose", False)  # Logging
             )
             
+            # Extract model metadata
+            metadata = {}
+            if hasattr(model, 'metadata'):
+                metadata = model.metadata  # Access as property, not method
+                logger.debug(f"GGUF model metadata: {metadata}")
+                
+                # Update configuration based on metadata
+                if "general.name" in metadata:
+                    logger.info(f"Model name from metadata: {metadata['general.name']}")
+                if "phi3.context_length" in metadata:
+                    context_size = int(metadata["phi3.context_length"])
+                    logger.info(f"Context length from metadata: {context_size}")
+            
             # Create a simple tokenizer wrapper to match HF interface
             class GGUFTokenizer:
-                def __init__(self, model):
+                def __init__(self, model, metadata=None):
                     self.model = model
-                    self.eos_token = "</s>"
-                    self.pad_token = "</s>"
-                    self.bos_token = "<s>"
+                    self.metadata = metadata or {}
+                    
+                    # Get tokens from metadata if available
+                    self.eos_token = self.metadata.get("tokenizer.ggml.eos_token", "</s>")
+                    self.pad_token = self.metadata.get("tokenizer.ggml.pad_token", "</s>")
+                    self.bos_token = self.metadata.get("tokenizer.ggml.bos_token", "<s>")
+                    
+                    # Get template from metadata if available
+                    self.chat_template = self.metadata.get("tokenizer.chat_template")
                 
                 def encode(self, text, **kwargs):
                     return self.model.tokenize(text.encode())
@@ -341,7 +368,12 @@ class HuggingFaceProvider(AbstractLLMInterface):
                 def decode(self, tokens, **kwargs):
                     return self.model.detokenize(tokens).decode()
             
-            self._tokenizer = GGUFTokenizer(self._model)
+            # Only set model and tokenizer after successful initialization
+            self._model = model
+            self._tokenizer = GGUFTokenizer(model, metadata)
+            self._model_type = "gguf"  # Set model type for GGUF models
+            self._model_loaded = True  # Mark as successfully loaded
+            
             logger.info("Successfully loaded GGUF model")
             
         except ImportError:
@@ -350,141 +382,114 @@ class HuggingFaceProvider(AbstractLLMInterface):
                 "Install it with: pip install llama-cpp-python"
             )
         except Exception as e:
+            # Reset state on failure
+            self._model = None
+            self._tokenizer = None
+            self._model_loaded = False
             raise RuntimeError(f"Failed to load GGUF model: {str(e)}")
 
     def load_model(self) -> None:
-        """Load the model and tokenizer/processor."""
-        try:
-            # Get configuration parameters
-            model_name = self.config_manager.get_param(ModelParameter.MODEL)
-            cache_dir = self.config_manager.get_param("cache_dir")
-            device = self.config_manager.get_param("device", "cpu")
-            trust_remote_code = self.config_manager.get_param("trust_remote_code", True)
-            use_auth_token = self.config_manager.get_param(ModelParameter.API_KEY)
-            
-            # Check for quantized model preference
-            use_quantized = self.config_manager.get_param("quantized_model", False)
-            quant_type = self.config_manager.get_param("quantization_type")
-
-            # Handle HuggingFace Hub authentication
-            if use_auth_token:
-                import huggingface_hub
-                huggingface_hub.login(token=use_auth_token)
-
-            # Check if model_name is a direct URL
-            is_url = self._is_direct_url(model_name)
-            if is_url:
-                logger.info(f"Loading model from direct URL: {model_name}")
-                try:
-                    # Download the model
-                    local_path = self._download_model(model_name, cache_dir)
-                    # Update model_name to use local path
-                    model_name = local_path
-                    # Force quantized model handling for GGUF files
-                    if model_name.endswith('.gguf'):
-                        use_quantized = True
-                        self._load_gguf_model(model_name)
-                        self._model_loaded = True
-                        return
-                except Exception as e:
-                    raise RuntimeError(f"Failed to download model from URL: {str(e)}") from e
-
-            # Determine model architecture and get appropriate classes
-            self._model_type = self._get_model_architecture(model_name)
-            processor_class, model_class = self._get_model_classes(self._model_type)
-            
-            # Log loading strategy
-            if use_quantized:
-                if is_url:
-                    logger.info(f"Loading pre-quantized model from local path: {model_name}")
-                else:
-                    if quant_type:
-                        logger.info(f"Loading pre-quantized model variant: {quant_type}")
-                        model_name = self._get_quantized_model_name(model_name, quant_type)
-                        logger.info(f"Quantized model path: {model_name}")
-            else:
-                logger.info(f"Loading {model_name} as {self._model_type} architecture")
-                if self.config_manager.get_param("load_in_4bit"):
-                    logger.warning("Using on-the-fly 4-bit quantization. This process can take several minutes depending on model size and hardware.")
-                    start_time = time.time()
-                elif self.config_manager.get_param("load_in_8bit"):
-                    logger.warning("Using on-the-fly 8-bit quantization. This process can take several minutes depending on model size and hardware.")
-                    start_time = time.time()
-
-            # Load processor/tokenizer first for vision models
-            if self._model_type in ["vision_seq2seq", "llava"]:
-                self._processor = processor_class.from_pretrained(
-                    model_name if not use_quantized else model_name,
-                    cache_dir=cache_dir,
-                    trust_remote_code=trust_remote_code,
-                    use_auth_token=use_auth_token
-                )
-                if self._model_type == "llava":
-                    self._tokenizer = self._processor.tokenizer
-                    if self._tokenizer.pad_token is None:
-                        self._tokenizer.pad_token = self._tokenizer.eos_token
-                    if self._tokenizer.bos_token is None:
-                        self._tokenizer.bos_token = self._tokenizer.eos_token
-            else:
-                self._tokenizer = processor_class.from_pretrained(
-                    model_name if not use_quantized else model_name,
-                    cache_dir=cache_dir,
-                    trust_remote_code=trust_remote_code,
-                    use_auth_token=use_auth_token
-                )
-                if self._tokenizer.pad_token is None:
-                    self._tokenizer.pad_token = self._tokenizer.eos_token
-                if self._tokenizer.bos_token is None:
-                    self._tokenizer.bos_token = self._tokenizer.eos_token
-
-            # Load the model
-            device_map = "auto" if torch.cuda.is_available() else None
-            torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-
-            # Prepare model loading parameters
-            model_params = {
-                "cache_dir": cache_dir,
-                "trust_remote_code": trust_remote_code,
-                "torch_dtype": torch_dtype,
-                "device_map": device_map,
-                "use_auth_token": use_auth_token
-            }
-
-            # Add quantization parameters if not using pre-quantized model
-            if not use_quantized:
-                model_params.update({
-                    "load_in_4bit": self.config_manager.get_param("load_in_4bit", False),
-                    "load_in_8bit": self.config_manager.get_param("load_in_8bit", False)
-                })
-
-            # Load the model with appropriate parameters
-            self._model = model_class.from_pretrained(
-                model_name if not use_quantized else model_name,
-                **model_params
-            )
-
-            # Log quantization completion time if applicable
-            if not use_quantized and (self.config_manager.get_param("load_in_4bit") or self.config_manager.get_param("load_in_8bit")):
-                end_time = time.time()
-                duration = end_time - start_time
-                logger.info(f"Quantization completed in {duration:.2f} seconds")
-
-            # Move model to device if not using device_map="auto"
-            if device_map is None:
-                self._model.to(device)
-
-            # Resize token embeddings if needed
-            if len(self._tokenizer) > self._model.config.vocab_size:
-                self._model.resize_token_embeddings(len(self._tokenizer))
-
-            self._model_loaded = True
-            logger.info(f"Successfully loaded model")
+        """
+        Load a model from HuggingFace or a direct URL.
         
+        Args:
+            model_name: Model name or URL
+            
+        Raises:
+            RuntimeError: If loading fails
+        """
+        try:
+            # Reset state before loading
+            self._model = None
+            self._tokenizer = None
+            self._model_loaded = False
+            
+            model_name = self.config_manager.get_param(ModelParameter.MODEL)
+            
+            # Check if this is a direct URL
+            if self._is_direct_url(model_name):
+                # For GGUF models from URLs, download and use local path
+                if model_name.endswith('.gguf'):
+                    local_path = self._download_model(model_name)
+                    logger.info(f"Loading GGUF model from {local_path}")
+                    self._load_gguf_model(local_path)
+                    return
+                
+                # For other URLs, let HuggingFace handle it
+                logger.warning(
+                    "Loading models directly from URLs will be deprecated in a future version. "
+                    "Please use model IDs or local paths instead."
+                )
+            
+            # For local GGUF files
+            if model_name.endswith('.gguf'):
+                if os.path.exists(model_name):
+                    logger.info(f"Loading local GGUF model from {model_name}")
+                    self._load_gguf_model(model_name)
+                    return
+                else:
+                    raise RuntimeError(f"GGUF model file not found: {model_name}")
+            
+            # For HuggingFace models
+            logger.info(f"Loading model {model_name} using transformers")
+            
+            # Get quantization parameters
+            load_in_4bit = self.config_manager.get_param("load_in_4bit", False)
+            load_in_8bit = self.config_manager.get_param("load_in_8bit", False)
+            
+            if load_in_4bit or load_in_8bit:
+                logger.warning(
+                    "On-the-fly quantization can take several minutes. "
+                    "Consider using a pre-quantized model for faster loading."
+                )
+                start_time = time.time()
+            
+            try:
+                # Load the model with appropriate quantization
+                if load_in_4bit:
+                    model = AutoModelForCausalLM.from_pretrained(
+                        model_name,
+                        device_map="auto",
+                        load_in_4bit=True
+                    )
+                elif load_in_8bit:
+                    model = AutoModelForCausalLM.from_pretrained(
+                        model_name,
+                        device_map="auto",
+                        load_in_8bit=True
+                    )
+                else:
+                    model = AutoModelForCausalLM.from_pretrained(model_name)
+                
+                # Load tokenizer
+                tokenizer = AutoTokenizer.from_pretrained(model_name)
+                
+                # Only set model and tokenizer after successful loading
+                self._model = model
+                self._tokenizer = tokenizer
+                self._model_type = "causal_lm"  # Set default type for HF models
+                self._model_loaded = True  # Mark as successfully loaded
+                
+                if load_in_4bit or load_in_8bit:
+                    elapsed = time.time() - start_time
+                    logger.info(f"Quantization completed in {elapsed:.1f} seconds")
+                
+                logger.info("Successfully loaded model and tokenizer")
+                
+            except Exception as e:
+                # Reset state on failure
+                self._model = None
+                self._tokenizer = None
+                self._model_loaded = False
+                raise RuntimeError(f"Failed to load HuggingFace model: {str(e)}")
+            
         except Exception as e:
-            error_msg = f"Failed to load model {model_name}: {str(e)}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg) from e
-    
+            # Reset state on any failure
+            self._model = None
+            self._tokenizer = None
+            self._model_loaded = False
+            raise RuntimeError(f"Failed to load model: {str(e)}")
+
     def _move_inputs_to_device(self, inputs: Dict[str, torch.Tensor], device: str) -> Dict[str, torch.Tensor]:
         """Move input tensors to the specified device."""
         if device == "cpu":
@@ -495,14 +500,14 @@ class HuggingFaceProvider(AbstractLLMInterface):
         """
         Get the model's prompt format configuration.
         
-        This method tries multiple approaches to determine the correct prompt format:
-        1. Check model config for chat_template
-        2. Check tokenizer for chat_template
-        3. Use known model patterns
-        4. Fall back to default format
+        Args:
+            model_name: Name or path of the model
+            
+        Returns:
+            Dict containing prompt format configuration
         """
+        # Default format configuration
         format_info = {
-            "is_chat_model": False,
             "template": None,
             "roles": {
                 "system": "System: ",
@@ -512,78 +517,128 @@ class HuggingFaceProvider(AbstractLLMInterface):
         }
         
         try:
-            # Try to get config-based template
-            config = AutoConfig.from_pretrained(model_name)
-            if hasattr(config, "chat_template"):
-                format_info["template"] = config.chat_template
-                format_info["is_chat_model"] = True
+            # Check if this is a GGUF model
+            if model_name.endswith('.gguf'):
+                # For GGUF models, check if we have metadata with a chat template
+                if hasattr(self._model, 'metadata'):
+                    metadata = self._model.metadata  # Access as property, not method
+                    if 'tokenizer.chat_template' in metadata:
+                        format_info["template"] = metadata['tokenizer.chat_template']
+                        return format_info
+                    
+                    # If no template in metadata, try to infer from model name
+                    model_name_lower = model_name.lower()
+                    if 'phi' in model_name_lower:
+                        format_info["roles"] = {
+                            "system": "System: ",
+                            "user": "Instruct: ",
+                            "assistant": "Output: "
+                        }
+                    elif 'llama' in model_name_lower:
+                        format_info["roles"] = {
+                            "system": "<s>[INST] ",
+                            "user": "[INST] ",
+                            "assistant": "[/INST]"
+                        }
+                    elif 'mistral' in model_name_lower:
+                        format_info["roles"] = {
+                            "system": "<s>[INST] ",
+                            "user": "[INST] ",
+                            "assistant": "[/INST]"
+                        }
                 return format_info
             
-            # Check tokenizer for chat template
-            if hasattr(self._tokenizer, "chat_template"):
-                format_info["template"] = self._tokenizer.chat_template
-                format_info["is_chat_model"] = True
-                return format_info
+            # For HuggingFace models, try to get config
+            try:
+                config_path = os.path.join(
+                    os.path.dirname(model_name), "config.json"
+                )
+                if os.path.exists(config_path):
+                    with open(config_path, 'r') as f:
+                        config = json.load(f)
+                        if 'prompt_format' in config:
+                            format_info["template"] = config['prompt_format']
+                            return format_info
+            except Exception as e:
+                logger.debug(f"Could not load model config: {e}")
             
-            # Check for known model patterns
+            # If no config found or no prompt format in config,
+            # try to infer from model name
             model_name_lower = model_name.lower()
-            if "phi" in model_name_lower:
+            if 'phi' in model_name_lower:
                 format_info["roles"] = {
                     "system": "System: ",
-                    "user": "Human: ",
-                    "assistant": "Assistant: "
+                    "user": "Instruct: ",
+                    "assistant": "Output: "
                 }
-            elif "llama" in model_name_lower:
+            elif 'llama' in model_name_lower:
                 format_info["roles"] = {
                     "system": "<s>[INST] ",
                     "user": "[INST] ",
-                    "assistant": " [/INST]"
+                    "assistant": "[/INST]"
                 }
-            elif "mistral" in model_name_lower:
+            elif 'mistral' in model_name_lower:
                 format_info["roles"] = {
-                    "system": "<|system|>\n",
-                    "user": "<|user|>\n",
-                    "assistant": "<|assistant|>\n"
+                    "system": "<s>[INST] ",
+                    "user": "[INST] ",
+                    "assistant": "[/INST]"
                 }
-        
+            
+            return format_info
+            
         except Exception as e:
-            logger.warning(f"Failed to get model format config: {e}, using default format")
-        
-        return format_info
+            logger.warning(f"Error getting prompt format: {e}, using default format")
+            return format_info
 
     def _format_prompt(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """
         Format the prompt according to the model's requirements.
+        
+        Args:
+            prompt: The input prompt
+            system_prompt: Optional system prompt
+            
+        Returns:
+            Formatted prompt string
         """
-        model_name = self.config_manager.get_param(ModelParameter.MODEL)
-        format_info = self._get_model_prompt_format(model_name)
-        
-        # If model has a template, use it
-        if format_info["template"]:
-            messages = []
+        try:
+            model_name = self.config_manager.get_param(ModelParameter.MODEL)
+            format_info = self._get_model_prompt_format(model_name)
+            
+            # If model has a chat template and we have a tokenizer that supports it
+            if (format_info["template"] and hasattr(self._tokenizer, "apply_chat_template")):
+                messages = []
+                if system_prompt:
+                    messages.append({"role": "system", "content": system_prompt})
+                messages.append({"role": "user", "content": prompt})
+                return self._tokenizer.apply_chat_template(messages, tokenize=False)
+            
+            # Otherwise use role-based formatting
+            roles = format_info["roles"]
             if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
-            messages.append({"role": "user", "content": prompt})
-            return self._tokenizer.apply_chat_template(messages, tokenize=False)
-        
-        # Otherwise use role-based formatting
-        roles = format_info["roles"]
-        if system_prompt:
-            formatted = f"{roles['system']}{system_prompt}\n\n{roles['user']}{prompt}\n\n{roles['assistant']}"
-        else:
-            formatted = f"{roles['user']}{prompt}\n\n{roles['assistant']}"
-        
-        return formatted
+                formatted = f"{roles['system']}{system_prompt}\n\n{roles['user']}{prompt}\n{roles['assistant']}"
+            else:
+                formatted = f"{roles['user']}{prompt}\n{roles['assistant']}"
+            
+            return formatted.strip()
+            
+        except Exception as e:
+            logger.warning(f"Error formatting prompt: {e}, using basic format")
+            # Fallback to basic format
+            if system_prompt:
+                return f"System: {system_prompt}\n\nHuman: {prompt}\nAssistant:"
+            return f"Human: {prompt}\nAssistant:"
     
     def _verify_model_state(self) -> None:
         """Verify that the model is in a valid state for generation."""
         try:
-            if not self._model_loaded:
-                raise RuntimeError("Model not loaded")
+            if not self._model_loaded or self._model is None:
+                raise RuntimeError("Model not loaded or initialization incomplete")
             
-            # For GGUF models using llama-cpp-python
-            if hasattr(self._model, 'model_path'):
-                # GGUF models are always ready if loaded
+            # For GGUF models
+            if self._model_type == "gguf":
+                if not hasattr(self._model, 'model_path'):
+                    raise RuntimeError("GGUF model not properly initialized")
                 return
             
             # For PyTorch models
@@ -597,9 +652,11 @@ class HuggingFaceProvider(AbstractLLMInterface):
                         "This may cause issues."
                     )
             else:
-                raise RuntimeError("Unknown model type - neither GGUF nor PyTorch")
+                raise RuntimeError(f"Unknown model type: {self._model_type}")
             
         except Exception as e:
+            # Reset state on verification failure
+            self._model_loaded = False
             raise RuntimeError(f"Model state verification failed: {e}")
 
     def _get_generation_config(self) -> Dict[str, Any]:
