@@ -225,12 +225,49 @@ llm = create_llm("ollama",
 ```python
 from abstractllm import create_llm, ModelParameter
 
+# Using a HuggingFace model directly
 llm = create_llm("huggingface", 
                 **{
-                    ModelParameter.MODEL: "google/gemma-7b",
-                    ModelParameter.LOAD_IN_8BIT: True,
-                    ModelParameter.DEVICE_MAP: "auto"
+                    ModelParameter.MODEL: "ibm-granite/granite-3.2-2b-instruct",
+                    # Device will be automatically detected (CUDA, MPS, or CPU)
+                    ModelParameter.DEVICE: "auto",
+                    ModelParameter.TEMPERATURE: 0.7
                 })
+
+# Using a pre-quantized GGUF model from HuggingFace
+llm = create_llm("huggingface", 
+                **{
+                    ModelParameter.MODEL: "https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_L.gguf",
+                    # Device will be automatically detected for GGUF models
+                    ModelParameter.DEVICE: "auto"
+                })
+
+# Using on-the-fly quantization
+llm = create_llm("huggingface", 
+                **{
+                    ModelParameter.MODEL: "microsoft/Phi-4-mini-instruct",
+                    ModelParameter.LOAD_IN_4BIT: True,  # Enable 4-bit quantization
+                    ModelParameter.DEVICE_MAP: "auto"  # Automatic device mapping
+                })
+```
+
+The HuggingFace provider supports:
+- Automatic device detection (CUDA for NVIDIA GPUs, MPS for Apple Silicon, CPU fallback)
+- Direct loading of HuggingFace models
+- Loading pre-quantized GGUF models
+- On-the-fly quantization (4-bit and 8-bit)
+- Automatic device mapping for large models
+
+Command-line examples:
+```bash
+# Using a HuggingFace model directly
+python query.py "what is AI ?" --provider huggingface --model ibm-granite/granite-3.2-2b-instruct
+
+# Using a pre-quantized GGUF model
+python query.py "what is AI ?" --provider huggingface --model https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_L.gguf
+
+# Using a higher quality quantized model
+python query.py "what is AI ?" --provider huggingface --model https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q6_K_L.gguf
 ```
 
 #### Important Note About HuggingFace Models
