@@ -766,12 +766,24 @@ class HuggingFaceProvider(AbstractLLMInterface):
             formatted_prompt = self._format_prompt(prompt, system_prompt)
             logger.debug("Formatted prompt: %s", formatted_prompt)
             
+            # Get model name and temperature for logging
+            model = self.config_manager.get_param(ModelParameter.MODEL)
+            temperature = self.config_manager.get_param(ModelParameter.TEMPERATURE, 0.7)
+            max_tokens = self.config_manager.get_param(ModelParameter.MAX_TOKENS, 2048)
+            
+            # Log request before generation
+            log_request("huggingface", prompt, {
+                "model": model,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "has_system_prompt": system_prompt is not None,
+                "stream": stream,
+                "has_files": bool(files),
+                "model_type": self._model_type
+            })
+            
             # Handle GGUF models differently
             if hasattr(self._model, 'model_path'):
-                # Get generation parameters
-                temperature = self.config_manager.get_param(ModelParameter.TEMPERATURE, 0.7)
-                max_tokens = self.config_manager.get_param(ModelParameter.MAX_TOKENS, 2048)
-                
                 # Generate using llama-cpp-python
                 completion = self._model.create_completion(
                     formatted_prompt,

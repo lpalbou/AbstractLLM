@@ -6,7 +6,7 @@
 
 A lightweight, unified interface for interacting with multiple Large Language Model providers.
 
-Version: 0.4.0
+Version: 0.4.5
 
 ## Features
 
