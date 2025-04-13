@@ -200,21 +200,18 @@ class RequestTimeoutError(AbstractLLMError):
 
 class ContentFilterError(AbstractLLMError):
     """
-    Raised when content is filtered by the provider's safety measures.
-    
-    This typically occurs when the prompt or expected response violates
-    the provider's content policies.
+    Raised when content is filtered or blocked by the provider's content policy.
     """
     pass
 
 
 class ContextWindowExceededError(InvalidRequestError):
     """
-    Raised when the combined input and expected output exceeds the model's context window.
+    Raised when the input exceeds the model's context window.
     
     Args:
         context_window: The maximum context window size
-        content_length: The length of the provided content
+        content_length: The actual length of the content
     """
     
     def __init__(self, context_window: int, content_length: int, 
@@ -226,17 +223,18 @@ class ContextWindowExceededError(InvalidRequestError):
         
         # Build default message if not provided
         if message is None:
-            message = f"Content length ({content_length}) exceeds maximum context window ({context_window})"
+            message = f"Content length ({content_length}) exceeds context window ({context_window})"
             
         super().__init__(message, provider, original_exception, details)
 
 
 class UnsupportedFeatureError(AbstractLLMError):
     """
-    Raised when attempting to use a feature not supported by the current provider/model.
+    Raised when attempting to use a feature not supported by the provider or model.
     
     Args:
-        feature: The unsupported feature name
+        feature: The unsupported feature
+        message: Optional custom error message
     """
     
     def __init__(self, feature: Union[str, Any], message: Optional[str] = None,
@@ -246,22 +244,17 @@ class UnsupportedFeatureError(AbstractLLMError):
         
         # Build default message if not provided
         if message is None:
-            message = f"Feature '{feature}' is not supported by this provider/model"
+            message = f"Feature '{feature}' is not supported"
             
         super().__init__(message, provider, original_exception, details)
 
 
 class UnsupportedOperationError(AbstractLLMError):
     """
-    Raised when attempting to perform an operation that is not supported.
-    
-    This is different from UnsupportedFeatureError in that it deals with
-    specific operations rather than general features. For example, a model
-    might support the vision feature but not support certain operations
-    with images.
+    Raised when attempting an operation that is not supported.
     
     Args:
-        operation: The unsupported operation name
+        operation: The unsupported operation
         reason: Optional reason why the operation is not supported
     """
     
@@ -279,31 +272,37 @@ class UnsupportedOperationError(AbstractLLMError):
         super().__init__(message, provider, original_exception, details)
 
 
-class ImageProcessingError(AbstractLLMError):
+class MediaProcessingError(AbstractLLMError):
     """
-    Raised when there is an error processing an image for vision models.
+    Raised when there is an error processing media inputs.
+    
+    Args:
+        message: Description of the error
+        media_type: Type of media that caused the error
     """
-    pass
+    
+    def __init__(self, message: str, 
+                 media_type: Optional[str] = None,
+                 provider: Optional[str] = None,
+                 original_exception: Optional[Exception] = None,
+                 details: Optional[Dict[str, Any]] = None):
+        self.media_type = media_type
+        
+        # Add media type to message if provided
+        if media_type:
+            message = f"[{media_type}] {message}"
+            
+        super().__init__(message, provider, original_exception, details)
 
 
 class FileProcessingError(AbstractLLMError):
     """
-    Raised when there is an error processing a file input.
-    
-    This can occur when:
-    - File cannot be read or accessed
-    - File format is invalid or unsupported
-    - File content cannot be processed
-    - File conversion fails
-    - File size exceeds limits
+    Raised when there is an error processing files.
     
     Args:
         message: Description of the error
-        provider: The provider name that raised the error
-        original_exception: The original exception that was caught
-        details: Additional details about the error (e.g., file path, file type)
         file_path: Path to the file that caused the error
-        file_type: Type of file that was being processed
+        file_type: Type of file that caused the error
     """
     
     def __init__(self, message: str, provider: Optional[str] = None,
@@ -311,59 +310,162 @@ class FileProcessingError(AbstractLLMError):
                  details: Optional[Dict[str, Any]] = None,
                  file_path: Optional[str] = None,
                  file_type: Optional[str] = None):
-        super().__init__(message, provider, original_exception, details)
         self.file_path = file_path
         self.file_type = file_type
         
         # Add file info to details
-        if file_path:
-            self.details["file_path"] = file_path
-        if file_type:
-            self.details["file_type"] = file_type
+        if file_path or file_type:
+            details = details or {}
+            if file_path:
+                details["file_path"] = file_path
+            if file_type:
+                details["file_type"] = file_type
+            
+        super().__init__(message, provider, original_exception, details)
 
 
-# Mapping of common provider-specific error codes to AbstractLLM exceptions
-# This helps normalize error handling across providers
-PROVIDER_ERROR_MAPPING = {
-    "openai": {
-        "authentication_error": AuthenticationError,
-        "invalid_request_error": InvalidRequestError,
-        "rate_limit_exceeded": QuotaExceededError,
-        "quota_exceeded": QuotaExceededError,
-        "context_length_exceeded": ContextWindowExceededError,
-        "content_filter": ContentFilterError,
-    },
-    "anthropic": {
-        "authentication_error": AuthenticationError,
-        "invalid_request": InvalidRequestError,
-        "rate_limit_error": QuotaExceededError,
-        "context_window_exceeded": ContextWindowExceededError,
-        "content_policy_violation": ContentFilterError,
-    },
-    # Add mappings for other providers as needed
-}
+class InvalidInputError(InvalidRequestError):
+    """
+    Raised when input validation fails.
+    
+    Args:
+        message: Description of the error
+        input_type: Type of input that failed validation
+        validation_error: Specific validation error message
+    """
+    
+    def __init__(self, message: str, input_type: Optional[str] = None,
+                 validation_error: Optional[str] = None,
+                 provider: Optional[str] = None,
+                 original_exception: Optional[Exception] = None,
+                 details: Optional[Dict[str, Any]] = None):
+        self.input_type = input_type
+        self.validation_error = validation_error
+        
+        # Add validation info to details
+        if input_type or validation_error:
+            details = details or {}
+            if input_type:
+                details["input_type"] = input_type
+            if validation_error:
+                details["validation_error"] = validation_error
+            
+        super().__init__(message, provider, original_exception, details)
+
+
+# Alias for backward compatibility
+ModelLoadError = ModelLoadingError
+
+
+class AudioOutputError(AbstractLLMError):
+    """
+    Raised when there is an error with audio output processing.
+    
+    Args:
+        message: Description of the error
+        device_info: Information about the audio device
+        audio_format: Information about the audio format
+    """
+    
+    def __init__(self, message: str, device_info: Optional[Dict[str, Any]] = None,
+                 audio_format: Optional[Dict[str, Any]] = None,
+                 provider: Optional[str] = None,
+                 original_exception: Optional[Exception] = None,
+                 details: Optional[Dict[str, Any]] = None):
+        self.device_info = device_info
+        self.audio_format = audio_format
+        
+        # Add audio info to details
+        if device_info or audio_format:
+            details = details or {}
+            if device_info:
+                details["device_info"] = device_info
+            if audio_format:
+                details["audio_format"] = audio_format
+            
+        super().__init__(message, provider, original_exception, details)
+
+
+class ResourceError(AbstractLLMError):
+    """
+    Raised when there are insufficient resources to perform an operation.
+    
+    This can occur due to:
+    - Insufficient memory (RAM/VRAM)
+    - Insufficient disk space
+    - CPU/GPU resource constraints
+    - Other system resource limitations
+    
+    Args:
+        message: Description of the error
+        resource_type: Type of resource that is insufficient
+        required: Required amount of resource
+        available: Available amount of resource
+    """
+    
+    def __init__(self, message: str,
+                 resource_type: Optional[str] = None,
+                 required: Optional[Union[int, str]] = None,
+                 available: Optional[Union[int, str]] = None,
+                 provider: Optional[str] = None,
+                 original_exception: Optional[Exception] = None,
+                 details: Optional[Dict[str, Any]] = None):
+        self.resource_type = resource_type
+        self.required = required
+        self.available = available
+        
+        # Add resource info to details
+        if resource_type or required or available:
+            details = details or {}
+            if resource_type:
+                details["resource_type"] = resource_type
+            if required:
+                details["required"] = required
+            if available:
+                details["available"] = available
+            
+        super().__init__(message, provider, original_exception, details)
 
 
 def map_provider_error(provider: str, error_type: str, 
                        message: str, original_exception: Optional[Exception] = None,
                        details: Optional[Dict[str, Any]] = None) -> AbstractLLMError:
     """
-    Map a provider-specific error to an AbstractLLM exception.
+    Map provider-specific errors to AbstractLLM exceptions.
     
     Args:
-        provider: The provider name
-        error_type: The provider-specific error type
-        message: The error message
-        original_exception: The original exception
+        provider: Provider name
+        error_type: Provider's error type
+        message: Error message
+        original_exception: Original exception from provider
         details: Additional error details
         
     Returns:
-        An appropriate AbstractLLMError subclass instance
+        Appropriate AbstractLLM exception
     """
-    provider_mapping = PROVIDER_ERROR_MAPPING.get(provider, {})
-    error_class = provider_mapping.get(error_type, ProviderAPIError)
+    # Common error mappings
+    error_map = {
+        "auth": AuthenticationError,
+        "quota": QuotaExceededError,
+        "invalid_request": InvalidRequestError,
+        "timeout": RequestTimeoutError,
+        "connection": ProviderConnectionError,
+        "model_not_found": ModelNotFoundError,
+        "content_filter": ContentFilterError,
+        "context_window": ContextWindowExceededError,
+        "unsupported_feature": UnsupportedFeatureError,
+        "resource": ResourceError,
+        "media": MediaProcessingError,
+        "file": FileProcessingError,
+        "input": InvalidInputError,
+        "audio": AudioOutputError
+    }
     
-    return error_class(
+    # Get exception class
+    exception_class = error_map.get(error_type, ProviderAPIError)
+    
+    # Create and return exception
+    return exception_class(
         message=message,
         provider=provider,
         original_exception=original_exception,

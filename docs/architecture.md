@@ -1,301 +1,199 @@
-# AbstractLLM Architecture Overview
+# AbstractLLM Architecture
 
-## Core Architecture
+## Overview
 
-AbstractLLM follows a modular, provider-based architecture that emphasizes extensibility, maintainability, and ease of use. The system is designed to provide a unified interface for interacting with various LLM providers while maintaining provider-specific optimizations.
+AbstractLLM is designed with modularity and extensibility in mind, built around three core concepts:
+1. Provider abstraction
+2. Pipeline-based model handling
+3. Unified media processing
+
+## System Architecture
 
 ```mermaid
-flowchart TD
-    A[User Code] -->|create_llm| B[LLM Factory]
-    B -->|instantiate| C[Base Provider]
-    C -->|implements| D[Provider Interface]
-    D -->|uses| E[Configuration Manager]
-    D -->|uses| F[Media Factory]
-    D -->|uses| G[Token Counter]
-    E -->|manages| H[Provider Config]
-    F -->|processes| I[Media Inputs]
-    G -->|estimates| J[Token Usage]
+graph TD
+    A[User Interface] --> B[Provider Layer]
+    B --> C[OpenAI Provider]
+    B --> D[Anthropic Provider]
+    B --> E[HuggingFace Provider]
+    B --> F[Ollama Provider]
+    
+    E --> G[Pipeline Factory]
+    G --> H[Text Pipeline]
+    G --> I[Vision Pipeline]
+    G --> J[QA Pipeline]
+    G --> K[Classification Pipeline]
+    G --> L[Document QA Pipeline]
+    G --> M[Visual QA Pipeline]
+    G --> N[TTS Pipeline]
+    
+    O[Media System] --> P[Media Factory]
+    P --> Q[Image Input]
+    P --> R[Text Input]
+    P --> S[Tabular Input]
+    
+    Q --> T[Provider Format]
+    R --> T
+    S --> T
+    T --> U[Pipeline Input]
 ```
 
-## Component Overview
+## Core Components
 
-### 1. Provider System
+### 1. Provider Layer
+The provider layer implements the AbstractLLM interface for different LLM providers:
 
-The provider system is the core of AbstractLLM, implementing a clean abstraction layer for different LLM services:
-
-```python
-class BaseProvider:
-    def __init__(self, config_manager: ConfigurationManager):
-        self.config_manager = config_manager
-        self.initialize()
-
-    @abstractmethod
-    def generate(self, prompt: str, **kwargs) -> str:
-        """Generate text from prompt"""
-        pass
-
-    @abstractmethod
-    def generate_async(self, prompt: str, **kwargs) -> Awaitable[str]:
-        """Generate text asynchronously"""
-        pass
+```mermaid
+graph TD
+    A[AbstractLLM Interface] --> B[Provider Implementation]
+    B --> C[Configuration]
+    B --> D[Media Handling]
+    B --> E[Pipeline Selection]
+    B --> F[Resource Management]
 ```
 
-Key Features:
-- Unified interface for all providers
-- Consistent error handling
-- Standardized configuration management
-- Automatic token counting
-- Media input processing
-- Streaming support
-- Async/sync implementations
+### 2. Pipeline System
+The pipeline system manages different model architectures:
 
-### 2. Configuration Management
-
-The configuration system provides a centralized way to manage provider settings:
-
-```python
-class ConfigurationManager:
-    def __init__(self, provider: str, **kwargs):
-        self.provider = provider
-        self.config = self._create_config(**kwargs)
-        self._validate_config()
-
-    def get_param(self, key: str, default: Any = None) -> Any:
-        """Get configuration parameter"""
-        return self.config.get(key, default)
-
-    def update_config(self, **kwargs) -> None:
-        """Update configuration parameters"""
-        self.config.update(kwargs)
-        self._validate_config()
+```mermaid
+graph LR
+    A[Pipeline Factory] --> B[Model Detection]
+    B --> C[Architecture Selection]
+    C --> D[Pipeline Creation]
+    D --> E[Resource Management]
 ```
 
-Features:
-- Parameter validation
-- Environment variable integration
-- Provider-specific defaults
-- Runtime configuration updates
-- Type safety
-- Caching settings
+Currently implemented pipelines:
+- Text Generation (CAUSAL_LM)
+- Text-to-Text (SEQ2SEQ_LM)
+- Image-to-Text (VISION2SEQ)
+- Question Answering (QUESTION_ANSWERING)
+- Text Classification (TEXT_CLASSIFICATION)
+- Document QA (DOCUMENT_QA)
+- Visual QA (VISUAL_QA)
+- Text-to-Speech (TEXT_TO_SPEECH)
 
-### 3. Media Factory
+Planned pipelines:
+- Token Classification (TOKEN_CLASSIFICATION)
+- Speech-to-Text (SPEECH_TO_TEXT)
 
-The media handling system processes various input types:
+### 3. Media System
+The media system handles various input types:
 
-```python
-class MediaFactory:
-    @classmethod
-    def process_files(cls, files: List[str], **kwargs) -> List[MediaInput]:
-        """Process multiple files"""
-        return [cls.process_file(f, **kwargs) for f in files]
-
-    @classmethod
-    def process_file(cls, file_path: str, **kwargs) -> MediaInput:
-        """Process single file"""
-        media_type = cls._detect_media_type(file_path)
-        return cls._create_processor(media_type).process(file_path, **kwargs)
+```mermaid
+graph TD
+    A[Media Factory] --> B[Media Detection]
+    B --> C[Format Conversion]
+    C --> D[Provider Format]
+    D --> E[Pipeline Input]
 ```
 
-Capabilities:
-- Automatic format detection
-- Provider-specific formatting
-- Image processing and optimization
-- Text file handling
-- Future audio/video support
-- Caching mechanisms
+## Component Interactions
 
-### 4. Token Counter
-
-The token counting system provides accurate token estimates:
-
-```python
-class TokenCounter:
-    def __init__(self, provider: str, model: str):
-        self.provider = provider
-        self.model = model
-        self._initialize_tokenizer()
-
-    def count_tokens(self, text: str) -> int:
-        """Count tokens in text"""
-        return self._tokenizer.count_tokens(text)
-
-    def estimate_tokens(self, **kwargs) -> int:
-        """Estimate tokens for generation"""
-        return self._estimate_completion_tokens(**kwargs)
-```
-
-Features:
-- Provider-specific tokenizers
-- Accurate token estimation
-- Completion token prediction
-- Cache optimization
-- Model-specific counting
-
-## Data Flow
-
-### 1. Generation Flow
-
+### Provider to Pipeline Flow
 ```mermaid
 sequenceDiagram
-    participant User
-    participant Provider
-    participant Config
-    participant Media
-    participant Tokens
-
-    User->>Provider: generate(prompt, **kwargs)
-    Provider->>Config: get_generation_params()
-    Provider->>Media: process_inputs(files)
-    Provider->>Tokens: estimate_tokens()
-    Provider->>Provider: _prepare_request()
-    Provider->>API: send_request()
-    API->>Provider: response
-    Provider->>User: formatted_response
+    participant U as User
+    participant P as Provider
+    participant F as Factory
+    participant M as Model Pipeline
+    
+    U->>P: generate(prompt, files)
+    P->>F: create_pipeline()
+    F->>M: load_model()
+    M-->>P: ready
+    P->>M: process(inputs)
+    M-->>P: result
+    P-->>U: response
 ```
 
-### 2. Configuration Flow
-
+### Media to Pipeline Flow
 ```mermaid
 sequenceDiagram
-    participant User
-    participant Factory
-    participant Config
-    participant Provider
-
-    User->>Factory: create_llm(provider, **kwargs)
-    Factory->>Config: create_config_manager(provider, kwargs)
-    Config->>Config: validate_config()
-    Config->>Provider: initialize(config)
-    Provider->>User: llm_instance
+    participant U as User
+    participant M as Media Factory
+    participant P as Pipeline
+    participant F as Provider Format
+    
+    U->>M: process_files()
+    M->>F: convert_format()
+    F->>P: provide_input()
+    P->>P: process()
+    P-->>U: result
 ```
 
-## Provider Implementation
+## Resource Management
 
-### Base Structure
-
-Each provider implements the following interface:
-
-```python
-class ProviderInterface(Protocol):
-    def generate(self, prompt: str, **kwargs) -> str:
-        """Generate completion"""
-        pass
-
-    def generate_async(self, prompt: str, **kwargs) -> Awaitable[str]:
-        """Generate completion asynchronously"""
-        pass
-
-    def count_tokens(self, text: str) -> int:
-        """Count tokens in text"""
-        pass
-
-    def get_capabilities(self) -> Dict[str, bool]:
-        """Get provider capabilities"""
-        pass
+### Model Loading
+```mermaid
+graph TD
+    A[Request Model] --> B[Check Cache]
+    B --> C{Cached?}
+    C -->|Yes| D[Load from Cache]
+    C -->|No| E[Load New Model]
+    E --> F[Cache Model]
+    F --> G[Return Model]
+    D --> G
 ```
 
-### Provider-Specific Features
+### Memory Management
+```mermaid
+graph TD
+    A[Resource Request] --> B[Check Available]
+    B --> C{Sufficient?}
+    C -->|Yes| D[Allocate]
+    C -->|No| E[Cleanup Old]
+    E --> F[Try Again]
+    F --> B
+```
 
-1. **OpenAI**
-   - GPT-4V support
-   - Function calling
-   - Streaming responses
-   - System messages
+## Error Handling
 
-2. **Anthropic**
-   - Claude 3 support
-   - Multi-turn conversations
-   - Image analysis
-   - Tool use
-
-3. **HuggingFace**
-   - Local model support
-   - Custom model loading
-   - Vision models
-   - Quantization
-
-4. **Ollama**
-   - Local deployment
-   - Model management
-   - Custom models
-   - GPU acceleration
+```mermaid
+graph TD
+    A[Error Detection] --> B[Error Classification]
+    B --> C[Error Handling]
+    C --> D[Resource Cleanup]
+    D --> E[User Feedback]
+```
 
 ## Extension Points
 
-The system provides several extension points for customization:
-
-1. **Custom Providers**
+1. **New Providers**:
    ```python
-   class CustomProvider(BaseProvider):
+   class NewProvider(AbstractLLMInterface):
+       def __init__(self, config: Optional[Dict[str, Any]] = None):
+           super().__init__(config)
+           
        def generate(self, prompt: str, **kwargs) -> str:
-           # Custom implementation
+           # Implementation
            pass
    ```
 
-2. **Media Processors**
+2. **New Pipelines**:
    ```python
-   class CustomMediaProcessor(MediaProcessor):
-       def process(self, input_data: Any) -> MediaInput:
-           # Custom processing
+   class NewPipeline(BasePipeline):
+       def load(self, model_name: str, config: ModelConfig) -> None:
+           # Load model and components
+           pass
+           
+       def process(self, inputs: List[MediaInput], **kwargs) -> Any:
+           # Process inputs
            pass
    ```
 
-3. **Token Counters**
+3. **New Media Types**:
    ```python
-   class CustomTokenCounter(TokenCounter):
-       def count_tokens(self, text: str) -> int:
-           # Custom counting logic
+   class NewMediaInput(MediaInput):
+       def to_provider_format(self, provider: str) -> Any:
+           # Convert to provider format
            pass
+           
+       @property
+       def media_type(self) -> str:
+           return "new_type"
    ```
 
-## Best Practices
-
-1. **Provider Implementation**
-   - Implement both sync and async methods
-   - Handle rate limiting gracefully
-   - Provide meaningful error messages
-   - Support streaming when possible
-
-2. **Configuration Management**
-   - Use environment variables for secrets
-   - Validate all inputs
-   - Provide sensible defaults
-   - Document all parameters
-
-3. **Media Handling**
-   - Process files efficiently
-   - Implement proper cleanup
-   - Handle large files carefully
-   - Support common formats
-
-4. **Error Handling**
-   - Use custom exceptions
-   - Provide context in errors
-   - Implement retries
-   - Log meaningful information
-
-## Future Enhancements
-
-1. **Provider Enhancements**
-   - Additional provider support
-   - Enhanced streaming capabilities
-   - Better error recovery
-   - Advanced caching
-
-2. **Media Support**
-   - Audio processing
-   - Video handling
-   - Document parsing
-   - Format conversion
-
-3. **Performance**
-   - Parallel processing
-   - Better caching
-   - Memory optimization
-   - Response streaming
-
-4. **Developer Experience**
-   - Enhanced debugging
-   - Better documentation
-   - More examples
-   - Testing utilities 
+## Cross-References
+- [Data Flow Documentation](data_flow.md)
+- [Media System Documentation](../abstractllm/media/README.md)
+- [Pipeline Implementation Guide](../abstractllm/providers/huggingface/README.md) 

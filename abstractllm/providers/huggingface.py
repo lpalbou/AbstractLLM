@@ -110,7 +110,7 @@ class HuggingFaceProvider(AbstractLLMInterface):
             "trust_remote_code": True,
             "load_in_8bit": False,  # Enable 8-bit quantization by default
             "load_in_4bit": True,
-            "device_map": "auto",
+            "device_map": self._get_optimal_device() ,
             "attn_implementation": "flash_attention_2",  # More memory efficient attention
             "torch_dtype": "auto",
             "low_cpu_mem_usage": True,

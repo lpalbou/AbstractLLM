@@ -9,6 +9,18 @@ from pathlib import Path
 from abstractllm.utils.config import ConfigurationManager
 from abstractllm.enums import ModelParameter, ModelCapability
 
+class OutputHandler(ABC):
+    """Abstract base class for output handlers."""
+    
+    @abstractmethod
+    def handle(self, output: Union[str, Generator[str, None, None]]) -> None:
+        """Handle output from the model.
+        
+        Args:
+            output: Text output from the model (string or generator)
+        """
+        pass
+
 class AbstractLLMInterface(ABC):
     """
     Abstract interface for LLM providers.
@@ -26,6 +38,52 @@ class AbstractLLMInterface(ABC):
         """
         # Initialize config manager
         self.config_manager = ConfigurationManager(config or {})
+        
+        # Initialize output handlers
+        self._output_handlers: List[OutputHandler] = []
+    
+    def add_output_handler(self, handler: OutputHandler) -> None:
+        """Add an output handler.
+        
+        Args:
+            handler: Output handler instance
+        """
+        self._output_handlers.append(handler)
+    
+    def remove_output_handler(self, handler: OutputHandler) -> None:
+        """Remove an output handler.
+        
+        Args:
+            handler: Output handler instance to remove
+        """
+        if handler in self._output_handlers:
+            self._output_handlers.remove(handler)
+    
+    def clear_output_handlers(self) -> None:
+        """Remove all output handlers."""
+        self._output_handlers.clear()
+    
+    def _handle_output(self, output: Union[str, Generator[str, None, None]]) -> Union[str, Generator[str, None, None]]:
+        """Process output through all handlers and return it.
+        
+        Args:
+            output: Model output to process
+            
+        Returns:
+            The original output (after processing by handlers)
+        """
+        # Process through all handlers
+        for handler in self._output_handlers:
+            try:
+                handler.handle(output)
+            except Exception as e:
+                # Log error but continue with other handlers
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Output handler {handler.__class__.__name__} failed: {e}")
+        
+        # Return original output
+        return output
     
     @abstractmethod
     def generate(self, 

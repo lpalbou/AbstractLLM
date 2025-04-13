@@ -13,7 +13,7 @@ from abstractllm.media.interface import MediaInput
 from abstractllm.media.image import ImageInput
 from abstractllm.media.text import TextInput
 from abstractllm.media.tabular import TabularInput
-from abstractllm.exceptions import ImageProcessingError
+from abstractllm.exceptions import MediaProcessingError
 
 
 class MediaFactory:
@@ -27,22 +27,31 @@ class MediaFactory:
     # Media type mapping
     _MEDIA_HANDLERS = {
         "image": ImageInput,
-        "text": TextInput,
+        "text": TextInput,  # Handles both text and documents
         "tabular": TabularInput
     }
     
     # MIME type to media type mapping
     _MIME_TYPE_MAPPING = {
+        # Image types
         'image/jpeg': 'image',
         'image/png': 'image',
         'image/gif': 'image',
         'image/webp': 'image',
         'image/bmp': 'image',
+        
+        # Text types (including documents)
         'text/plain': 'text',
         'text/markdown': 'text',
+        'application/json': 'text',
+        'application/pdf': 'text',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'text',
+        'application/msword': 'text',
+        'application/rtf': 'text',
+        
+        # Tabular types
         'text/csv': 'tabular',
-        'text/tab-separated-values': 'tabular',
-        'application/json': 'text'
+        'text/tab-separated-values': 'tabular'
     }
     
     @classmethod
@@ -63,7 +72,7 @@ class MediaFactory:
             
         Raises:
             ValueError: If the media type cannot be determined or is unsupported
-            ImageProcessingError: If there's an error processing the media
+            MediaProcessingError: If there's an error processing the media
         """
         # If already a MediaInput instance, return it
         if isinstance(source, MediaInput):
@@ -109,7 +118,7 @@ class MediaFactory:
             
         Raises:
             ValueError: If a media type cannot be determined or is unsupported
-            ImageProcessingError: If there's an error processing any media
+            MediaProcessingError: If there's an error processing any media
         """
         return [cls.from_source(source, media_type) for source in sources]
     
@@ -201,17 +210,6 @@ class MediaFactory:
         Raises:
             ValueError: If a dictionary is provided without a type field
         """
-        # Handle dictionary sources
-        if isinstance(source, dict):
-            # For dictionaries, we require a "type" field
-            if "type" not in source:
-                raise ValueError(f"Dictionary source must include a 'type' field: {source}")
-                
-            if any(key in source for key in ["image_url", "source"]):
-                return "image"
-            return None
-        
-        # Convert Path to string
         source_str = str(source)
         
         # Handle URLs
@@ -246,17 +244,26 @@ class MediaFactory:
             # Fallback to extension mapping
             ext = os.path.splitext(source_str)[-1].lower()
             ext_map = {
+                # Text types
                 '.txt': 'text',
                 '.md': 'text',
-                '.csv': 'tabular',
-                '.tsv': 'tabular',
                 '.json': 'text',
+                '.pdf': 'text',
+                '.docx': 'text',
+                '.doc': 'text',
+                '.rtf': 'text',
+                
+                # Image types
                 '.jpg': 'image',
                 '.jpeg': 'image',
                 '.png': 'image',
                 '.gif': 'image',
                 '.webp': 'image',
-                '.bmp': 'image'
+                '.bmp': 'image',
+                
+                # Tabular types
+                '.csv': 'tabular',
+                '.tsv': 'tabular'
             }
             return ext_map.get(ext)
             
