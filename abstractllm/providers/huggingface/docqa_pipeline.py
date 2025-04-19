@@ -29,11 +29,19 @@ import pytesseract
 from pdf2image import convert_from_path
 
 from abstractllm.media.interface import MediaInput
-from abstractllm.exceptions import ModelLoadError, InvalidInputError, GenerationError
+from abstractllm.exceptions import ModelLoadError, InvalidInputError, GenerationError, UnsupportedFeatureError
 from .model_types import BasePipeline, ModelConfig, ModelCapabilities
 
 # Configure logger
 logger = logging.getLogger(__name__)
+
+# Optional OCR support
+try:
+    import pytesseract
+    HAS_TESSERACT = True
+except ImportError:
+    HAS_TESSERACT = False
+    logger.warning("pytesseract not installed. Document OCR features will be limited. Install with: pip install pytesseract")
 
 class DocumentQuestionAnsweringPipeline(BasePipeline):
     """Pipeline for document question answering tasks.
@@ -65,6 +73,8 @@ class DocumentQuestionAnsweringPipeline(BasePipeline):
         self._model_type: str = ""
         self._max_seq_length: int = 512
         self._supports_tables: bool = False
+        if not HAS_TESSERACT:
+            logger.warning("Document QA pipeline initialized without OCR support. Some features will be limited.")
     
     def load(self, model_name: str, config: ModelConfig) -> None:
         """Load the Document QA model and processor.
@@ -165,6 +175,11 @@ class DocumentQuestionAnsweringPipeline(BasePipeline):
         Returns:
             Tuple of (processed image, OCR results)
         """
+        if not HAS_TESSERACT:
+            raise UnsupportedFeatureError(
+                "OCR support",
+                "pytesseract not installed. Install with: pip install pytesseract"
+            )
         # Convert document to image if needed
         if document_input.mime_type == "application/pdf":
             # Convert first page of PDF to image

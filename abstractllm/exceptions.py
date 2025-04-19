@@ -191,6 +191,25 @@ class GenerationError(AbstractLLMError):
     pass
 
 
+class CleanupError(AbstractLLMError):
+    """
+    Raised when there is an error during resource cleanup.
+    
+    This can occur when:
+    - Model resources cannot be properly released
+    - Temporary files cannot be deleted
+    - Memory cannot be freed
+    - Device resources cannot be released
+    
+    Args:
+        message: Description of the error
+        provider: The provider name that raised the error
+        original_exception: The original exception that was caught
+        details: Additional details about the error
+    """
+    pass
+
+
 class RequestTimeoutError(AbstractLLMError):
     """
     Raised when a request to a provider times out.
@@ -353,8 +372,9 @@ class InvalidInputError(InvalidRequestError):
         super().__init__(message, provider, original_exception, details)
 
 
-# Alias for backward compatibility
+# Aliases for backward compatibility
 ModelLoadError = ModelLoadingError
+ImageProcessingError = MediaProcessingError  # Alias for backward compatibility with existing code
 
 
 class AudioOutputError(AbstractLLMError):

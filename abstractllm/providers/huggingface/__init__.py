@@ -40,27 +40,6 @@ class HuggingFaceProvider(AbstractLLMInterface):
         # Merge defaults with provided config
         self.config_manager.merge_with_defaults(default_config)
     
-    def load_model(self) -> None:
-        """Load the model using appropriate pipeline."""
-        try:
-            model_name = self.config_manager.get_param(ModelParameter.MODEL)
-            
-            # Create model configuration
-            self._model_config = self._create_model_config()
-            
-            # Create and load pipeline
-            self._pipeline = PipelineFactory.create_pipeline(
-                model_name,
-                self._model_config
-            )
-            self._pipeline.load(model_name, self._model_config)
-            
-        except Exception as e:
-            if self._pipeline:
-                self._pipeline.cleanup()
-            self._pipeline = None
-            raise ModelLoadingError(f"Failed to load model: {e}")
-    
     def _create_model_config(self) -> ModelConfig:
         """Create model configuration from provider config."""
         # Detect if running on macOS
@@ -70,12 +49,12 @@ class HuggingFaceProvider(AbstractLLMInterface):
         # Disable Flash Attention 2 on macOS
         use_flash_attention = False if is_macos else self.config_manager.get_param("use_flash_attention", True)
         
-        # Get model type from factory
+        # Get model name and detect architecture
         model_name = self.config_manager.get_param(ModelParameter.MODEL)
-        model_type = PipelineFactory._detect_model_type(model_name)
-        _, architecture = PipelineFactory._PIPELINE_MAPPING[model_type]
+        model_type, architecture = PipelineFactory.detect_model_architecture(model_name)
         
-        return ModelConfig(
+        # Create base configuration
+        config = ModelConfig(
             architecture=architecture,
             trust_remote_code=self.config_manager.get_param("trust_remote_code", True),
             use_flash_attention=use_flash_attention,
@@ -84,6 +63,81 @@ class HuggingFaceProvider(AbstractLLMInterface):
             torch_dtype=self.config_manager.get_param("torch_dtype", "auto"),
             use_safetensors=self.config_manager.get_param("use_safetensors", True)
         )
+        
+        # Add generation configuration
+        config.generation.temperature = self.config_manager.get_param(ModelParameter.TEMPERATURE, 0.7)
+        config.generation.max_new_tokens = self.config_manager.get_param(ModelParameter.MAX_TOKENS, 2048)
+        config.generation.top_p = self.config_manager.get_param(ModelParameter.TOP_P, 0.9)
+        config.generation.top_k = self.config_manager.get_param(ModelParameter.TOP_K, 50)
+        config.generation.repetition_penalty = self.config_manager.get_param(ModelParameter.REPETITION_PENALTY, 1.1)
+        
+        return config
+    
+    def load_model(self) -> None:
+        """Load the model using appropriate pipeline."""
+        try:
+            model_name = self.config_manager.get_param(ModelParameter.MODEL)
+            logger.info(f"Loading model {model_name} using transformers")
+            
+            # Create model configuration
+            self._model_config = self._create_model_config()
+            
+            # Initialize tokenizer configuration
+            from transformers import AutoConfig, AutoTokenizer
+            model_config_obj = AutoConfig.from_pretrained(
+                model_name,
+                trust_remote_code=self._model_config.trust_remote_code
+            )
+            
+            # Initialize tokenizer first to ensure proper setup
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                trust_remote_code=self._model_config.trust_remote_code,
+                padding_side="left",  # Better for generation
+                model_max_length=getattr(model_config_obj, "max_position_embeddings", 2048)
+            )
+            
+            # Ensure we have required tokens
+            if not tokenizer.pad_token:
+                tokenizer.pad_token = tokenizer.eos_token
+                
+            if not tokenizer.bos_token:
+                tokenizer.bos_token = tokenizer.eos_token
+            
+            # Add special tokens
+            special_tokens = {
+                "pad_token": tokenizer.pad_token,
+                "bos_token": tokenizer.bos_token,
+                "eos_token": tokenizer.eos_token
+            }
+            tokenizer.add_special_tokens(special_tokens)
+            
+            # Add tokenizer configuration
+            self._model_config.base.tokenizer_config = {
+                "padding_side": "left",  # Better for generation
+                "model_max_length": getattr(model_config_obj, "max_position_embeddings", 2048),
+                "add_special_tokens": True,
+                "return_attention_mask": True,
+                "pad_token": tokenizer.pad_token,
+                "bos_token": tokenizer.bos_token,
+                "eos_token": tokenizer.eos_token
+            }
+            
+            # Create and load pipeline
+            self._pipeline = PipelineFactory.create_pipeline(
+                model_name,
+                self._model_config
+            )
+            
+            # Load model and components
+            self._pipeline.load(model_name, self._model_config)
+            logger.info("Successfully loaded model and tokenizer")
+            
+        except Exception as e:
+            if self._pipeline:
+                self._pipeline.cleanup()
+            self._pipeline = None
+            raise ModelLoadingError(f"Failed to load model: {e}")
     
     def generate(self, 
                 prompt: str, 
@@ -118,7 +172,13 @@ class HuggingFaceProvider(AbstractLLMInterface):
             generation_config = {
                 "temperature": self.config_manager.get_param(ModelParameter.TEMPERATURE, 0.7),
                 "max_new_tokens": self.config_manager.get_param(ModelParameter.MAX_TOKENS, 2048),
-                "do_sample": True
+                "do_sample": True,
+                "top_p": self.config_manager.get_param(ModelParameter.TOP_P, 0.9),
+                "top_k": self.config_manager.get_param(ModelParameter.TOP_K, 50),
+                "repetition_penalty": self.config_manager.get_param(ModelParameter.REPETITION_PENALTY, 1.1),
+                "use_cache": True,
+                "num_beams": 1,
+                "early_stopping": False
             }
             generation_config.update(kwargs)
             
@@ -132,7 +192,7 @@ class HuggingFaceProvider(AbstractLLMInterface):
                 "has_files": bool(files)
             })
             
-            # Generate
+            # Process inputs
             result = self._pipeline.process(
                 inputs=inputs,
                 generation_config=generation_config,
@@ -143,6 +203,7 @@ class HuggingFaceProvider(AbstractLLMInterface):
             return self._handle_output(result)
             
         except Exception as e:
+            logger.error(f"Generation error: {e}")
             raise GenerationError(f"Generation failed: {e}")
     
     async def generate_async(self,

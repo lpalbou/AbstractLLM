@@ -72,6 +72,17 @@ class BaseConfig:
     model_cache_dir: Optional[str] = None
     max_cached_models: int = 3
     cleanup_on_error: bool = True
+    
+    # Tokenizer configuration
+    tokenizer_config: Dict[str, Any] = field(default_factory=lambda: {
+        "padding_side": "left",
+        "model_max_length": 2048,
+        "add_special_tokens": True,
+        "return_attention_mask": True,
+        "pad_token": None,  # Will be set during initialization
+        "bos_token": None,  # Will be set during initialization
+        "eos_token": None   # Will be set during initialization
+    })
 
 @dataclass
 class EncoderConfig:

@@ -5,12 +5,12 @@ Text generation pipeline implementation for HuggingFace provider.
 import logging
 from typing import Optional, Dict, Any, Union, List, Generator, Set
 import torch
-from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer
+from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer, GenerationConfig
 from threading import Thread
 from queue import Queue
 
 from abstractllm.media.interface import MediaInput
-from abstractllm.exceptions import ModelLoadingError, GenerationError
+from abstractllm.exceptions import ModelLoadingError, GenerationError, CleanupError
 from .model_types import BasePipeline, ModelConfig, ModelCapabilities, ModelArchitecture
 
 # Configure logger
@@ -36,6 +36,15 @@ class GGUFTokenizerWrapper:
 class TextGenerationPipeline(BasePipeline):
     """Pipeline for text generation models."""
     
+    # Model-specific prompt templates
+    PROMPT_TEMPLATES = {
+        "microsoft/phi-2": {
+            "instruct": "Instruct: {prompt}\nOutput: ",
+            "chat": "Human: {prompt}\nAssistant: ",
+            "system": "System: {system}\nHuman: {prompt}\nAssistant: "
+        }
+    }
+    
     def load(self, model_name: str, config: ModelConfig) -> None:
         """Load the text generation model."""
         try:
@@ -44,60 +53,112 @@ class TextGenerationPipeline(BasePipeline):
             else:
                 self._load_transformers(model_name, config)
             self._is_loaded = True
+            self._model_name = model_name  # Store model name for prompt formatting
         except Exception as e:
             self.cleanup()
             raise ModelLoadingError(f"Failed to load model: {e}")
     
     def _load_transformers(self, model_name: str, config: ModelConfig) -> None:
         """Load a transformers model."""
-        # Load configuration
-        model_config = AutoConfig.from_pretrained(
-            model_name,
-            trust_remote_code=config.trust_remote_code
-        )
-        
-        # Prepare loading kwargs
-        load_kwargs = {
-            "device_map": config.device_map,
-            "torch_dtype": config.torch_dtype,
-            "use_safetensors": config.use_safetensors,
-            "trust_remote_code": config.trust_remote_code
-        }
-        
-        # Add Flash Attention 2 configuration if enabled
-        if config.use_flash_attention:
-            load_kwargs["attn_implementation"] = "flash_attention_2"
-        
-        # Add quantization if specified
-        if config.quantization == "4bit":
-            from transformers import BitsAndBytesConfig
-            load_kwargs.update({
-                "load_in_4bit": True,
-                "quantization_config": BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.float16
-                )
-            })
-        elif config.quantization == "8bit":
-            load_kwargs.update({"load_in_8bit": True})
+        try:
+            # Load configuration
+            model_config = AutoConfig.from_pretrained(
+                model_name,
+                trust_remote_code=config.trust_remote_code
+            )
             
-        # Load model and tokenizer
-        self._model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            config=model_config,
-            **load_kwargs
-        )
-        self._tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
-            trust_remote_code=config.trust_remote_code
-        )
-        
-        # Ensure we have required tokens
-        if self._tokenizer.pad_token is None:
-            self._tokenizer.pad_token = self._tokenizer.eos_token
-        
-        # Set up generation config
-        self._generation_config = self._model.generation_config
+            # Determine optimal dtype
+            if config.torch_dtype == "auto":
+                if torch.cuda.is_available():
+                    dtype = torch.float16
+                else:
+                    dtype = torch.float32
+            else:
+                dtype = getattr(torch, config.torch_dtype)
+            
+            # Load tokenizer first to ensure proper setup
+            tokenizer_config = config.base.tokenizer_config or {}
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                trust_remote_code=config.trust_remote_code,
+                **tokenizer_config
+            )
+            
+            # Ensure we have required tokens
+            if not self._tokenizer.pad_token:
+                if self._tokenizer.eos_token:
+                    self._tokenizer.pad_token = self._tokenizer.eos_token
+                else:
+                    # Add a new pad token if none exists
+                    self._tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+                
+            if not self._tokenizer.bos_token:
+                if self._tokenizer.eos_token:
+                    self._tokenizer.bos_token = self._tokenizer.eos_token
+                else:
+                    # Add a new bos token if none exists
+                    self._tokenizer.add_special_tokens({'bos_token': '<s>'})
+            
+            if not self._tokenizer.eos_token:
+                # Add a new eos token if none exists
+                self._tokenizer.add_special_tokens({'eos_token': '</s>'})
+            
+            # Update tokenizer configuration with actual tokens
+            config.base.tokenizer_config.update({
+                "pad_token": self._tokenizer.pad_token,
+                "bos_token": self._tokenizer.bos_token,
+                "eos_token": self._tokenizer.eos_token
+            })
+            
+            # Prepare loading kwargs
+            load_kwargs = {
+                "device_map": config.device_map,
+                "torch_dtype": dtype,
+                "use_safetensors": config.use_safetensors,
+                "trust_remote_code": config.trust_remote_code,
+                "low_cpu_mem_usage": True
+            }
+            
+            # Add Flash Attention 2 configuration if enabled
+            if config.use_flash_attention:
+                load_kwargs["attn_implementation"] = "flash_attention_2"
+            
+            # Add quantization if specified
+            if config.quantization == "4bit":
+                from transformers import BitsAndBytesConfig
+                load_kwargs.update({
+                    "load_in_4bit": True,
+                    "quantization_config": BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_compute_dtype=torch.float16,
+                        bnb_4bit_use_double_quant=True
+                    )
+                })
+            elif config.quantization == "8bit":
+                load_kwargs.update({"load_in_8bit": True})
+            
+            # Load model
+            self._model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                config=model_config,
+                **load_kwargs
+            )
+            
+            # Resize token embeddings if we added new tokens
+            self._model.resize_token_embeddings(len(self._tokenizer))
+            
+            # Set up generation config
+            self._generation_config = self._model.generation_config
+            
+            # Move model to appropriate device if needed
+            if config.device_map != "auto":
+                self._model = self._model.to(self.device)
+            
+            logger.info("Successfully loaded model and tokenizer")
+            
+        except Exception as e:
+            logger.error(f"Failed to load model: {e}")
+            raise
     
     def _load_gguf(self, model_path: str, config: ModelConfig) -> None:
         """Load a GGUF model."""
@@ -121,105 +182,130 @@ class TextGenerationPipeline(BasePipeline):
         # Create tokenizer wrapper
         self._tokenizer = GGUFTokenizerWrapper(self._model)
     
-    def process(self, 
-               inputs: List[MediaInput], 
-               generation_config: Optional[Dict[str, Any]] = None,
-               stream: bool = False,
-               **kwargs) -> Union[str, Generator[str, None, None]]:
-        """Process inputs and generate text."""
-        if not self._is_loaded:
-            raise RuntimeError("Model not loaded")
+    def _format_prompt(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        """Format prompt according to model-specific templates."""
+        # Get model-specific templates
+        templates = self.PROMPT_TEMPLATES.get(self._model_name, {})
         
-        try:
-            # Process text inputs
-            prompt = self._combine_text_inputs(inputs)
+        if not templates:
+            # No specific template, return prompt as is
+            return prompt
             
-            # Handle GGUF models differently
-            if isinstance(self._model, object) and hasattr(self._model, 'model_path'):  # GGUF model
-                return self._generate_gguf(prompt, generation_config, stream)
-            else:
-                return self._generate_transformers(prompt, generation_config, stream)
-                
-        except Exception as e:
-            raise GenerationError(f"Generation failed: {e}")
-    
-    def _combine_text_inputs(self, inputs: List[MediaInput]) -> str:
-        """Combine text inputs into a single prompt."""
-        text_parts = []
-        for input_obj in inputs:
-            if input_obj.media_type == "text":
-                formatted = input_obj.to_provider_format("huggingface")
-                text_parts.append(formatted["content"])
-        return "\n".join(text_parts)
-    
-    def _generate_transformers(self, 
-                             prompt: str,
-                             generation_config: Optional[Dict[str, Any]] = None,
-                             stream: bool = False) -> Union[str, Generator[str, None, None]]:
-        """Generate text using transformers model."""
-        # Prepare inputs
-        inputs = self._tokenizer(prompt, return_tensors="pt", padding=True)
-        inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
-        
-        # Update generation config
-        gen_kwargs = {}
-        if hasattr(self._generation_config, "to_dict"):
-            gen_kwargs.update(self._generation_config.to_dict())
+        if system_prompt:
+            template = templates.get("system", "{prompt}")
+            return template.format(system=system_prompt, prompt=prompt)
         else:
-            # Fallback to getting all attributes
-            gen_kwargs.update({
-                k: v for k, v in vars(self._generation_config).items()
-                if not k.startswith('_')
-            })
+            template = templates.get("instruct", "{prompt}")
+            return template.format(prompt=prompt)
+    
+    def process(self, inputs: List[MediaInput], stream: bool = False, **kwargs) -> Union[List[str], Generator[str, None, None]]:
+        """Process text inputs through the pipeline.
         
-        # Update with provided config
-        if generation_config:
-            gen_kwargs.update(generation_config)
-        
-        if stream:
-            # Set up streaming
-            streamer = TextIteratorStreamer(self._tokenizer)
-            generation_kwargs = dict(
-                **inputs,
-                streamer=streamer,
-                **gen_kwargs
+        Args:
+            inputs: List of MediaInput objects containing text
+            stream: Whether to stream the output
+            **kwargs: Additional generation parameters that override defaults
+            
+        Returns:
+            List of generated strings or generator yielding strings if streaming
+            
+        Raises:
+            ModelLoadingError: If model is not loaded
+            GenerationError: If generation fails
+        """
+        if not self._is_loaded:
+            raise ModelLoadingError("Model not loaded. Call load() first.")
+            
+        try:
+            # Format inputs for HF
+            text_inputs = [inp.text for inp in inputs]
+            
+            # Get model's special token IDs
+            pad_token_id = self._tokenizer.pad_token_id
+            eos_token_id = self._tokenizer.eos_token_id
+            bos_token_id = getattr(self._tokenizer, 'bos_token_id', None)
+            
+            # Tokenize with padding and attention masks
+            tokenized = self._tokenizer(
+                text_inputs,
+                padding=True,
+                truncation=True,
+                max_length=self._config.max_length,
+                return_tensors="pt",
+                return_attention_mask=True,
+                pad_to_multiple_of=8,  # For efficiency on GPU
             )
             
-            # Run generation in a thread
-            thread = Thread(target=self._model.generate, kwargs=generation_kwargs)
-            thread.start()
+            # Move to device
+            tokenized = {k: v.to(self._model.device) for k, v in tokenized.items()}
             
-            # Return generator
-            def stream_generator():
-                for text in streamer:
-                    yield text
-            return stream_generator()
-        else:
-            # Generate without streaming
-            outputs = self._model.generate(**inputs, **gen_kwargs)
-            return self._tokenizer.decode(outputs[0], skip_special_tokens=True)
-    
-    def _generate_gguf(self,
-                      prompt: str,
-                      generation_config: Optional[Dict[str, Any]] = None,
-                      stream: bool = False) -> Union[str, Generator[str, None, None]]:
-        """Generate text using GGUF model."""
-        gen_kwargs = {
-            "temperature": generation_config.get("temperature", 0.7) if generation_config else 0.7,
-            "max_tokens": generation_config.get("max_tokens", 2048) if generation_config else 2048,
-            "stream": stream
-        }
-        
-        completion = self._model.create_completion(prompt, **gen_kwargs)
-        
-        if stream:
-            def stream_generator():
-                for chunk in completion:
-                    if chunk.choices and chunk.choices[0].text:
-                        yield chunk.choices[0].text
-            return stream_generator()
-        else:
-            return completion["choices"][0]["text"]
+            # Set up generation config with defaults and overrides
+            gen_kwargs = {
+                "do_sample": True,
+                "temperature": 0.7,
+                "max_new_tokens": 100,
+                "top_p": 0.9,
+                "top_k": 50,
+                "repetition_penalty": 1.1,
+                "no_repeat_ngram_size": 3,
+                "use_cache": True,
+                "pad_token_id": pad_token_id,
+                "eos_token_id": eos_token_id,
+                "bos_token_id": bos_token_id,
+                # Beam search params
+                "num_beams": 1,
+                "early_stopping": True,
+                "length_penalty": 1.0,
+            }
+            
+            # Override with user params
+            gen_kwargs.update(kwargs)
+            
+            if stream:
+                streamer = TextIteratorStreamer(
+                    self._tokenizer,
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=True
+                )
+                gen_kwargs["streamer"] = streamer
+                
+                # Start generation in a thread
+                thread = Thread(target=self._model.generate, kwargs={
+                    **tokenized,
+                    **gen_kwargs
+                })
+                thread.start()
+                
+                # Stream tokens
+                def generate():
+                    try:
+                        for text in streamer:
+                            yield text
+                    except Exception as e:
+                        logger.error(f"Error during streaming: {e}")
+                        raise GenerationError(f"Streaming generation failed: {e}")
+                    finally:
+                        thread.join()
+                        
+                return generate()
+                
+            else:
+                # Non-streaming generation
+                with torch.inference_mode():
+                    output_ids = self._model.generate(
+                        **tokenized,
+                        **gen_kwargs
+                    )
+                
+                return self._tokenizer.batch_decode(
+                    output_ids,
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=True
+                )
+                
+        except Exception as e:
+            logger.error(f"Error during text generation: {e}")
+            raise GenerationError(f"Text generation failed: {e}")
     
     @property
     def capabilities(self) -> ModelCapabilities:
@@ -237,3 +323,69 @@ class TextGenerationPipeline(BasePipeline):
         if hasattr(self._model, "config") and hasattr(self._model.config, "max_position_embeddings"):
             return self._model.config.max_position_embeddings
         return None 
+
+    def _process_inputs(self, inputs: List[MediaInput]) -> Dict[str, Any]:
+        """Process text inputs into model inputs."""
+        text_parts = []
+        for input_obj in inputs:
+            if input_obj.media_type == "text":
+                formatted = input_obj.to_provider_format("huggingface")
+                text_parts.append(formatted["content"])
+        
+        text = "\n".join(text_parts)
+        
+        # Tokenize with safe defaults
+        inputs = self._tokenizer(
+            text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=self._get_context_window() or 2048,
+            padding=True,
+            return_attention_mask=True
+        )
+        
+        # Move to device
+        return {k: v.to(self._model.device) for k, v in inputs.items()} 
+
+    def cleanup(self):
+        """Clean up resources used by the pipeline.
+        
+        This method:
+        1. Moves model to CPU
+        2. Deletes model and tokenizer
+        3. Clears CUDA cache if available
+        
+        Raises:
+            CleanupError: If cleanup fails
+        """
+        try:
+            if self._is_loaded:
+                logger.info("Cleaning up pipeline resources...")
+                
+                # Move model to CPU first
+                if hasattr(self._model, "to"):
+                    self._model.to("cpu")
+                
+                # Delete model and tokenizer
+                del self._model
+                del self._tokenizer
+                self._model = None
+                self._tokenizer = None
+                self._is_loaded = False
+                
+                # Clear CUDA cache if available
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    
+                logger.info("Pipeline cleanup completed successfully")
+                
+        except Exception as e:
+            logger.error(f"Error during pipeline cleanup: {e}")
+            raise CleanupError(f"Failed to clean up pipeline resources: {e}")
+            
+    def __del__(self):
+        """Destructor to ensure cleanup is called."""
+        try:
+            self.cleanup()
+        except Exception as e:
+            logger.error(f"Error in pipeline destructor: {e}") 

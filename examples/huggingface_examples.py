@@ -2,179 +2,218 @@
 HuggingFace Provider Examples
 
 This file contains practical examples of using the HuggingFace provider in AbstractLLM.
-Each example is self-contained and demonstrates a specific use case.
+Each example demonstrates key features and best practices.
 """
 
+import sys
+import platform
+import logging
+from typing import Dict, Any, Optional
+from pathlib import Path
 from abstractllm import create_llm
 from abstractllm.enums import ModelParameter
-from abstractllm.exceptions import ResourceError
-from pathlib import Path
+from abstractllm.exceptions import (
+    ModelLoadingError,
+    GenerationError,
+    InvalidRequestError,
+    ModelNotFoundError,
+    ProviderAPIError
+)
 
-def text_generation_example():
-    """Basic text generation example."""
-    # Create provider with basic configuration
-    llm = create_llm("huggingface", 
-        model="microsoft/phi-2",
-        temperature=0.7,
-        max_tokens=2048,
-        device_map="auto"  # Automatically choose best device
-    )
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+def get_optimal_device_config() -> Dict[str, Any]:
+    """
+    Determine optimal device configuration based on system capabilities.
+    Returns a device configuration dict.
+    """
+    import torch
+    
+    device_config = {"device_map": "cpu", "torch_dtype": "float32"}
     
     try:
+        if torch.cuda.is_available():
+            device_config["device_map"] = "auto"
+            device_config["torch_dtype"] = "auto"
+            # Disable Flash Attention on Windows due to compatibility issues
+            device_config["use_flash_attention"] = platform.system() != "Windows"
+            logger.info("CUDA device detected, using GPU acceleration")
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device_config["device_map"] = "mps"
+            device_config["torch_dtype"] = "float16"
+            device_config["use_flash_attention"] = False
+            logger.info("Apple Silicon GPU detected, using MPS device")
+        else:
+            logger.info("No GPU detected, using CPU")
+    except Exception as e:
+        logger.warning(f"Error detecting device capabilities: {e}")
+    
+    return device_config
+
+def create_base_config(model_name: str = "microsoft/phi-2") -> Dict[str, Any]:
+    """
+    Create a base configuration with optimal settings.
+    Args:
+        model_name: The model to use
+    Returns:
+        Configuration dictionary
+    """
+    # Get optimal device configuration
+    device_config = get_optimal_device_config()
+    
+    # Create base configuration
+    config = {
+        ModelParameter.MODEL: model_name,
+        ModelParameter.TEMPERATURE: 0.7,
+        ModelParameter.MAX_TOKENS: 100,
+        ModelParameter.TOP_P: 0.9,
+        ModelParameter.TOP_K: 50,
+        ModelParameter.REPETITION_PENALTY: 1.1,
+        "trust_remote_code": True,
+        "use_safetensors": True
+    }
+    
+    # Update with device configuration
+    config.update(device_config)
+    
+    return config
+
+def show_model_recommendations() -> None:
+    """Show model recommendations for different tasks."""
+    # Define recommended models
+    recommendations = {
+        "text-generation": [
+            ("meta-llama/Llama-2-7b-chat-hf", "High-quality chat model"),
+            ("microsoft/phi-2", "Efficient general-purpose model"),
+            ("mistralai/Mistral-7B-v0.1", "Strong open-source model")
+        ],
+        "text2text": [
+            ("google/flan-t5-base", "Versatile text-to-text model"),
+            ("facebook/bart-large", "Strong summarization model"),
+            ("t5-base", "General-purpose T5 model")
+        ],
+        "vision": [
+            ("openai/clip-vit-base-patch32", "Strong vision-language model"),
+            ("microsoft/git-base", "Good for image captioning"),
+            ("Salesforce/blip-image-captioning-base", "Efficient image understanding")
+        ],
+        "speech": [
+            ("openai/whisper-base", "Reliable speech recognition"),
+            ("microsoft/speecht5_tts", "High-quality text-to-speech"),
+            ("facebook/wav2vec2-base", "Good for speech processing")
+        ]
+    }
+    
+    print("\nModel Recommendations:")
+    print("=====================")
+    
+    for task, models in recommendations.items():
+        print(f"\n{task.upper()}:")
+        for model, description in models:
+            print(f"- {model}")
+            print(f"  {description}")
+    print()
+
+def run_example(config: Dict[str, Any], output_dir: Optional[Path] = None) -> None:
+    """
+    Run examples demonstrating key features.
+    Args:
+        config: Provider configuration
+        output_dir: Optional directory for saving outputs
+    """
+    provider = None
+    try:
+        # Initialize provider
+        provider = create_llm("huggingface", **config)
+        logger.info(f"Created provider with model: {config[ModelParameter.MODEL]}")
+        
         # Basic generation
-        response = llm.generate("Write a short story about a brave cat.")
-        print("Basic generation:", response)
+        logger.info("Running basic generation example...")
+        prompt = "Write a one-sentence story about hope."
+        print(f"\nPrompt: {prompt}")
+        result = provider.generate(prompt)
+        print(f"Output: {result}\n")
         
         # Generation with system prompt
-        response = llm.generate(
-            "Write a haiku about nature.",
-            system_prompt="You are a skilled poet."
-        )
-        print("\nWith system prompt:", response)
+        logger.info("Running system prompt example...")
+        prompt = "What is quantum computing?"
+        system_prompt = "You are a physics professor explaining concepts to beginners."
+        print(f"\nSystem: {system_prompt}")
+        print(f"Prompt: {prompt}")
+        result = provider.generate(prompt, system_prompt=system_prompt)
+        print(f"Output: {result}\n")
         
         # Streaming generation
-        print("\nStreaming response:")
-        for chunk in llm.generate(
-            "Explain quantum computing step by step.",
-            stream=True
-        ):
+        logger.info("Running streaming example...")
+        prompt = "Write a haiku about nature."
+        print(f"\nPrompt: {prompt}")
+        print("Output:", end=" ", flush=True)
+        for chunk in provider.generate(prompt, stream=True):
             print(chunk, end="", flush=True)
-            
-    finally:
-        llm.cleanup()
-
-def vision_example(image_path: str):
-    """Vision model example."""
-    # Create provider with vision model
-    llm = create_llm("huggingface", 
-        model="Salesforce/blip-image-captioning-base",
-        device_map="auto"
-    )
-    
-    try:
-        # Image captioning
-        response = llm.generate(
-            "Describe this image in detail.",
-            files=[image_path]
-        )
-        print("Image description:", response)
+        print("\n")
         
         # Get model capabilities
-        caps = llm.get_capabilities()
-        print("\nModel capabilities:", caps)
+        capabilities = provider.get_capabilities()
+        print("\nModel Capabilities:")
+        for capability, value in capabilities.items():
+            print(f"- {capability}: {value}")
         
+    except ModelLoadingError as e:
+        logger.error(f"Failed to load model: {e}")
+        if hasattr(e, 'details'):
+            logger.error(f"Details: {e.details}")
+    except ModelNotFoundError as e:
+        logger.error(f"Model not found: {e}")
+        if e.reason:
+            logger.error(f"Reason: {e.reason}")
+    except GenerationError as e:
+        logger.error(f"Generation failed: {e}")
+        if hasattr(e, 'details'):
+            logger.error(f"Details: {e.details}")
+    except InvalidRequestError as e:
+        logger.error(f"Invalid request: {e}")
+        if hasattr(e, 'details'):
+            logger.error(f"Details: {e.details}")
+    except ProviderAPIError as e:
+        logger.error(f"Provider API error: {e}")
+        if hasattr(e, 'details'):
+            logger.error(f"Details: {e.details}")
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
     finally:
-        llm.cleanup()
-
-def document_qa_example(document_path: str):
-    """Document question answering example."""
-    # Create provider with document QA model
-    llm = create_llm("huggingface", 
-        model="microsoft/layoutlmv3-base",
-        device_map="auto"
-    )
-    
-    try:
-        # Ask questions about the document
-        response = llm.generate(
-            "What are the main points discussed in this document?",
-            files=[document_path]
-        )
-        print("Document analysis:", response)
-        
-        # Ask specific questions
-        response = llm.generate(
-            "What is the conclusion of this document?",
-            files=[document_path]
-        )
-        print("\nDocument conclusion:", response)
-        
-    finally:
-        llm.cleanup()
-
-def resource_managed_example():
-    """Example with resource management."""
-    try:
-        # Create provider with resource limits
-        llm = create_llm("huggingface", 
-            model="microsoft/phi-2",
-            device_map="cuda",
-            max_memory={
-                "cuda:0": "4GiB",  # GPU memory limit
-                "cpu": "8GiB"      # CPU memory limit
-            },
-            use_flash_attention=True  # Enable optimizations
-        )
-        
-        # Generate text
-        response = llm.generate(
-            "Explain how to optimize Python code.",
-            max_tokens=1000
-        )
-        print("Generated response:", response)
-        
-    except ResourceError as e:
-        print(f"Resource error: {e.details}")
-    finally:
-        llm.cleanup()
-
-def model_recommendation_example():
-    """Example using model recommendations."""
-    llm = create_llm("huggingface", model="microsoft/phi-2")
-    
-    # Get recommendations for different tasks
-    tasks = ["text-generation", "vision", "text2text"]
-    
-    for task in tasks:
-        print(f"\nRecommended models for {task}:")
-        recommendations = llm.get_model_recommendations(task)
-        for rec in recommendations:
-            print(f"- {rec['model']}: {rec['description']}")
-
-async def async_example():
-    """Example of async generation."""
-    llm = create_llm("huggingface", model="microsoft/phi-2")
-    
-    try:
-        # Basic async generation
-        response = await llm.generate_async(
-            "Write a story about AI."
-        )
-        print("Async response:", response)
-        
-        # Async streaming
-        print("\nAsync streaming:")
-        async for chunk in llm.generate_async(
-            "Explain the future of technology.",
-            stream=True
-        ):
-            print(chunk, end="", flush=True)
-            
-    finally:
-        llm.cleanup()
+        if provider and hasattr(provider, '_pipeline'):
+            logger.info("Cleaning up resources...")
+            if provider._pipeline:
+                provider._pipeline.cleanup()
 
 def main():
-    """Run all examples."""
-    print("=== Text Generation Example ===")
-    text_generation_example()
-    
-    print("\n=== Vision Example ===")
-    # Replace with your image path
-    vision_example("path/to/image.jpg")
-    
-    print("\n=== Document QA Example ===")
-    # Replace with your document path
-    document_qa_example("path/to/document.pdf")
-    
-    print("\n=== Resource Managed Example ===")
-    resource_managed_example()
-    
-    print("\n=== Model Recommendation Example ===")
-    model_recommendation_example()
-    
-    print("\n=== Async Example ===")
-    import asyncio
-    asyncio.run(async_example())
+    """Main entry point for examples."""
+    try:
+        # Create output directory
+        output_dir = Path("./outputs")
+        output_dir.mkdir(exist_ok=True)
+        
+        # Show model recommendations
+        show_model_recommendations()
+        
+        # Create configuration
+        config = create_base_config()
+        logger.info(f"Created configuration: {config}")
+        
+        # Run examples
+        print("\nRunning Examples:")
+        run_example(config, output_dir)
+        
+    except KeyboardInterrupt:
+        logger.info("Examples interrupted by user")
+    except Exception as e:
+        logger.error(f"Failed to run examples: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
-    main() 
+    main()
