@@ -1,0 +1,4 @@
+# Tool support dependencies for AbstractLLM
+docstring-parser>=0.15
+pydantic>=2.0.0
+jsonschema>=4.0.0 

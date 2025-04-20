@@ -5,7 +5,7 @@ This module provides utilities for managing stateful conversations with LLMs,
 including tracking conversation history and metadata across multiple requests.
 """
 
-from typing import Dict, List, Any, Optional, Union, Tuple
+from typing import Dict, List, Any, Optional, Union, Tuple, Callable, Generator, TYPE_CHECKING
 from datetime import datetime
 import json
 import os
@@ -14,6 +14,37 @@ import uuid
 from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability
 from abstractllm.factory import create_llm
 from abstractllm.exceptions import UnsupportedFeatureError
+from abstractllm.enums import MessageRole
+
+# Handle circular imports with TYPE_CHECKING
+if TYPE_CHECKING:
+    from abstractllm.tools.types import ToolDefinition, ToolCall, ToolCallRequest, ToolResult
+    from abstractllm.types import GenerateResponse
+
+# Try importing tools package directly
+try:
+    from abstractllm.tools import (
+        ToolDefinition,
+        ToolCall,
+        ToolCallRequest,
+        ToolResult,
+        function_to_tool_definition,
+    )
+    from abstractllm.types import GenerateResponse
+    TOOLS_AVAILABLE = True
+except ImportError:
+    TOOLS_AVAILABLE = False
+    if not TYPE_CHECKING:
+        class ToolDefinition:
+            pass
+        class ToolCall:
+            pass
+        class ToolCallRequest:
+            pass
+        class ToolResult:
+            pass
+        class GenerateResponse:
+            pass
 
 
 class Message:
@@ -25,7 +56,8 @@ class Message:
                  role: str, 
                  content: str, 
                  timestamp: Optional[datetime] = None,
-                 metadata: Optional[Dict[str, Any]] = None):
+                 metadata: Optional[Dict[str, Any]] = None,
+                 tool_results: Optional[List[Dict[str, Any]]] = None):
         """
         Initialize a message.
         
@@ -34,11 +66,13 @@ class Message:
             content: The message content
             timestamp: When the message was created (defaults to now)
             metadata: Additional message metadata
+            tool_results: Optional list of tool execution results
         """
         self.role = role
         self.content = content
         self.timestamp = timestamp or datetime.now()
         self.metadata = metadata or {}
+        self.tool_results = tool_results
         self.id = str(uuid.uuid4())
     
     def to_dict(self) -> Dict[str, Any]:
@@ -48,13 +82,18 @@ class Message:
         Returns:
             A dictionary representing the message
         """
-        return {
+        result = {
             "id": self.id,
             "role": self.role,
             "content": self.content,
             "timestamp": self.timestamp.isoformat(),
             "metadata": self.metadata
         }
+        
+        if self.tool_results:
+            result["tool_results"] = self.tool_results
+            
+        return result
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Message':
@@ -71,7 +110,8 @@ class Message:
             role=data["role"],
             content=data["content"],
             timestamp=datetime.fromisoformat(data["timestamp"]),
-            metadata=data.get("metadata", {})
+            metadata=data.get("metadata", {}),
+            tool_results=data.get("tool_results")
         )
         message.id = data.get("id", str(uuid.uuid4()))
         return message
@@ -89,7 +129,8 @@ class Session:
                  system_prompt: Optional[str] = None,
                  provider: Optional[Union[str, AbstractLLMInterface]] = None,
                  provider_config: Optional[Dict[Union[str, ModelParameter], Any]] = None,
-                 metadata: Optional[Dict[str, Any]] = None):
+                 metadata: Optional[Dict[str, Any]] = None,
+                 tools: Optional[List[Union[Dict[str, Any], Callable, "ToolDefinition"]]] = None):
         """
         Initialize a conversation session.
         
@@ -98,6 +139,7 @@ class Session:
             provider: Provider name or instance to use for this session
             provider_config: Configuration for the provider
             metadata: Session metadata
+            tools: Optional list of tool definitions available for the LLM to use
         """
         self.messages: List[Message] = []
         self.system_prompt = system_prompt
@@ -105,6 +147,10 @@ class Session:
         self.id = str(uuid.uuid4())
         self.created_at = datetime.now()
         self.last_updated = self.created_at
+        self.tools: List["ToolDefinition"] = []
+        
+        # Track last assistant message index for tool results
+        self._last_assistant_idx = -1
         
         # Initialize the provider if specified
         self._provider: Optional[AbstractLLMInterface] = None
@@ -116,23 +162,50 @@ class Session:
         
         # Add system message if provided
         if system_prompt:
-            self.add_message("system", system_prompt)
+            self.add_message(MessageRole.SYSTEM, system_prompt)
+            
+        # Add tools if provided and tools are available
+        if tools and TOOLS_AVAILABLE:
+            for tool in tools:
+                self.add_tool(tool)
     
-    def add_message(self, role: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> Message:
+    def add_message(self, 
+                    role: Union[str, MessageRole], 
+                    content: str, 
+                    name: Optional[str] = None,
+                    tool_results: Optional[List[Dict[str, Any]]] = None,
+                    metadata: Optional[Dict[str, Any]] = None) -> Message:
         """
         Add a message to the conversation.
         
         Args:
-            role: Message role ("user", "assistant", "system")
+            role: Message role ("user", "assistant", "system", "tool")
             content: Message content
+            name: Optional name for the message sender
+            tool_results: Optional list of tool execution results
             metadata: Optional message metadata
             
         Returns:
             The created message
         """
-        message = Message(role, content, datetime.now(), metadata)
+        if isinstance(role, MessageRole):
+            role = role.value
+            
+        message = Message(
+            role=role, 
+            content=content, 
+            timestamp=datetime.now(),
+            metadata=metadata or {},
+            tool_results=tool_results
+        )
+        
         self.messages.append(message)
         self.last_updated = message.timestamp
+        
+        # Update last assistant message index if this is an assistant message
+        if role == MessageRole.ASSISTANT.value:
+            self._last_assistant_idx = len(self.messages) - 1
+            
         return message
     
     def get_history(self, include_system: bool = True) -> List[Message]:
@@ -147,7 +220,7 @@ class Session:
         """
         if include_system:
             return self.messages.copy()
-        return [m for m in self.messages if m.role != "system"]
+        return [m for m in self.messages if m.role != MessageRole.SYSTEM.value]
     
     def get_formatted_prompt(self, new_message: Optional[str] = None) -> str:
         """
@@ -218,7 +291,7 @@ class Session:
             The LLM's response
         """
         # Add the user message to the conversation
-        self.add_message("user", message)
+        self.add_message(MessageRole.USER, message)
         
         # Determine which provider to use
         llm = self._get_provider(provider)
@@ -254,7 +327,7 @@ class Session:
         
         # If not streaming, add the response to the conversation
         if not stream:
-            self.add_message("assistant", response)
+            self.add_message(MessageRole.ASSISTANT, response)
             
         return response
     
@@ -275,7 +348,7 @@ class Session:
             A coroutine that resolves to the LLM's response
         """
         # Add the user message
-        self.add_message("user", message)
+        self.add_message(MessageRole.USER, message)
         
         # Determine which provider to use
         llm = self._get_provider(provider)
@@ -320,7 +393,7 @@ class Session:
             
             # If not streaming, add the response to the conversation
             if not stream:
-                self.add_message("assistant", response)
+                self.add_message(MessageRole.ASSISTANT, response)
                 
             return response
         
@@ -453,6 +526,556 @@ class Session:
         
         # Default
         return "unknown"
+
+    def add_tool(self, tool: Union[Dict[str, Any], Callable, "ToolDefinition"]) -> None:
+        """
+        Add a tool to the session.
+        
+        Args:
+            tool: The tool definition or function to add, can be:
+                - A dictionary with tool definition
+                - A callable function to be converted to a tool definition
+                - A ToolDefinition object
+        
+        Raises:
+            ValueError: If tools are not available or the provider doesn't support tool calls
+        """
+        if not TOOLS_AVAILABLE:
+            raise ValueError("Tool support is not available. Install the required dependencies.")
+        
+        # Check if the provider supports tool calls if available
+        if self._provider is not None:
+            capabilities = self._provider.get_capabilities()
+            has_tool_support = capabilities.get(ModelCapability.FUNCTION_CALLING, False) or capabilities.get(ModelCapability.TOOL_USE, False)
+            if not has_tool_support:
+                raise UnsupportedFeatureError(
+                    "function_calling",
+                    f"Provider {self._provider.__class__.__name__} does not support function calling",
+                    provider=self._provider.__class__.__name__
+                )
+        
+        # Convert tool to ToolDefinition
+        if callable(tool):
+            # Convert function to tool definition
+            tool_def = function_to_tool_definition(tool)
+        elif isinstance(tool, dict):
+            # Convert dictionary to tool definition
+            tool_def = ToolDefinition(**tool)
+        else:
+            # Already a ToolDefinition
+            tool_def = tool
+            
+        self.tools.append(tool_def)
+    
+    def execute_tool_call(
+        self,
+        tool_call: "ToolCall",
+        tool_functions: Dict[str, Callable[..., Any]]
+    ) -> Dict[str, Any]:
+        """
+        Execute a tool call using the provided functions.
+        
+        Args:
+            tool_call: The tool call to execute
+            tool_functions: A dictionary mapping tool names to their implementation functions
+            
+        Returns:
+            A dictionary containing the tool result
+            
+        Raises:
+            ValueError: If the tool is not found in the provided functions
+        """
+        import json
+        
+        # Get the tool function
+        if tool_call.name not in tool_functions:
+            error_message = f"Tool function '{tool_call.name}' not found"
+            if TOOLS_AVAILABLE:
+                # Use ToolResult for consistent format
+                result = ToolResult(
+                    call_id=tool_call.id,
+                    result=None,
+                    error=error_message
+                )
+                return {
+                    "call_id": tool_call.id,
+                    "name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                    "error": error_message,
+                    "output": f"Error: {error_message}"
+                }
+            else:
+                return {
+                    "call_id": tool_call.id,
+                    "name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                    "error": error_message,
+                    "output": f"Error: {error_message}"
+                }
+            
+        tool_function = tool_functions[tool_call.name]
+        
+        # Find the tool definition if available for schema validation
+        tool_def = None
+        if TOOLS_AVAILABLE:
+            # Try to find the matching tool definition
+            tool_def = next((t for t in self.tools if t.name == tool_call.name), None)
+        
+        try:
+            # Parse the arguments if they're a string
+            arguments = tool_call.arguments
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError as e:
+                    error_message = f"Failed to parse arguments: {str(e)}"
+                    if TOOLS_AVAILABLE:
+                        # Use ToolResult for consistent format
+                        result = ToolResult(
+                            call_id=tool_call.id,
+                            result=None,
+                            error=error_message
+                        )
+                        return {
+                            "call_id": tool_call.id,
+                            "name": tool_call.name,
+                            "arguments": tool_call.arguments,
+                            "error": error_message,
+                            "output": f"Error: {error_message}"
+                        }
+                except json.JSONDecodeError:
+                    error_message = f"Failed to parse arguments: Invalid JSON format"
+                    if TOOLS_AVAILABLE:
+                        # Use ToolResult for consistent format
+                        result = ToolResult(
+                            call_id=tool_call.id,
+                            result=None,
+                            error=error_message
+                        )
+                        return {
+                            "call_id": tool_call.id,
+                            "name": tool_call.name,
+                            "arguments": tool_call.arguments,
+                            "error": error_message,
+                            "output": f"Error: {error_message}"
+                        }
+            
+            # Execute the tool
+            result = tool_function(**arguments)
+            
+            # Validate result against output schema if available
+            if TOOLS_AVAILABLE and tool_def and hasattr(tool_def, 'output_schema') and tool_def.output_schema:
+                try:
+                    # Import jsonschema for validation
+                    from jsonschema import validate, ValidationError
+                    try:
+                        validate(instance=result, schema=tool_def.output_schema)
+                    except ValidationError as e:
+                        error_message = f"Tool result validation failed: {str(e)}"
+                        # Use ToolResult for consistent format
+                        result_obj = ToolResult(
+                            call_id=tool_call.id,
+                            result=None,
+                            error=error_message
+                        )
+                        return {
+                            "call_id": tool_call.id,
+                            "name": tool_call.name,
+                            "arguments": tool_call.arguments,
+                            "error": error_message,
+                            "output": f"Error: {error_message}"
+                        }
+                except ImportError:
+                    # If jsonschema is not available, skip validation
+                    pass
+            
+            # Create the tool result with consistent format
+            if TOOLS_AVAILABLE:
+                # Use ToolResult for consistent format
+                tool_result_obj = ToolResult(
+                    call_id=tool_call.id,
+                    result=result
+                )
+                # But we still need to return a dict to maintain backward compatibility
+                tool_result = {
+                    "call_id": tool_call.id,
+                    "name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                    "output": str(result)  # Convert to string to ensure compatibility
+                }
+            else:
+                tool_result = {
+                    "call_id": tool_call.id,
+                    "name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                    "output": str(result)  # Convert to string to ensure compatibility
+                }
+            
+            return tool_result
+        except Exception as e:
+            error_message = f"Tool execution failed: {str(e)}"
+            if TOOLS_AVAILABLE:
+                # Use ToolResult for consistent format
+                result = ToolResult(
+                    call_id=tool_call.id,
+                    result=None,
+                    error=error_message
+                )
+                return {
+                    "call_id": tool_call.id,
+                    "name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                    "error": error_message,
+                    "output": f"Error: {error_message}"
+                }
+            else:
+                return {
+                    "call_id": tool_call.id,
+                    "name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                    "error": error_message,
+                    "output": f"Error: {error_message}"
+                }
+    
+    def execute_tool_calls(
+        self,
+        response: "GenerateResponse",
+        tool_functions: Dict[str, Callable[..., Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Execute all tool calls in a response and return the results.
+        
+        Args:
+            response: The response containing tool calls
+            tool_functions: A dictionary mapping tool names to their implementation functions
+            
+        Returns:
+            A list of dictionaries containing the tool results
+            
+        Raises:
+            ValueError: If the response does not contain tool calls
+        """
+        # Check if the response contains tool calls
+        if not response.has_tool_calls():
+            raise ValueError("Response does not contain tool calls")
+        
+        # Get the tool calls from the response, handling different formats
+        tool_results = []
+        
+        if hasattr(response.tool_calls, 'tool_calls'):
+            # Standard format with nested tool_calls
+            tool_calls = response.tool_calls.tool_calls
+            
+        elif isinstance(response.tool_calls, list):
+            # Direct list of tool calls
+            tool_calls = response.tool_calls
+            
+        else:
+            # Unknown format
+            raise ValueError(f"Unsupported tool_calls format: {type(response.tool_calls)}")
+            
+        # Execute each tool call
+        for tool_call in tool_calls:
+            tool_result = self.execute_tool_call(tool_call, tool_functions)
+            tool_results.append(tool_result)
+            
+        return tool_results
+        
+    def add_tool_result(
+        self, 
+        tool_call_id: str, 
+        result: Any, 
+        error: Optional[str] = None
+    ) -> None:
+        """
+        Add a tool result to the session.
+        
+        Args:
+            tool_call_id: ID of the tool call this result responds to
+            result: The result of the tool execution
+            error: Optional error message if the tool execution failed
+        """
+        # Use tracked assistant message index instead of searching
+        if self._last_assistant_idx < 0:
+            # No assistant messages yet, can't add tool result
+            raise ValueError("No assistant message found to attach tool result to")
+        
+        last_assistant_msg = self.messages[self._last_assistant_idx]
+        
+        # Initialize tool_results if not present
+        if not hasattr(last_assistant_msg, "tool_results") or not last_assistant_msg.tool_results:
+            last_assistant_msg.tool_results = []
+        
+        # Create and add the tool result with consistent format
+        if TOOLS_AVAILABLE:
+            # Use ToolResult for internal representation
+            tool_result_obj = ToolResult(
+                call_id=tool_call_id,
+                result=result,
+                error=error
+            )
+            # Convert to dict for backward compatibility
+            tool_result = {
+                "call_id": tool_call_id,
+                "output": str(result)
+            }
+            if error:
+                tool_result["error"] = error
+        else:
+            # Fallback to dict representation
+            tool_result = {
+                "call_id": tool_call_id,
+                "output": str(result)
+            }
+            if error:
+                tool_result["error"] = error
+            
+        last_assistant_msg.tool_results.append(tool_result)
+
+    def generate_with_tools(
+        self,
+        tool_functions: Dict[str, Callable[..., Any]],
+        prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        top_p: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+        **kwargs
+    ) -> "GenerateResponse":
+        """
+        Generate a response with tool execution support.
+        
+        This method handles the complete flow of tool usage:
+        1. Generate an initial response with tool definitions
+        2. If the response contains tool calls, execute them
+        3. Add the tool results to the conversation
+        4. Generate a follow-up response that incorporates the tool results
+        
+        Args:
+            tool_functions: A dictionary mapping tool names to their implementation functions
+            prompt: The input prompt (if None, uses the existing conversation history)
+            model: The model to use
+            temperature: The temperature to use
+            max_tokens: The maximum number of tokens to generate
+            top_p: The top_p value to use
+            frequency_penalty: The frequency penalty to use
+            presence_penalty: The presence penalty to use
+            **kwargs: Additional provider-specific parameters
+            
+        Returns:
+            The final GenerateResponse after tool execution and follow-up
+        """
+        # Ensure we have tools available
+        if not TOOLS_AVAILABLE:
+            raise ValueError("Tool support is not available. Install the required dependencies.")
+        
+        # Add user message if provided
+        if prompt:
+            self.add_message(MessageRole.USER, prompt)
+            
+        # Get the provider if needed
+        provider = self._get_provider()
+        
+        # Generate an initial response
+        initial_response = provider.generate(
+            prompt=prompt if prompt else "",  # Empty if using conversation history
+            system_prompt=self.system_prompt,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            frequency_penalty=frequency_penalty,
+            presence_penalty=presence_penalty,
+            tools=self.tools,
+            **kwargs
+        )
+        
+        # If no tool calls, add the response and return
+        if not initial_response.has_tool_calls():
+            self.add_message(MessageRole.ASSISTANT, initial_response.content or "")
+            return initial_response
+            
+        # Execute the tool calls
+        tool_results = self.execute_tool_calls(initial_response, tool_functions)
+        
+        # Add the assistant message with tool calls
+        self.add_message(
+            MessageRole.ASSISTANT,
+            content=initial_response.content or "",
+            tool_results=tool_results
+        )
+        
+        # Generate a follow-up response
+        follow_up_response = provider.generate(
+            prompt="",  # Use the conversation history with tool results
+            system_prompt=self.system_prompt,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            frequency_penalty=frequency_penalty,
+            presence_penalty=presence_penalty,
+            tools=self.tools,
+            **kwargs
+        )
+        
+        # Add the final assistant response
+        self.add_message(MessageRole.ASSISTANT, follow_up_response.content or "")
+        
+        return follow_up_response
+        
+    def generate_with_tools_streaming(
+        self,
+        tool_functions: Dict[str, Callable[..., Any]],
+        prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        top_p: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+        **kwargs
+    ) -> Generator[Union[str, Dict[str, Any]], None, None]:
+        """
+        Generate a streaming response with tool execution support.
+        
+        This method handles a complex streaming workflow that includes:
+        1. Streaming initial response content from the LLM
+        2. Detecting tool calls during streaming
+        3. Executing detected tool calls
+        4. Yielding both content chunks and tool execution results
+        5. Buffering content for state management
+        6. Managing the conversation flow with tool results
+        7. Generating a follow-up response after tool execution
+        
+        The streaming state machine works as follows:
+        - Initial state: Process incoming chunks from the LLM
+        - When a tool call is detected: Execute the tool and yield a tool result
+        - After all chunks are processed: Add the accumulated content as an assistant message
+        - If tools were executed: Generate and stream a follow-up response
+        - Final state: Add the follow-up response as an assistant message
+        
+        Args:
+            tool_functions: A dictionary mapping tool names to their implementation functions
+            prompt: The input prompt (if None, uses the existing conversation history)
+            model: The model to use
+            temperature: The temperature to use
+            max_tokens: The maximum number of tokens to generate
+            top_p: The top_p value to use
+            frequency_penalty: The frequency penalty to use
+            presence_penalty: The presence penalty to use
+            **kwargs: Additional provider-specific parameters
+            
+        Yields:
+            Either string chunks for content or dictionaries for tool results.
+            String chunks are yielded as-is for direct content display.
+            Tool results are yielded as dictionaries with the following format:
+            {
+                "type": "tool_result",
+                "tool_call": {
+                    "call_id": "unique_id",
+                    "name": "tool_name",
+                    "arguments": {...},
+                    "output": "result as string",
+                    "error": "error message if any"
+                }
+            }
+        """
+        # Ensure we have tools available
+        if not TOOLS_AVAILABLE:
+            raise ValueError("Tool support is not available. Install the required dependencies.")
+        
+        # Add user message if provided
+        if prompt:
+            self.add_message(MessageRole.USER, prompt)
+            
+        # Get the provider if needed
+        provider = self._get_provider()
+        
+        # Variables to track state
+        accumulated_content = ""    # Buffer for accumulating content chunks
+        pending_tool_results = []   # Store tool results for later conversation state
+        
+        # Start streaming generation
+        stream = provider.generate(
+            prompt=prompt if prompt else "",  # Empty if using conversation history
+            system_prompt=self.system_prompt,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            frequency_penalty=frequency_penalty,
+            presence_penalty=presence_penalty,
+            tools=self.tools,
+            stream=True,
+            **kwargs
+        )
+        
+        # Process the stream chunks one by one
+        for chunk in stream:
+            # Check if this is a ToolCallRequest
+            if hasattr(chunk, "tool_calls") and chunk.tool_calls and len(chunk.tool_calls.tool_calls) > 0:
+                # Tool calls have been detected in the stream
+                # Execute each tool call in the request
+                for tool_call in chunk.tool_calls.tool_calls:
+                    # Execute the tool and get the result
+                    tool_result = self.execute_tool_call(tool_call, tool_functions)
+                    # Store the result for later conversation state
+                    pending_tool_results.append(tool_result)
+                    
+                    # Yield the tool result as a special dictionary format
+                    # This allows the caller to handle tool calls specially (e.g., show execution status)
+                    yield {
+                        "type": "tool_result",
+                        "tool_call": tool_result
+                    }
+            # Otherwise it's a regular text chunk
+            elif hasattr(chunk, "content") and chunk.content:
+                # Accumulate content for later conversation state
+                accumulated_content += chunk.content
+                # Yield the content chunk directly for immediate display
+                yield chunk.content
+        
+        # After initial streaming is complete, add the final message with any tool results
+        if accumulated_content:
+            # Add the assistant message with accumulated content and any tool results
+            self.add_message(
+                MessageRole.ASSISTANT,
+                content=accumulated_content,
+                tool_results=pending_tool_results if pending_tool_results else None
+            )
+            
+        # If we executed tools, generate a follow-up response to incorporate the results
+        if pending_tool_results:
+            # Generate follow-up response with tools results in the conversation history
+            follow_up_stream = provider.generate(
+                prompt="",  # Use the conversation history with tool results
+                system_prompt=self.system_prompt,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                tools=self.tools,
+                stream=True,
+                **kwargs
+            )
+            
+            # Track follow-up content for conversation state
+            follow_up_content = ""
+            
+            # Yield follow-up chunks for immediate display
+            for chunk in follow_up_stream:
+                if hasattr(chunk, "content") and chunk.content:
+                    follow_up_content += chunk.content
+                    yield chunk.content
+            
+            # Add the final follow-up response to the conversation
+            if follow_up_content:
+                self.add_message(MessageRole.ASSISTANT, follow_up_content)
 
 
 class SessionManager:

@@ -51,12 +51,20 @@ setup(
             "torch>=2.0.0",
             "huggingface-hub>=0.20.0",
         ],
+        "tools": [
+            "docstring-parser>=0.15",
+            "pydantic>=2.0.0",
+            "jsonschema>=4.0.0",
+        ],
         "all": [
             "openai>=1.0.0",
             "anthropic>=0.18.0",
             "transformers>=4.36.0",
             "torch>=2.0.0",
             "huggingface-hub>=0.20.0",
+            "docstring-parser>=0.15",
+            "pydantic>=2.0.0",
+            "jsonschema>=4.0.0",
         ],
     },
     entry_points={

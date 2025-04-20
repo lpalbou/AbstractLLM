@@ -81,3 +81,31 @@ class ConfigurationManager:
             if k not in self._config and (isinstance(k, ModelParameter) and k.value not in self._config):
                 self._config[k] = v
     
+    def get_provider_params(self, kwargs: Dict[str, Any], system_prompt: Optional[str] = None, tools: Optional[List[Any]] = None) -> Dict[str, Any]:
+        """
+        Get provider-specific parameters for generation, combining config and method kwargs.
+        
+        Args:
+            kwargs: Additional parameters for generation
+            system_prompt: Override the system prompt in the config
+            tools: Optional list of tools for the model
+            
+        Returns:
+            Dictionary of provider-specific parameters
+        """
+        # Start with current config
+        params = self.get_config()
+        
+        # Override with kwargs
+        params.update(kwargs)
+        
+        # If system_prompt was provided, override the config
+        if system_prompt is not None:
+            params[ModelParameter.SYSTEM_PROMPT] = system_prompt
+            
+        # Add tools if provided
+        if tools is not None:
+            params[ModelParameter.TOOLS] = tools
+            
+        return params
+    

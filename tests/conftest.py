@@ -4,13 +4,20 @@ pytest configuration file.
 
 import os
 import pytest
-from typing import Dict, Any, Generator
+from typing import Dict, Any, Generator, List, Callable
 
 from abstractllm import create_llm, ModelParameter
 from abstractllm.providers.openai import OpenAIProvider
 from abstractllm.providers.anthropic import AnthropicProvider
 from abstractllm.providers.ollama import OllamaProvider
-from abstractllm.providers.huggingface import HuggingFaceProvider, DEFAULT_MODEL
+from abstractllm.providers.huggingface import HuggingFaceProvider
+
+# Import tool-related utilities
+try:
+    from abstractllm.tools import ToolDefinition, function_to_tool_definition
+    TOOLS_AVAILABLE = True
+except ImportError:
+    TOOLS_AVAILABLE = False
 
 
 @pytest.fixture(scope="session")
@@ -149,4 +156,203 @@ def any_provider(request) -> Generator[Any, None, None]:
     try:
         yield request.getfixturevalue(request.param)
     except pytest.skip.Exception:
-        pytest.skip(f"Skipping {request.param} tests") 
+        pytest.skip(f"Skipping {request.param} tests")
+
+
+# Tool-related fixtures
+
+@pytest.fixture
+def calculator_function() -> Callable:
+    """
+    Return a calculator function for tool testing.
+    
+    Returns:
+        Calculator function
+    """
+    def calculator(operation: str, a: float, b: float) -> float:
+        """Perform a basic calculation.
+        
+        Args:
+            operation: The operation to perform (add, subtract, multiply, divide)
+            a: First number
+            b: Second number
+            
+        Returns:
+            The result of the calculation
+        """
+        if operation == "add":
+            return a + b
+        elif operation == "subtract":
+            return a - b
+        elif operation == "multiply":
+            return a * b
+        elif operation == "divide":
+            if b == 0:
+                raise ValueError("Cannot divide by zero")
+            return a / b
+        else:
+            raise ValueError(f"Unknown operation: {operation}")
+    
+    return calculator
+
+
+@pytest.fixture
+def weather_function() -> Callable:
+    """
+    Return a weather function for tool testing.
+    
+    Returns:
+        Weather function
+    """
+    def get_weather(location: str, unit: str = "celsius") -> Dict[str, Any]:
+        """Get the current weather for a location.
+        
+        Args:
+            location: The city and state, e.g., "San Francisco, CA"
+            unit: The unit of temperature, either "celsius" or "fahrenheit"
+            
+        Returns:
+            A dictionary with weather information
+        """
+        return {
+            "location": location,
+            "temperature": 22.5,
+            "unit": unit,
+            "condition": "Sunny",
+            "humidity": 65,
+        }
+    
+    return get_weather
+
+
+@pytest.fixture
+def calculator_tool_definition(calculator_function) -> ToolDefinition:
+    """
+    Create a calculator tool definition for testing.
+    
+    Args:
+        calculator_function: Calculator function
+        
+    Returns:
+        ToolDefinition for calculator
+    """
+    if not TOOLS_AVAILABLE:
+        pytest.skip("Tool support not available")
+    
+    return function_to_tool_definition(calculator_function)
+
+
+@pytest.fixture
+def weather_tool_definition(weather_function) -> ToolDefinition:
+    """
+    Create a weather tool definition for testing.
+    
+    Args:
+        weather_function: Weather function
+        
+    Returns:
+        ToolDefinition for weather
+    """
+    if not TOOLS_AVAILABLE:
+        pytest.skip("Tool support not available")
+    
+    return function_to_tool_definition(weather_function)
+
+
+@pytest.fixture
+def tool_functions() -> Dict[str, Callable]:
+    """
+    Return a dictionary of tool functions for testing.
+    
+    Returns:
+        Dictionary of tool functions
+    """
+    def calculator(operation: str, a: float, b: float) -> float:
+        """Perform a basic calculation."""
+        if operation == "add":
+            return a + b
+        elif operation == "subtract":
+            return a - b
+        elif operation == "multiply":
+            return a * b
+        elif operation == "divide":
+            if b == 0:
+                raise ValueError("Cannot divide by zero")
+            return a / b
+        else:
+            raise ValueError(f"Unknown operation: {operation}")
+    
+    def get_weather(location: str, unit: str = "celsius") -> Dict[str, Any]:
+        """Get the current weather for a location."""
+        return {
+            "location": location,
+            "temperature": 22.5,
+            "unit": unit,
+            "condition": "Sunny",
+            "humidity": 65,
+        }
+    
+    return {
+        "calculator": calculator,
+        "get_weather": get_weather
+    }
+
+
+@pytest.fixture
+def tool_definitions(tool_functions) -> List[ToolDefinition]:
+    """
+    Return a list of tool definitions for testing.
+    
+    Args:
+        tool_functions: Dictionary of tool functions
+        
+    Returns:
+        List of tool definitions
+    """
+    if not TOOLS_AVAILABLE:
+        pytest.skip("Tool support not available")
+    
+    return [
+        function_to_tool_definition(tool_functions["calculator"]),
+        function_to_tool_definition(tool_functions["get_weather"])
+    ]
+
+
+# Set up environment variable handling for tests
+def pytest_configure(config):
+    """Configure pytest environment."""
+    # Check for required environment variables
+    missing_vars = []
+    if not os.environ.get("OPENAI_API_KEY"):
+        missing_vars.append("OPENAI_API_KEY")
+    
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        missing_vars.append("ANTHROPIC_API_KEY")
+    
+    if not os.environ.get("OLLAMA_HOST"):
+        os.environ["OLLAMA_HOST"] = "http://localhost:11434"
+    
+    if missing_vars:
+        print(f"\nWarning: The following environment variables are not set: {', '.join(missing_vars)}")
+        print("Some tests will be skipped. Set these variables to run all tests.")
+
+
+# Skip markers for provider-specific tests
+def pytest_addoption(parser):
+    """Add custom command-line options to pytest."""
+    parser.addoption(
+        "--run-api-tests",
+        action="store_true",
+        default=False,
+        help="Run tests that make real API calls",
+    )
+
+
+# Skip tests marked as "api_call" unless --run-api-tests is specified
+def pytest_collection_modifyitems(config, items):
+    """Modify test collection to apply skip markers."""
+    if not config.getoption("--run-api-tests"):
+        skip_api = pytest.mark.skip(reason="Need --run-api-tests option to run")
+        for item in items:
+            if "api_call" in item.keywords:
+                item.add_marker(skip_api) 

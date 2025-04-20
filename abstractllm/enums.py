@@ -45,6 +45,10 @@ class ModelParameter(str, Enum):
     IMAGES = "images"  # Multiple image inputs (list of URLs, paths, or base64 strings)
     IMAGE_DETAIL = "image_detail"  # Detail level for image processing (e.g., 'low', 'high')
     
+    # Tool support parameters
+    TOOLS = "tools"  # List of tool definitions for function/tool calling
+    TOOL_CHOICE = "tool_choice"  # Specifies which tool should be used
+
     # Security & compliance parameters
     CONTENT_FILTER = "content_filter"  # Content filtering level
     MODERATION = "moderation"  # Whether to perform moderation
@@ -57,7 +61,8 @@ class ModelCapability(str, Enum):
     MAX_TOKENS = "max_tokens"
     SYSTEM_PROMPT = "supports_system_prompt"
     ASYNC = "supports_async"
-    FUNCTION_CALLING = "supports_function_calling"
+    FUNCTION_CALLING = "supports_function_calling"  # General function/tool calling capability
+    TOOL_USE = "supports_tool_use"  # Specific tool use capability (may differ from functions)
     VISION = "supports_vision"
     
     # Advanced capabilities
@@ -70,3 +75,10 @@ class ModelCapability(str, Enum):
     IMAGE_GENERATION = "supports_image_generation"
     AUDIO_PROCESSING = "supports_audio_processing"
     JSON_MODE = "supports_json_mode"  # Structured JSON output 
+
+class MessageRole(str, Enum):
+    """Role of a message in a conversation."""
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"  # For tool/function call responses 

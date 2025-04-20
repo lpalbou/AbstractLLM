@@ -96,3 +96,5 @@ cython_debug/
 # Misc
 .DS_Store
 Thumbs.db 
+
+investigate/

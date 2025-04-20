@@ -1,0 +1,27 @@
+This is a test file for the AbstractLLM framework.
+
+The agent should be able to read this file when asked.
+
+Here are some sample lines of content to test with:
+1. Line one with some text content
+2. Line two with different text content
+3. Line three with special characters: !@#$%^&*()
+4. Line four with quotes: "This is quoted text"
+5. Line five with numbers: 12345
+
+This file contains multiple paragraphs and different types of content
+to test the file reading capability of the agent.
+
+The file reading tool should properly handle:
+- Regular text content
+- Special characters
+- Multiple lines
+- The max_lines parameter
+
+End of test file.
+
+This is line 1 of the test file
+This is line 2 of the test file
+This is line 3 of the test file
+This is line 4 of the test file
+This is line 5 of the test file 

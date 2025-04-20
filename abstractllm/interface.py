@@ -2,12 +2,13 @@
 Abstract interface for LLM providers.
 """
 
-from typing import Dict, Any, Optional, Union, Generator, AsyncGenerator, List
+from typing import Dict, Any, Optional, Union, Generator, AsyncGenerator, List, Callable
 from abc import ABC, abstractmethod
 from pathlib import Path
 
 from abstractllm.utils.config import ConfigurationManager
 from abstractllm.enums import ModelParameter, ModelCapability
+from abstractllm.types import GenerateResponse
 
 class AbstractLLMInterface(ABC):
     """
@@ -33,7 +34,8 @@ class AbstractLLMInterface(ABC):
                 system_prompt: Optional[str] = None, 
                 files: Optional[List[Union[str, Path]]] = None,
                 stream: bool = False, 
-                **kwargs) -> Union[str, Generator[str, None, None]]:
+                tools: Optional[List[Union[Dict[str, Any], Callable]]] = None,
+                **kwargs) -> Union[GenerateResponse, Generator[GenerateResponse, None, None]]:
         """
         Generate a response using the LLM.
         
@@ -43,14 +45,18 @@ class AbstractLLMInterface(ABC):
             files: Optional list of files to process (paths or URLs)
                   Supported types: images (for vision models), text, markdown, CSV, TSV
             stream: Whether to stream the response
+            tools: Optional list of tools that the model can use. Each tool can be:
+                  - A dict following the tool definition schema
+                  - A Python callable with type annotations and docstrings
             **kwargs: Additional parameters to override configuration
             
         Returns:
-            If stream=False: The complete generated response as a string
-            If stream=True: A generator yielding response chunks
+            If stream=False: The complete generated response as a GenerateResponse object
+            If stream=True: A generator yielding GenerateResponse objects
             
         Raises:
             Exception: If the generation fails
+            ValueError: If tools are provided but not supported
         """
         pass
     
@@ -60,7 +66,8 @@ class AbstractLLMInterface(ABC):
                           system_prompt: Optional[str] = None, 
                           files: Optional[List[Union[str, Path]]] = None,
                           stream: bool = False, 
-                          **kwargs) -> Union[str, AsyncGenerator[str, None]]:
+                          tools: Optional[List[Union[Dict[str, Any], Callable]]] = None,
+                          **kwargs) -> Union[GenerateResponse, AsyncGenerator[GenerateResponse, None]]:
         """
         Asynchronously generate a response using the LLM.
         
@@ -70,14 +77,18 @@ class AbstractLLMInterface(ABC):
             files: Optional list of files to process (paths or URLs)
                   Supported types: images (for vision models), text, markdown, CSV, TSV
             stream: Whether to stream the response
+            tools: Optional list of tools that the model can use. Each tool can be:
+                  - A dict following the tool definition schema
+                  - A Python callable with type annotations and docstrings
             **kwargs: Additional parameters to override configuration
             
         Returns:
-            If stream=False: The complete generated response as a string
-            If stream=True: An async generator yielding response chunks
+            If stream=False: The complete generated response as a GenerateResponse object
+            If stream=True: An async generator yielding GenerateResponse objects
             
         Raises:
             Exception: If the generation fails
+            ValueError: If tools are provided but not supported
         """
         pass
         
@@ -94,6 +105,7 @@ class AbstractLLMInterface(ABC):
             ModelCapability.SYSTEM_PROMPT: False,
             ModelCapability.ASYNC: False,
             ModelCapability.FUNCTION_CALLING: False,
+            ModelCapability.TOOL_USE: False,
             ModelCapability.VISION: False,
         }
         
@@ -137,15 +149,16 @@ class AbstractLLMInterface(ABC):
         """
         return self.config_manager.get_param(param, default)
         
-    def get_provider_params(self, kwargs: Dict[str, Any], system_prompt: Optional[str] = None) -> Dict[str, Any]:
+    def get_provider_params(self, kwargs: Dict[str, Any], system_prompt: Optional[str] = None, tools: Optional[List[Any]] = None) -> Dict[str, Any]:
         """
         Get provider-specific parameters for generation.
         
         Args:
             kwargs: Additional parameters for generation
             system_prompt: Override the system prompt in the config
+            tools: Optional list of tools for the model
             
         Returns:
             Dictionary of provider-specific parameters
         """
-        return self.config_manager.get_provider_params(kwargs, system_prompt) 
+        return self.config_manager.get_provider_params(kwargs, system_prompt, tools) 
