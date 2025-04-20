@@ -10,6 +10,7 @@ from datetime import datetime
 import json
 import os
 import uuid
+import logging
 
 from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability
 from abstractllm.factory import create_llm
@@ -577,93 +578,65 @@ class Session:
         
         Args:
             tool_call: The tool call to execute
-            tool_functions: A dictionary mapping tool names to their implementation functions
+            tool_functions: Dictionary of available tool functions
             
         Returns:
-            A dictionary containing the tool result
-            
-        Raises:
-            ValueError: If the tool is not found in the provided functions
+            Dictionary containing the tool result or error
         """
-        import json
+        logger = logging.getLogger("abstractllm.session")
+        logger.info(f"Session: Executing tool call: {tool_call.name} with args: {tool_call.arguments}")
+        
+        # Check if the tool function exists
+        if tool_call.name not in tool_functions:
+            error_msg = f"Tool '{tool_call.name}' not found in available tools."
+            logger.error(error_msg)
+            return {
+                "call_id": tool_call.id,
+                "name": tool_call.name,
+                "output": None,
+                "error": error_msg
+            }
         
         # Get the tool function
-        if tool_call.name not in tool_functions:
-            error_message = f"Tool function '{tool_call.name}' not found"
-            if TOOLS_AVAILABLE:
-                # Use ToolResult for consistent format
-                result = ToolResult(
-                    call_id=tool_call.id,
-                    result=None,
-                    error=error_message
-                )
-                return {
-                    "call_id": tool_call.id,
-                    "name": tool_call.name,
-                    "arguments": tool_call.arguments,
-                    "error": error_message,
-                    "output": f"Error: {error_message}"
-                }
-            else:
-                return {
-                    "call_id": tool_call.id,
-                    "name": tool_call.name,
-                    "arguments": tool_call.arguments,
-                    "error": error_message,
-                    "output": f"Error: {error_message}"
-                }
-            
         tool_function = tool_functions[tool_call.name]
         
-        # Find the tool definition if available for schema validation
+        # Find the corresponding tool definition if available
         tool_def = None
-        if TOOLS_AVAILABLE:
-            # Try to find the matching tool definition
-            tool_def = next((t for t in self.tools if t.name == tool_call.name), None)
+        if TOOLS_AVAILABLE and hasattr(self, 'tools') and self.tools:
+            for tool in self.tools:
+                if isinstance(tool, dict) and tool.get('name') == tool_call.name:
+                    # For dictionary tools
+                    tool_def = tool
+                    break
+                elif hasattr(tool, 'name') and tool.name == tool_call.name:
+                    # For ToolDefinition objects
+                    tool_def = tool
+                    break
         
+        # Execute the tool and handle potential errors
         try:
-            # Parse the arguments if they're a string
-            arguments = tool_call.arguments
-            if isinstance(arguments, str):
+            # Parse arguments as needed
+            args = tool_call.arguments
+            
+            # Handle case where arguments are provided as a JSON string
+            if isinstance(args, str):
                 try:
-                    arguments = json.loads(arguments)
+                    args = json.loads(args)
                 except json.JSONDecodeError as e:
-                    error_message = f"Failed to parse arguments: {str(e)}"
-                    if TOOLS_AVAILABLE:
-                        # Use ToolResult for consistent format
-                        result = ToolResult(
-                            call_id=tool_call.id,
-                            result=None,
-                            error=error_message
-                        )
-                        return {
-                            "call_id": tool_call.id,
-                            "name": tool_call.name,
-                            "arguments": tool_call.arguments,
-                            "error": error_message,
-                            "output": f"Error: {error_message}"
-                        }
-                except json.JSONDecodeError:
-                    error_message = f"Failed to parse arguments: Invalid JSON format"
-                    if TOOLS_AVAILABLE:
-                        # Use ToolResult for consistent format
-                        result = ToolResult(
-                            call_id=tool_call.id,
-                            result=None,
-                            error=error_message
-                        )
-                        return {
-                            "call_id": tool_call.id,
-                            "name": tool_call.name,
-                            "arguments": tool_call.arguments,
-                            "error": error_message,
-                            "output": f"Error: {error_message}"
-                        }
+                    error_msg = f"Failed to parse arguments as JSON: {str(e)}"
+                    logger.error(error_msg)
+                    return {
+                        "call_id": tool_call.id,
+                        "name": tool_call.name,
+                        "output": None,
+                        "error": error_msg
+                    }
             
-            # Execute the tool
-            result = tool_function(**arguments)
+            # Execute the tool function with arguments
+            result = tool_function(**args)
+            logger.info(f"Session: Tool execution successful: {tool_call.name}")
             
-            # Validate result against output schema if available
+            # Validate the result against the output schema if available
             if TOOLS_AVAILABLE and tool_def and hasattr(tool_def, 'output_schema') and tool_def.output_schema:
                 try:
                     # Import jsonschema for validation
@@ -671,71 +644,35 @@ class Session:
                     try:
                         validate(instance=result, schema=tool_def.output_schema)
                     except ValidationError as e:
-                        error_message = f"Tool result validation failed: {str(e)}"
-                        # Use ToolResult for consistent format
-                        result_obj = ToolResult(
-                            call_id=tool_call.id,
-                            result=None,
-                            error=error_message
-                        )
+                        error_msg = f"Tool result validation failed: {str(e)}"
+                        logger.error(error_msg)
                         return {
                             "call_id": tool_call.id,
                             "name": tool_call.name,
-                            "arguments": tool_call.arguments,
-                            "error": error_message,
-                            "output": f"Error: {error_message}"
+                            "output": None,
+                            "error": error_msg
                         }
                 except ImportError:
                     # If jsonschema is not available, skip validation
                     pass
             
-            # Create the tool result with consistent format
-            if TOOLS_AVAILABLE:
-                # Use ToolResult for consistent format
-                tool_result_obj = ToolResult(
-                    call_id=tool_call.id,
-                    result=result
-                )
-                # But we still need to return a dict to maintain backward compatibility
-                tool_result = {
-                    "call_id": tool_call.id,
-                    "name": tool_call.name,
-                    "arguments": tool_call.arguments,
-                    "output": str(result)  # Convert to string to ensure compatibility
-                }
-            else:
-                tool_result = {
-                    "call_id": tool_call.id,
-                    "name": tool_call.name,
-                    "arguments": tool_call.arguments,
-                    "output": str(result)  # Convert to string to ensure compatibility
-                }
+            # Return a successful result
+            return {
+                "call_id": tool_call.id,
+                "name": tool_call.name,
+                "output": result,
+                "error": None
+            }
             
-            return tool_result
         except Exception as e:
-            error_message = f"Tool execution failed: {str(e)}"
-            if TOOLS_AVAILABLE:
-                # Use ToolResult for consistent format
-                result = ToolResult(
-                    call_id=tool_call.id,
-                    result=None,
-                    error=error_message
-                )
-                return {
-                    "call_id": tool_call.id,
-                    "name": tool_call.name,
-                    "arguments": tool_call.arguments,
-                    "error": error_message,
-                    "output": f"Error: {error_message}"
-                }
-            else:
-                return {
-                    "call_id": tool_call.id,
-                    "name": tool_call.name,
-                    "arguments": tool_call.arguments,
-                    "error": error_message,
-                    "output": f"Error: {error_message}"
-                }
+            error_msg = f"Error executing tool '{tool_call.name}': {str(e)}"
+            logger.error(error_msg)
+            return {
+                "call_id": tool_call.id,
+                "name": tool_call.name,
+                "output": None,
+                "error": error_msg
+            }
     
     def execute_tool_calls(
         self,
@@ -867,6 +804,8 @@ class Session:
         Returns:
             The final GenerateResponse after tool execution and follow-up
         """
+        logger = logging.getLogger("abstractllm.session")
+        
         # Ensure we have tools available
         if not TOOLS_AVAILABLE:
             raise ValueError("Tool support is not available. Install the required dependencies.")
@@ -879,6 +818,7 @@ class Session:
         provider = self._get_provider()
         
         # Generate an initial response
+        logger.info("Session: Sending initial prompt to LLM with tools available")
         initial_response = provider.generate(
             prompt=prompt if prompt else "",  # Empty if using conversation history
             system_prompt=self.system_prompt,
@@ -894,13 +834,16 @@ class Session:
         
         # If no tool calls, add the response and return
         if not initial_response.has_tool_calls():
+            logger.info("Session: LLM did not request any tool calls, returning direct response")
             self.add_message(MessageRole.ASSISTANT, initial_response.content or "")
             return initial_response
             
         # Execute the tool calls
+        logger.info("Session: LLM requested tool calls, executing them")
         tool_results = self.execute_tool_calls(initial_response, tool_functions)
         
         # Add the assistant message with tool calls
+        logger.info(f"Session: Adding tool results to conversation: {len(tool_results)} results")
         self.add_message(
             MessageRole.ASSISTANT,
             content=initial_response.content or "",
@@ -908,6 +851,7 @@ class Session:
         )
         
         # Generate a follow-up response
+        logger.info("Session: Sending follow-up prompt to LLM with tool results")
         follow_up_response = provider.generate(
             prompt="",  # Use the conversation history with tool results
             system_prompt=self.system_prompt,
@@ -922,6 +866,7 @@ class Session:
         )
         
         # Add the final assistant response
+        logger.info("Session: Received follow-up response from LLM, adding to conversation")
         self.add_message(MessageRole.ASSISTANT, follow_up_response.content or "")
         
         return follow_up_response

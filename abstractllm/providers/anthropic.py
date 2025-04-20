@@ -124,8 +124,19 @@ class AnthropicProvider(AbstractLLMInterface):
             raise ValueError("Tool support is not available. Install the required dependencies.")
             
         processed_tools = []
+        logger.info(f"Processing {len(tools)} tools for Anthropic API")
         
-        for tool in tools:
+        for idx, tool in enumerate(tools):
+            # Log the original tool
+            if callable(tool):
+                logger.info(f"Tool {idx+1}: Converting Python function '{tool.__name__}' to tool definition")
+            elif isinstance(tool, ToolDefinition):
+                logger.info(f"Tool {idx+1}: Using ToolDefinition '{tool.name}'")
+            elif isinstance(tool, dict) and 'name' in tool:
+                logger.info(f"Tool {idx+1}: Using dictionary tool '{tool['name']}'")
+            else:
+                logger.info(f"Tool {idx+1}: Unknown tool type: {type(tool)}")
+                
             # If it's a callable, convert it to a tool definition
             if callable(tool):
                 tool = function_to_tool_definition(tool)
@@ -149,9 +160,11 @@ class AnthropicProvider(AbstractLLMInterface):
                     "input_schema": tool['input_schema']
                 }
                 processed_tools.append(anthropic_tool)
+                logger.debug(f"Processed tool '{tool['name']}' for Anthropic API: {anthropic_tool}")
             else:
                 raise ValueError(f"Unsupported tool type: {type(tool)}")
                 
+        logger.info(f"Successfully processed {len(processed_tools)} tools for Anthropic API")
         return processed_tools
     
     def _check_for_tool_calls(self, response: Any) -> bool:

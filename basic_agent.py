@@ -29,6 +29,46 @@ logging.basicConfig(
 )
 logger = logging.getLogger("basic_agent")
 
+# Add specialized logging functions for each step in the tool call sequence
+def log_step(step_number, step_name, message):
+    """Log a step in the agent-LLM interaction with a clear step number and name."""
+    logger.info(f"STEP {step_number}: {step_name} - {message}")
+
+def log_llm_request(prompt, tools):
+    """Log the request being sent to the LLM."""
+    tool_names = [t.name if hasattr(t, 'name') else t['name'] if isinstance(t, dict) else 'unknown' for t in tools]
+    logger.info(f"STEP 1: AGENT→LLM - Sending prompt with {len(tools)} tools: {', '.join(tool_names)}")
+    logger.debug(f"Prompt: {prompt}")
+    logger.debug(f"Tools: {tools}")
+
+def log_tool_call_request(tool_calls):
+    """Log when the LLM requests a tool call."""
+    if not tool_calls:
+        logger.info("STEP 2: LLM→AGENT - No tool calls requested by LLM")
+        return False
+    
+    for i, tc in enumerate(tool_calls):
+        name = tc.name if hasattr(tc, 'name') else 'unknown'
+        args = tc.arguments if hasattr(tc, 'arguments') else {}
+        logger.info(f"STEP 2: LLM→AGENT - LLM requested tool call: {name} with args: {args}")
+    
+    return True
+
+def log_tool_execution(tool_name, args, result):
+    """Log the execution of a tool and its result."""
+    logger.info(f"STEP 3: AGENT EXECUTION - Executing tool: {tool_name} with args: {args}")
+    logger.info(f"STEP 4: TOOL→AGENT - Tool execution completed with result length: {len(str(result)) if result else 0}")
+    logger.debug(f"Tool result: {result[:200]}..." if result and len(str(result)) > 200 else f"Tool result: {result}")
+
+def log_tool_results_to_llm():
+    """Log sending tool results back to the LLM."""
+    logger.info(f"STEP 5: AGENT→LLM - Sending tool results to LLM for completion")
+
+def log_final_response(response):
+    """Log the final response from the LLM."""
+    logger.info(f"STEP 6: LLM→AGENT - Received final response from LLM")
+    logger.debug(f"Final response: {response[:200]}..." if response and len(str(response)) > 200 else f"Final response: {response}")
+
 def read_file(file_path: str, max_lines: Optional[int] = None) -> str:
     """
     Read and return the contents of a file.
@@ -54,19 +94,22 @@ def read_file(file_path: str, max_lines: Optional[int] = None) -> str:
                     content += f"\n... (file truncated, showed {max_lines} lines)"
             else:
                 content = file.read()
-        logger.debug(f"File read successfully: {file_path}, content length: {len(content)} chars")
+        log_tool_execution("read_file", {"file_path": file_path, "max_lines": max_lines}, content)
         return content
     except FileNotFoundError:
         error_msg = f"Error: File not found at path '{file_path}'"
         logger.error(error_msg)
+        log_tool_execution("read_file", {"file_path": file_path, "max_lines": max_lines}, error_msg)
         return error_msg
     except PermissionError:
         error_msg = f"Error: Permission denied when trying to read '{file_path}'"
         logger.error(error_msg)
+        log_tool_execution("read_file", {"file_path": file_path, "max_lines": max_lines}, error_msg)
         return error_msg
     except Exception as e:
         error_msg = f"Error reading file: {str(e)}"
         logger.error(error_msg)
+        log_tool_execution("read_file", {"file_path": file_path, "max_lines": max_lines}, error_msg)
         return error_msg
 
 
@@ -259,8 +302,11 @@ class BasicAgent:
         max_lines = int(max_lines_match.group(1)) if max_lines_match else None
         
         try:
-            # Use the standard session tools approach first
-            logger.info("Using session.generate_with_tools")
+            # STEP 1: Agent sending prompt to LLM along with available tools
+            log_llm_request(query, self.session.tools)
+            
+            # Use the standard session tools approach
+            logger.debug("Using session.generate_with_tools")
             response = self.session.generate_with_tools(
                 tool_functions=self.tool_functions,
                 model=self.llm.config_manager.get_param("model"),
@@ -268,22 +314,32 @@ class BasicAgent:
                 temperature=0.1  # Lower temperature to encourage more deterministic tool usage
             )
             
-            # Check if the model actually used the tool
+            # STEP 2 & 3: Check if the LLM requested tool calls and Agent executed them
             assistant_messages = [msg for msg in self.session.messages if msg.role == MessageRole.ASSISTANT]
             tool_was_used = False
+            direct_tool_execution = False
             
             if assistant_messages and hasattr(assistant_messages[-1], "tool_results") and assistant_messages[-1].tool_results:
                 # Get the tool results
                 tool_results = assistant_messages[-1].tool_results
                 tool_outputs = []
                 
+                # STEP 2: LLM requested tool calls
+                tool_was_used = log_tool_call_request([True])  # Just indicating there were tool calls
+                
                 for tool_result in tool_results:
                     if "call_id" in tool_result and "output" in tool_result:
-                        tool_was_used = True
+                        tool_name = tool_result.get("name", "unknown")
+                        # We've already logged the execution in the tool function, but log the collection here
+                        logger.info(f"STEP 4: AGENT→LLM - Collected tool result for {tool_name}")
+                        
                         if "error" in tool_result and tool_result["error"]:
                             tool_outputs.append(f"Error executing tool: {tool_result['error']}")
                         else:
                             tool_outputs.append(tool_result["output"])
+                
+                # STEP 5: Sending tool results back to LLM
+                log_tool_results_to_llm()
                 
                 # Combine the tool outputs with the final response content
                 if tool_outputs and response.content:
@@ -293,25 +349,34 @@ class BasicAgent:
                 else:
                     result = response.content
             else:
+                # No tool calls were made by the LLM
+                log_tool_call_request([])
                 result = response.content
+                
+                # If this looks like a file request but no tool was used, try direct execution
+                if is_file_request and not tool_was_used and potential_file_path:
+                    logger.info(f"FALLBACK: No tool calls from LLM despite file request. Using direct execution with file: {potential_file_path}")
+                    try:
+                        direct_tool_execution = True
+                        file_content = self.tool_functions["read_file"](
+                            file_path=potential_file_path, 
+                            max_lines=max_lines
+                        )
+                        
+                        # Combine the file content with the model's response
+                        result = f"I've read the file for you:\n\n{file_content}\n\nHere's my analysis:\n{result}"
+                        
+                    except Exception as e:
+                        logger.error(f"Error with direct file reading: {e}")
+                        # Continue with the original result
             
-            # If this looks like a file request but no tool was used, try direct execution
-            if is_file_request and not tool_was_used and potential_file_path:
-                logger.info(f"Query appears to be a file request but no tool was used. Trying direct execution with file: {potential_file_path}")
-                try:
-                    file_content = self.tool_functions["read_file"](
-                        file_path=potential_file_path, 
-                        max_lines=max_lines
-                    )
-                    
-                    # Combine the file content with the model's response
-                    result = f"I've read the file for you:\n\n{file_content}\n\nHere's my analysis:\n{result}"
-                    
-                except Exception as e:
-                    logger.error(f"Error with direct file reading: {e}")
-                    # Continue with the original result
+            # STEP 6: Final response
+            if direct_tool_execution:
+                logger.info("STEP 6: AGENT→USER - Direct tool execution was used instead of LLM-requested tool call")
+            else:
+                log_final_response(result)
             
-            logger.info(f"Got response with content: {result[:100]}..." if len(result) > 100 else result)
+            logger.info(f"Final response to user: {result[:100]}..." if len(result) > 100 else result)
             return result
         
         except Exception as e:
@@ -320,7 +385,7 @@ class BasicAgent:
             
             if is_file_request and potential_file_path:
                 try:
-                    logger.info(f"Falling back to direct tool execution for file: {potential_file_path}")
+                    logger.info(f"EMERGENCY FALLBACK: Falling back to direct tool execution for file: {potential_file_path}")
                     file_content = self.tool_functions["read_file"](
                         file_path=potential_file_path, 
                         max_lines=max_lines
