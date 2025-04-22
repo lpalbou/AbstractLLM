@@ -189,25 +189,15 @@ class ALMA:
             tool_names = list(self.tool_functions.keys())
             log_step(2, "AGENT→LLM", f"Sending query to {self.provider_name} with available tools: {tool_names}")
             
-            # Use the session's generate_with_tools method to handle the flow
+            # Use the session's generate_with_tools method to handle the flow (tools are executed inside)
             response = session.generate_with_tools(
                 tool_functions=self.tool_functions,
                 model=self.model_name
             )
+            # STEP 3: LLM→AGENT - Received LLM response (tool execution done internally)
+            log_step(3, "LLM→AGENT", "Received LLM response; tool calls handled internally by session.generate_with_tools")
             
-            # Check if tools were used
-            if hasattr(response, 'tool_calls') and response.tool_calls and response.tool_calls.has_tool_calls():
-                tool_names = [tc.name for tc in response.tool_calls.tool_calls]
-                log_step(3, "LLM→AGENT", f"LLM requested tool(s): {', '.join(tool_names)}")
-                
-                # Log each tool execution
-                for tool_call in response.tool_calls.tool_calls:
-                    log_step(4, "AGENT→TOOL", f"Executing tool: {tool_call.name} with args: {tool_call.arguments}")
-                
-                log_step(5, "TOOL→LLM", "Tool execution completed, results sent to LLM")
-            else:
-                log_step(3, "LLM→AGENT", "LLM generated response without tool calls")
-            
+            print("RESPONSE: ", response)
             # Get the final response content
             final_response = response.content if response.content else ""
             
@@ -312,7 +302,8 @@ class ALMA:
             if stream:
                 self.run_streaming(query)
             else:
-                self.run(query)
+                response = self.run(query)
+                print(f"\nAssistant: {response}")
 
 
 def main():

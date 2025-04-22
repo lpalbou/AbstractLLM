@@ -264,18 +264,43 @@ class Session:
             List of message dictionaries in the provider's expected format
         """
         if provider_name == "openai":
-            return [{"role": m.role, "content": m.content} for m in self.messages]
+            formatted: List[Dict[str, Any]] = []
+            for m in self.messages:
+                formatted.append({"role": m.role, "content": m.content})
+                # Inject any tool results as assistant messages
+                if getattr(m, 'tool_results', None):
+                    for tr in m.tool_results:
+                        formatted.append({"role": 'assistant', "content": tr.get('output', '')})
+            return formatted
         elif provider_name == "anthropic":
-            # Anthropic doesn't support system messages in the messages array
-            # They need to be passed separately as a system parameter
-            return [{"role": m.role, "content": m.content} for m in self.messages if m.role != "system"]
+            # Anthropic passes system messages separately; include only user/assistant and tool outputs
+            formatted: List[Dict[str, Any]] = []
+            for m in self.messages:
+                if m.role == 'system':
+                    continue
+                formatted.append({"role": m.role, "content": m.content})
+                if getattr(m, 'tool_results', None):
+                    for tr in m.tool_results:
+                        formatted.append({"role": 'assistant', "content": tr.get('output', '')})
+            return formatted
         elif provider_name in ["ollama", "huggingface"]:
-            # These providers typically don't support chat format directly
-            # Return a simple list that can be formatted later
-            return [{"role": m.role, "content": m.content} for m in self.messages]
+            # These providers typically don't support chat format directly; include tool outputs too
+            formatted: List[Dict[str, Any]] = []
+            for m in self.messages:
+                formatted.append({"role": m.role, "content": m.content})
+                if getattr(m, 'tool_results', None):
+                    for tr in m.tool_results:
+                        formatted.append({"role": 'assistant', "content": tr.get('output', '')})
+            return formatted
         else:
-            # Default format
-            return [{"role": m.role, "content": m.content} for m in self.messages]
+            # Default format, including any tool outputs
+            formatted: List[Dict[str, Any]] = []
+            for m in self.messages:
+                formatted.append({"role": m.role, "content": m.content})
+                if getattr(m, 'tool_results', None):
+                    for tr in m.tool_results:
+                        formatted.append({"role": 'assistant', "content": tr.get('output', '')})
+            return formatted
     
     def send(self, message: str, 
              provider: Optional[Union[str, AbstractLLMInterface]] = None,
@@ -831,6 +856,8 @@ class Session:
             messages=provider_messages,
             **kwargs
         )
+
+        print("INITIAL RESPONSE: ", initial_response)
         
         # If no tool calls, add the response and return
         if not initial_response.has_tool_calls():
@@ -841,6 +868,8 @@ class Session:
         # Execute the tool calls
         logger.info("Session: LLM requested tool calls, executing them")
         tool_results = self.execute_tool_calls(initial_response, tool_functions)
+
+        print("TOOL RESULTS: ", tool_results)
         
         # Add the assistant message with tool calls
         logger.info(f"Session: Adding tool results to conversation: {len(tool_results)} results")
@@ -855,6 +884,7 @@ class Session:
         
         # Get updated conversation history including tool results
         updated_provider_messages = self.get_messages_for_provider(provider_name)
+        print("UPDATED PROVIDER MESSAGES: ", updated_provider_messages)
         
         follow_up_response = provider.generate(
             prompt="",  # Use the conversation history with tool results
@@ -865,10 +895,16 @@ class Session:
             top_p=top_p,
             frequency_penalty=frequency_penalty,
             presence_penalty=presence_penalty,
-            tools=self.tools,
+            # Turn off tools for the follow-up summary
+            tools=None,
             messages=updated_provider_messages,
             **kwargs
         )
+
+        print("FOLLOW UP RESPONSE: ", follow_up_response)
+
+        check = self.get_messages_for_provider(provider_name)
+        print("CHECK: ", check)
         
         # Add the final assistant response
         logger.info("Session: Received follow-up response from LLM, adding to conversation")
