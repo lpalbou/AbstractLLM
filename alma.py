@@ -1,0 +1,348 @@
+"""
+ALMA - Abstract Language Model Agent
+
+A minimal, clean agent implementation leveraging AbstractLLM and its tool call abstraction.
+"""
+
+import os
+import time
+import logging
+from typing import Dict, List, Any, Optional, Callable, Union
+
+from abstractllm import create_llm
+from abstractllm.session import Session, SessionManager
+from abstractllm.tools import function_to_tool_definition
+from abstractllm.types import GenerateResponse
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("alma.log")
+    ]
+)
+logger = logging.getLogger("alma")
+
+
+def log_step(step_number: int, step_name: str, message: str) -> None:
+    """Log a step in the agent's process with consistent formatting."""
+    logger.info(f"STEP {step_number}: {step_name} - {message}")
+
+
+def read_file(file_path: str, max_lines: Optional[int] = None) -> str:
+    """
+    Read the contents of a file with security validation.
+    
+    Args:
+        file_path: The path of the file to read
+        max_lines: Maximum number of lines to read (optional)
+        
+    Returns:
+        The file contents as a string, or an error message
+    """
+    # Security: Define allowed directories
+    allowed_directories = [
+        os.getcwd(),  # Current working directory
+        os.path.join(os.getcwd(), "data"),  # Data directory
+    ]
+    
+    # Security: Path validation
+    abs_path = os.path.abspath(os.path.normpath(file_path))
+    is_safe = any(
+        os.path.commonpath([abs_path, os.path.abspath(allowed_dir)]) == os.path.abspath(allowed_dir)
+        for allowed_dir in allowed_directories
+    )
+    
+    if not is_safe:
+        return f"Error: Access to {file_path} is not allowed for security reasons."
+    
+    # Validate max_lines
+    if max_lines is not None and (max_lines <= 0 or max_lines > 10000):
+        return f"Error: max_lines must be between 1 and 10000."
+    
+    # Execute with safeguards
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            if max_lines is not None:
+                lines = [next(f) for _ in range(max_lines)]
+                content = ''.join(lines)
+            else:
+                # Limit file size for security
+                content = f.read(10 * 1024 * 1024)  # 10MB limit
+                if len(content) >= 10 * 1024 * 1024:
+                    content += "\n... (file truncated due to size limits)"
+        return content
+    except Exception as e:
+        return f"Error reading file: {str(e)}"
+
+
+class ALMA:
+    """
+    Abstract Language Model Agent - A minimal agent implementation leveraging AbstractLLM.
+    """
+    
+    def __init__(
+        self,
+        provider_name: str = "anthropic",
+        model_name: str = "claude-3-5-haiku-20241022",
+        api_key: Optional[str] = None,
+        session_id: Optional[str] = None
+    ):
+        """
+        Initialize the ALMA agent.
+        
+        Args:
+            provider_name: The LLM provider to use (default: anthropic)
+            model_name: The model to use (default: claude-3-5-haiku-20241022)
+            api_key: The API key for the provider (optional)
+            session_id: A unique ID for this session (optional)
+        """
+        self.provider_name = provider_name
+        self.model_name = model_name
+        self.session_id = session_id or f"alma-{int(time.time())}"
+        
+        # Initialize the provider with configuration
+        provider_config = {
+            "api_key": api_key,
+            "model": model_name
+        }
+        self.provider = create_llm(provider_name, **provider_config)
+        
+        # Initialize session manager and create a session
+        self.session_manager = SessionManager()
+        
+        # Define system prompt that explains the agent's capabilities
+        self.system_prompt = """
+        You are a helpful assistant that can use tools to answer questions.
+        When you need information that might require a tool, use the appropriate tool.
+        Always think step by step about which tools you need and why.
+        For file access, use the read_file tool rather than making assumptions about file contents.
+        """
+        
+        # Set up default available tools
+        self.tool_functions = {
+            "read_file": read_file,
+        }
+        
+        # Define tool schemas 
+        self.tools = [
+            function_to_tool_definition(read_file)
+        ]
+        
+        # Create initial session
+        self.session = self._create_session()
+        
+        log_step(0, "INIT", f"Initialized ALMA with provider={provider_name}, model={model_name}")
+
+    def _create_session(self) -> Session:
+        """Create a new session with the current provider and system prompt."""
+        # Create a new session
+        session = Session(
+            system_prompt=self.system_prompt,
+            provider=self.provider
+        )
+        
+        # Add tools to the session
+        for tool in self.tools:
+            session.add_tool(tool)
+            
+        # Store the session in the manager
+        self.session_manager.sessions[self.session_id] = session
+        
+        return session
+
+    def _get_session(self) -> Session:
+        """Get or create a session for the current session ID."""
+        # Try to get an existing session
+        session = self.session_manager.get_session(self.session_id)
+        
+        # Create a new session if one doesn't exist
+        if session is None:
+            session = self._create_session()
+            
+        return session
+
+    def run(self, query: str) -> str:
+        """
+        Process a user query using the LLM-first tool call flow.
+        
+        Args:
+            query: The user's query
+            
+        Returns:
+            The final response from the LLM
+        """
+
+        try:
+            # STEP 1: User → Agent - Log the incoming query
+            log_step(1, "USER→AGENT", f"Received query: {query[:100]}...")
+            
+            # Get or create a session
+            session = self._get_session()
+            
+            # Add user message to session for context
+            session.add_message("user", query)
+            
+            # STEP 2: Agent → LLM - Send query to LLM with tools
+            tool_names = list(self.tool_functions.keys())
+            log_step(2, "AGENT→LLM", f"Sending query to {self.provider_name} with available tools: {tool_names}")
+            
+            # Use the session's generate_with_tools method to handle the flow
+            response = session.generate_with_tools(
+                tool_functions=self.tool_functions,
+                model=self.model_name
+            )
+            
+            # Check if tools were used
+            if hasattr(response, 'tool_calls') and response.tool_calls and response.tool_calls.has_tool_calls():
+                tool_names = [tc.name for tc in response.tool_calls.tool_calls]
+                log_step(3, "LLM→AGENT", f"LLM requested tool(s): {', '.join(tool_names)}")
+                
+                # Log each tool execution
+                for tool_call in response.tool_calls.tool_calls:
+                    log_step(4, "AGENT→TOOL", f"Executing tool: {tool_call.name} with args: {tool_call.arguments}")
+                
+                log_step(5, "TOOL→LLM", "Tool execution completed, results sent to LLM")
+            else:
+                log_step(3, "LLM→AGENT", "LLM generated response without tool calls")
+            
+            # Get the final response content
+            final_response = response.content if response.content else ""
+            
+            # STEP 6: LLM → Agent → User - Return final response
+            log_step(6, "LLM→USER", f"Final response: {final_response[:100]}..." if len(final_response) > 100 else final_response)
+            
+            return final_response
+            
+        except Exception as e:
+            error_msg = f"Error during agent execution: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return f"I encountered an error processing your request: {str(e)}"
+    
+    def run_streaming(self, query: str) -> None:
+        """
+        Process a user query with streaming output.
+        
+        Args:
+            query: The user's query
+        """
+        try:
+            # STEP 1: User → Agent - Log the incoming query
+            log_step(1, "USER→AGENT", f"Received streaming query: {query[:100]}...")
+            
+            # Get or create a session
+            session = self._get_session()
+            
+            # Add user message to session for context
+            session.add_message("user", query)
+            
+            # STEP 2: Agent → LLM - Send query to LLM with tools
+            tool_names = list(self.tool_functions.keys())
+            log_step(2, "AGENT→LLM", f"Sending streaming query to {self.provider_name} with available tools: {tool_names}")
+            
+            # Track content for session history
+            content_buffer = []
+            
+            # Use streaming version with tool support
+            print("\nAssistant: ", end="", flush=True)
+            
+            # Attempt streaming; if streaming API not supported, fall back to non-streaming
+            try:
+                for chunk in session.generate_with_tools_streaming(
+                    tool_functions=self.tool_functions,
+                    model=self.model_name
+                ):
+                    if isinstance(chunk, str):
+                        # Regular content chunk
+                        print(chunk, end="", flush=True)
+                        content_buffer.append(chunk)
+                    elif isinstance(chunk, dict) and chunk.get("type") == "tool_result":
+                        # Tool execution notification
+                        result = chunk.get("tool_call", {}) or chunk.get("result", {})
+                        tool_name = result.get("name", "unknown")
+                        tool_args = result.get("arguments", {})
+
+                        # Log tool execution
+                        log_step(3, "LLM→AGENT", f"LLM requested tool: {tool_name}")
+                        log_step(4, "AGENT→TOOL", f"Executing tool: {tool_name} with args: {tool_args}")
+                        log_step(5, "TOOL→LLM", f"Tool execution completed, results sent to LLM")
+
+                        # Visual indicator of tool execution
+                        print(f"\n[Executing tool: {tool_name}]\n", flush=True)
+            except TypeError as e:
+                # Streaming not supported by provider; fallback to non-streaming
+                logger.warning(f"Streaming not supported, falling back to run(): {e}")
+                response = self.run(query)
+                print(f"\nAssistant: {response}\n")
+                return
+            
+            # Join content chunks for session history
+            final_content = "".join(content_buffer)
+            
+            # Add assistant response to session
+            session.add_message("assistant", final_content)
+            
+            # Complete the output with a newline
+            print("\n")
+            
+            # STEP 6: Log final response
+            log_step(6, "LLM→USER", f"Final streaming response completed")
+            
+        except Exception as e:
+            error_msg = f"Error during streaming agent execution: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            print(f"\nError: {error_msg}\n")
+    
+    def run_interactive(self, stream: bool = True):
+        """Run the agent in interactive mode."""
+        print("ALMA Interactive Mode ( Streaming: " , stream , ") - Type 'exit' to quit.\n")
+        
+        while True:
+            # Get user input
+            query = input("\nYou: ")
+            
+            # Check for exit command
+            if query.lower() in ["exit", "quit", "bye"]:
+                print("Ending session. Goodbye!")
+                break
+                
+            # Process the query
+            if stream:
+                self.run_streaming(query)
+            else:
+                self.run(query)
+
+
+def main():
+    """Main entry point when script is run directly."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="ALMA - Abstract Language Model Agent")
+    parser.add_argument("--provider", default="anthropic", help="LLM provider to use")
+    parser.add_argument("--model", default="claude-3-5-haiku-20241022", help="Model name to use")
+    parser.add_argument("--query", help="Query to process (if not provided, runs in interactive mode)")
+    parser.add_argument("--stream", action="store_true", help="Use streaming output")
+    
+    args = parser.parse_args()
+    
+    # Create agent
+    agent = ALMA(
+        provider_name=args.provider,
+        model_name=args.model
+    )
+    
+    # Process query or run in interactive mode
+    if args.query:
+        if args.stream:
+            agent.run_streaming(args.query)
+        else:
+            response = agent.run(args.query)
+            print(f"\nAssistant: {response}")
+    else:
+        agent.run_interactive(args.stream)
+
+
+if __name__ == "__main__":
+    main() 

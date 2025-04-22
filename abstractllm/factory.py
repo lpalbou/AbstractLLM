@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 import importlib
 import logging
 from abstractllm.interface import AbstractLLMInterface, ModelParameter
+import os
 
 # Configure logger
 logger = logging.getLogger("abstractllm.factory")
@@ -62,11 +63,21 @@ def create_llm(provider: str, **config) -> AbstractLLMInterface:
     # Check for required API key (only for providers that always need it)
     if provider in _REQUIRED_API_KEYS:
         api_key = config.get(ModelParameter.API_KEY) or config.get("api_key")
+
         if not api_key:
+            if provider == "openai":
+                api_key = os.environ.get("OPENAI_API_KEY")
+            elif provider == "anthropic":                
+                api_key = os.environ.get("ANTHROPIC_API_KEY")
+
+        if api_key:
+            config[ModelParameter.API_KEY] = api_key
+        else:
             env_var = _REQUIRED_API_KEYS[provider]
             raise ValueError(
                 f"{provider} API key not provided. Use --api-key or set {env_var} environment variable."
             )
+        
     
     # Create provider instance with config
     return provider_class(config) 

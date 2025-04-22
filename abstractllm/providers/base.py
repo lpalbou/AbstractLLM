@@ -55,7 +55,7 @@ class BaseProvider(AbstractLLMInterface):
             tools: A list of tool definitions to validate
             
         Raises:
-            ValueError: If the provider does not support tools but they are provided
+            UnsupportedFeatureError: If the provider does not support tools but they are provided
         """
         if not tools:
             return
@@ -70,8 +70,11 @@ class BaseProvider(AbstractLLMInterface):
         )
         
         if not supports_tools:
-            raise ValueError(
-                f"{self.__class__.__name__} does not support function/tool calling"
+            from abstractllm.exceptions import UnsupportedFeatureError
+            raise UnsupportedFeatureError(
+                feature="function_calling",
+                message=f"{self.__class__.__name__} does not support function/tool calling",
+                provider=self.provider_name
             )
     
     def _process_tools(self, tools: List[Any]) -> List["ToolDefinition"]:

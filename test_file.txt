@@ -29,3 +29,11 @@ Pierre looked at the manuscript in his hand—his life's work, his mountain of m
 As they left the station together, Pierre understood what all the great characters had discovered in their most profound moments: that life's meaning isn't found in grand gestures or philosophical questions, but in the courage to face another human soul without pretense. Like Sydney Carton approaching the guillotine, he felt the beauty of surrender.
 
 Behind them, the fig tree of possibilities that had once paralyzed him with choices continued to bear fruit, but Pierre no longer looked back. The train departed, carrying away the ghosts of literature's most tortured souls, while he walked forward into an unwritten page.
+
+This is a test file for the AbstractLLM agent.
+It contains multiple lines of text.
+The agent should be able to read this file when requested.
+This is line 4 of the test file.
+This is line 5 of the test file.
+The agent should be able to successfully read this file.
+The file path is test_file.txt, located in the project root directory.

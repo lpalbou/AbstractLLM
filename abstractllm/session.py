@@ -266,7 +266,9 @@ class Session:
         if provider_name == "openai":
             return [{"role": m.role, "content": m.content} for m in self.messages]
         elif provider_name == "anthropic":
-            return [{"role": m.role, "content": m.content} for m in self.messages]
+            # Anthropic doesn't support system messages in the messages array
+            # They need to be passed separately as a system parameter
+            return [{"role": m.role, "content": m.content} for m in self.messages if m.role != "system"]
         elif provider_name in ["ollama", "huggingface"]:
             # These providers typically don't support chat format directly
             # Return a simple list that can be formatted later
@@ -539,21 +541,10 @@ class Session:
                 - A ToolDefinition object
         
         Raises:
-            ValueError: If tools are not available or the provider doesn't support tool calls
+            ValueError: If tools are not available
         """
         if not TOOLS_AVAILABLE:
             raise ValueError("Tool support is not available. Install the required dependencies.")
-        
-        # Check if the provider supports tool calls if available
-        if self._provider is not None:
-            capabilities = self._provider.get_capabilities()
-            has_tool_support = capabilities.get(ModelCapability.FUNCTION_CALLING, False) or capabilities.get(ModelCapability.TOOL_USE, False)
-            if not has_tool_support:
-                raise UnsupportedFeatureError(
-                    "function_calling",
-                    f"Provider {self._provider.__class__.__name__} does not support function calling",
-                    provider=self._provider.__class__.__name__
-                )
         
         # Convert tool to ToolDefinition
         if callable(tool):
@@ -567,6 +558,7 @@ class Session:
             tool_def = tool
             
         self.tools.append(tool_def)
+        # The provider will validate tool support when generate is called
     
     def execute_tool_call(
         self,
@@ -819,6 +811,13 @@ class Session:
         
         # Generate an initial response
         logger.info("Session: Sending initial prompt to LLM with tools available")
+        
+        # Get the provider name to format messages properly
+        provider_name = self._get_provider_name(provider)
+        
+        # Get conversation history formatted for this provider
+        provider_messages = self.get_messages_for_provider(provider_name)
+        
         initial_response = provider.generate(
             prompt=prompt if prompt else "",  # Empty if using conversation history
             system_prompt=self.system_prompt,
@@ -829,6 +828,7 @@ class Session:
             frequency_penalty=frequency_penalty,
             presence_penalty=presence_penalty,
             tools=self.tools,
+            messages=provider_messages,
             **kwargs
         )
         
@@ -852,6 +852,10 @@ class Session:
         
         # Generate a follow-up response
         logger.info("Session: Sending follow-up prompt to LLM with tool results")
+        
+        # Get updated conversation history including tool results
+        updated_provider_messages = self.get_messages_for_provider(provider_name)
+        
         follow_up_response = provider.generate(
             prompt="",  # Use the conversation history with tool results
             system_prompt=self.system_prompt,
@@ -862,12 +866,21 @@ class Session:
             frequency_penalty=frequency_penalty,
             presence_penalty=presence_penalty,
             tools=self.tools,
+            messages=updated_provider_messages,
             **kwargs
         )
         
         # Add the final assistant response
         logger.info("Session: Received follow-up response from LLM, adding to conversation")
-        self.add_message(MessageRole.ASSISTANT, follow_up_response.content or "")
+        
+        # Ensure we extract content properly
+        final_content = follow_up_response.content if hasattr(follow_up_response, 'content') else ""
+        
+        # Log the content we're adding
+        logger.debug(f"Adding final content to conversation: {final_content}")
+        
+        # Add to conversation
+        self.add_message(MessageRole.ASSISTANT, final_content)
         
         return follow_up_response
         
@@ -943,6 +956,12 @@ class Session:
         accumulated_content = ""    # Buffer for accumulating content chunks
         pending_tool_results = []   # Store tool results for later conversation state
         
+        # Get the provider name to format messages properly
+        provider_name = self._get_provider_name(provider)
+        
+        # Get conversation history formatted for this provider
+        provider_messages = self.get_messages_for_provider(provider_name)
+        
         # Start streaming generation
         stream = provider.generate(
             prompt=prompt if prompt else "",  # Empty if using conversation history
@@ -954,33 +973,44 @@ class Session:
             frequency_penalty=frequency_penalty,
             presence_penalty=presence_penalty,
             tools=self.tools,
+            messages=provider_messages,
             stream=True,
             **kwargs
         )
         
         # Process the stream chunks one by one
         for chunk in stream:
-            # Check if this is a ToolCallRequest
-            if hasattr(chunk, "tool_calls") and chunk.tool_calls and len(chunk.tool_calls.tool_calls) > 0:
-                # Tool calls have been detected in the stream
-                # Execute each tool call in the request
-                for tool_call in chunk.tool_calls.tool_calls:
-                    # Execute the tool and get the result
+            # 1) Raw text chunk (may be emitted as plain str)
+            if isinstance(chunk, str):
+                accumulated_content += chunk
+                yield chunk
+                continue
+
+            # 2) Anthropic delta-style function/tool call event
+            if hasattr(chunk, 'delta') and hasattr(chunk.delta, 'tool_use'):
+                tool_use = chunk.delta.tool_use
+                call_id = getattr(tool_use, 'id', f"call_{len(pending_tool_results)}")
+                name = getattr(tool_use, 'name', None) or ''
+                args = getattr(tool_use, 'input', {})
+                # Build a ToolCall object for execution
+                tool_call_obj = ToolCall(id=call_id, name=name, arguments=args)
+                tool_result = self.execute_tool_call(tool_call_obj, tool_functions)
+                pending_tool_results.append(tool_result)
+                # Yield unified tool_result dict
+                yield {"type": "tool_result", "tool_call": tool_result}
+                continue
+
+            # 3) End-of-stream ToolCallRequest (Provider yields this after text)
+            if isinstance(chunk, ToolCallRequest) and hasattr(chunk, 'tool_calls') and chunk.tool_calls:
+                for tool_call in chunk.tool_calls:
                     tool_result = self.execute_tool_call(tool_call, tool_functions)
-                    # Store the result for later conversation state
                     pending_tool_results.append(tool_result)
-                    
-                    # Yield the tool result as a special dictionary format
-                    # This allows the caller to handle tool calls specially (e.g., show execution status)
-                    yield {
-                        "type": "tool_result",
-                        "tool_call": tool_result
-                    }
-            # Otherwise it's a regular text chunk
-            elif hasattr(chunk, "content") and chunk.content:
-                # Accumulate content for later conversation state
+                    yield {"type": "tool_result", "tool_call": tool_result}
+                continue
+
+            # 4) Standard content in structured chunk
+            if hasattr(chunk, 'content') and chunk.content:
                 accumulated_content += chunk.content
-                # Yield the content chunk directly for immediate display
                 yield chunk.content
         
         # After initial streaming is complete, add the final message with any tool results
@@ -994,7 +1024,7 @@ class Session:
             
         # If we executed tools, generate a follow-up response to incorporate the results
         if pending_tool_results:
-            # Generate follow-up response with tools results in the conversation history
+            # Generate follow-up response to incorporate tool results
             follow_up_stream = provider.generate(
                 prompt="",  # Use the conversation history with tool results
                 system_prompt=self.system_prompt,
@@ -1008,16 +1038,19 @@ class Session:
                 stream=True,
                 **kwargs
             )
-            
+
             # Track follow-up content for conversation state
             follow_up_content = ""
-            
-            # Yield follow-up chunks for immediate display
+
+            # Yield follow-up chunks for immediate display (handle str or .content)
             for chunk in follow_up_stream:
-                if hasattr(chunk, "content") and chunk.content:
+                if isinstance(chunk, str):
+                    follow_up_content += chunk
+                    yield chunk
+                elif hasattr(chunk, "content") and chunk.content:
                     follow_up_content += chunk.content
                     yield chunk.content
-            
+
             # Add the final follow-up response to the conversation
             if follow_up_content:
                 self.add_message(MessageRole.ASSISTANT, follow_up_content)

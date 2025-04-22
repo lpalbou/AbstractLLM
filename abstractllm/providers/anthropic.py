@@ -101,7 +101,7 @@ class AnthropicProvider(AbstractLLMInterface):
             ModelParameter.TOP_P: 1.0,
             ModelParameter.FREQUENCY_PENALTY: 0.0,
             ModelParameter.PRESENCE_PENALTY: 0.0
-        }
+        }   
         
         # Merge defaults with provided config
         self.config_manager.merge_with_defaults(default_config)
@@ -332,36 +332,40 @@ class AnthropicProvider(AbstractLLMInterface):
         # Prepare messages
         messages = []
         
-        # Add system message if provided (either from config or parameter)
-        system_prompt = system_prompt or self.config_manager.get_param(ModelParameter.SYSTEM_PROMPT)
-        
-        # Prepare user message content
-        content = []
-        
-        # Add files first if any
-        if processed_files:
-            for media_input in processed_files:
-                content.append(media_input.to_provider_format("anthropic"))
-        
-        # Add text prompt after files, only if not empty
-        if prompt and prompt.strip():
-            content.append({
-                "type": "text",
-                "text": prompt
+        # Check if messages are provided in kwargs
+        if 'messages' in kwargs and kwargs['messages']:
+            messages = kwargs['messages']
+        else:
+            # Add system message if provided (either from config or parameter)
+            system_prompt = system_prompt or self.config_manager.get_param(ModelParameter.SYSTEM_PROMPT)
+            
+            # Prepare user message content
+            content = []
+            
+            # Add files first if any
+            if processed_files:
+                for media_input in processed_files:
+                    content.append(media_input.to_provider_format("anthropic"))
+            
+            # Add text prompt after files, only if not empty
+            if prompt and prompt.strip():
+                content.append({
+                    "type": "text",
+                    "text": prompt
+                })
+            
+            # Ensure there's at least one content item with non-whitespace text
+            if not content:
+                content.append({
+                    "type": "text",
+                    "text": "Hello"  # Use a minimal valid non-whitespace text
+                })
+            
+            # Add the user message with the content array
+            messages.append({
+                "role": "user",
+                "content": content
             })
-        
-        # Ensure there's at least one content item with non-whitespace text
-        if not content:
-            content.append({
-                "type": "text",
-                "text": "Hello"  # Use a minimal valid non-whitespace text
-            })
-        
-        # Add the user message with the content array
-        messages.append({
-            "role": "user",
-            "content": content
-        })
         
         # Log request
         log_request("anthropic", prompt, {
@@ -406,7 +410,10 @@ class AnthropicProvider(AbstractLLMInterface):
                     current_tool_calls = []
                     current_content = ""
                 
-                    with client.messages.stream(**message_params) as stream:
+                    # Remove 'stream' flag before calling the stream method
+                    sync_params = message_params.copy()
+                    sync_params.pop("stream", None)
+                    with client.messages.stream(**sync_params) as stream:
                         for chunk in stream:
                             if hasattr(chunk, 'delta') and hasattr(chunk.delta, 'text'):
                                 current_content += chunk.delta.text
@@ -494,6 +501,8 @@ class AnthropicProvider(AbstractLLMInterface):
                     # For normal text responses
                     result = response.content[0].text
                     log_response("anthropic", result)
+                    # Log the raw response for debugging
+                    logger.debug(f"Raw Anthropic response: {response}")
                     # Return a GenerateResponse object for consistency
                     from abstractllm.types import GenerateResponse
                     return GenerateResponse(
@@ -595,36 +604,40 @@ class AnthropicProvider(AbstractLLMInterface):
         # Prepare messages
         messages = []
         
-        # Add system message if provided (either from config or parameter)
-        system_prompt = system_prompt or self.config_manager.get_param(ModelParameter.SYSTEM_PROMPT)
-        
-        # Prepare user message content
-        content = []
-        
-        # Add files first if any
-        if processed_files:
-            for media_input in processed_files:
-                content.append(media_input.to_provider_format("anthropic"))
-        
-        # Add text prompt after files, only if not empty
-        if prompt and prompt.strip():
-            content.append({
-                "type": "text",
-                "text": prompt
+        # Check if messages are provided in kwargs
+        if 'messages' in kwargs and kwargs['messages']:
+            messages = kwargs['messages']
+        else:
+            # Add system message if provided (either from config or parameter)
+            system_prompt = system_prompt or self.config_manager.get_param(ModelParameter.SYSTEM_PROMPT)
+            
+            # Prepare user message content
+            content = []
+            
+            # Add files first if any
+            if processed_files:
+                for media_input in processed_files:
+                    content.append(media_input.to_provider_format("anthropic"))
+            
+            # Add text prompt after files, only if not empty
+            if prompt and prompt.strip():
+                content.append({
+                    "type": "text",
+                    "text": prompt
+                })
+            
+            # Ensure there's at least one content item with non-whitespace text
+            if not content:
+                content.append({
+                    "type": "text",
+                    "text": "Hello"  # Use a minimal valid non-whitespace text
+                })
+            
+            # Add the user message with the content array
+            messages.append({
+                "role": "user",
+                "content": content
             })
-        
-        # Ensure there's at least one content item with non-whitespace text
-        if not content:
-            content.append({
-                "type": "text",
-                "text": "Hello"  # Use a minimal valid non-whitespace text
-            })
-        
-        # Add the user message with the content array
-        messages.append({
-            "role": "user",
-            "content": content
-        })
         
         # Log request
         log_request("anthropic", prompt, {
@@ -667,7 +680,10 @@ class AnthropicProvider(AbstractLLMInterface):
                     current_tool_calls = []
                     current_content = ""
                 
-                    async with client.messages.stream(**message_params) as stream:
+                    # Remove 'stream' flag before calling the stream method
+                    async_params = message_params.copy()
+                    async_params.pop("stream", None)
+                    async with client.messages.stream(**async_params) as stream:
                         async for chunk in stream:
                             if hasattr(chunk, 'delta') and hasattr(chunk.delta, 'text'):
                                 current_content += chunk.delta.text
@@ -755,6 +771,8 @@ class AnthropicProvider(AbstractLLMInterface):
                     # For normal text responses
                     result = response.content[0].text
                     log_response("anthropic", result)
+                    # Log the raw response for debugging
+                    logger.debug(f"Raw Anthropic response: {response}")
                     # Return a GenerateResponse object for consistency
                     from abstractllm.types import GenerateResponse
                     return GenerateResponse(
