@@ -67,13 +67,18 @@ class Message:
             content: The message content
             timestamp: When the message was created (defaults to now)
             metadata: Additional message metadata
-            tool_results: Optional list of tool execution results
+            tool_results: Optional list of tool execution results, each with:
+                - call_id: Unique identifier for the tool call
+                - name: Name of the tool that was called
+                - arguments: Arguments that were passed to the tool
+                - output: The output from the tool execution
+                - error: Optional error message if the tool execution failed
         """
         self.role = role
         self.content = content
         self.timestamp = timestamp or datetime.now()
         self.metadata = metadata or {}
-        self.tool_results = tool_results
+        self.tool_results = tool_results or []
         self.id = str(uuid.uuid4())
     
     def to_dict(self) -> Dict[str, Any]:
@@ -92,7 +97,24 @@ class Message:
         }
         
         if self.tool_results:
-            result["tool_results"] = self.tool_results
+            # Ensure each tool result has all required fields
+            formatted_results = []
+            for tr in self.tool_results:
+                formatted_result = {
+                    "call_id": tr.get("call_id", ""),
+                    "name": tr.get("name", "unknown_tool"),
+                    "output": tr.get("output", "")
+                }
+                
+                # Add optional fields if present
+                if "arguments" in tr:
+                    formatted_result["arguments"] = tr["arguments"]
+                if "error" in tr:
+                    formatted_result["error"] = tr["error"]
+                    
+                formatted_results.append(formatted_result)
+                
+            result["tool_results"] = formatted_results
             
         return result
     
@@ -107,12 +129,22 @@ class Message:
         Returns:
             A Message instance
         """
+        # Ensure tool_results are properly formatted
+        tool_results = data.get("tool_results")
+        if tool_results:
+            # Validate and normalize each tool result
+            for i, tr in enumerate(tool_results):
+                if "call_id" not in tr:
+                    tr["call_id"] = f"call_{i}"
+                if "name" not in tr:
+                    tr["name"] = "unknown_tool"
+        
         message = cls(
             role=data["role"],
             content=data["content"],
             timestamp=datetime.fromisoformat(data["timestamp"]),
             metadata=data.get("metadata", {}),
-            tool_results=data.get("tool_results")
+            tool_results=tool_results
         )
         message.id = data.get("id", str(uuid.uuid4()))
         return message
@@ -180,7 +212,8 @@ class Session:
         Add a message to the conversation.
         
         Args:
-            role: Message role ("user", "assistant", "system", "tool")
+            role: Message role ("user", "assistant", "system") - note that "tool" role
+                  will be adapted based on provider support
             content: Message content
             name: Optional name for the message sender
             tool_results: Optional list of tool execution results
@@ -263,44 +296,50 @@ class Session:
         Returns:
             List of message dictionaries in the provider's expected format
         """
-        if provider_name == "openai":
-            formatted: List[Dict[str, Any]] = []
-            for m in self.messages:
-                formatted.append({"role": m.role, "content": m.content})
-                # Inject any tool results as assistant messages
-                if getattr(m, 'tool_results', None):
-                    for tr in m.tool_results:
-                        formatted.append({"role": 'assistant', "content": tr.get('output', '')})
-            return formatted
-        elif provider_name == "anthropic":
-            # Anthropic passes system messages separately; include only user/assistant and tool outputs
-            formatted: List[Dict[str, Any]] = []
-            for m in self.messages:
-                if m.role == 'system':
-                    continue
-                formatted.append({"role": m.role, "content": m.content})
-                if getattr(m, 'tool_results', None):
-                    for tr in m.tool_results:
-                        formatted.append({"role": 'assistant', "content": tr.get('output', '')})
-            return formatted
-        elif provider_name in ["ollama", "huggingface"]:
-            # These providers typically don't support chat format directly; include tool outputs too
-            formatted: List[Dict[str, Any]] = []
-            for m in self.messages:
-                formatted.append({"role": m.role, "content": m.content})
-                if getattr(m, 'tool_results', None):
-                    for tr in m.tool_results:
-                        formatted.append({"role": 'assistant', "content": tr.get('output', '')})
-            return formatted
-        else:
-            # Default format, including any tool outputs
-            formatted: List[Dict[str, Any]] = []
-            for m in self.messages:
-                formatted.append({"role": m.role, "content": m.content})
-                if getattr(m, 'tool_results', None):
-                    for tr in m.tool_results:
-                        formatted.append({"role": 'assistant', "content": tr.get('output', '')})
-            return formatted
+        formatted: List[Dict[str, Any]] = []
+        
+        for m in self.messages:
+            # Skip system messages for Anthropic (handled separately)
+            if provider_name == "anthropic" and m.role == 'system':
+                continue
+                
+            # Add the main message
+            formatted.append({"role": m.role, "content": m.content})
+            
+            # Process any tool results with provider-specific formatting
+            if getattr(m, 'tool_results', None):
+                for tr in m.tool_results:
+                    tool_name = tr.get('name', 'unknown_tool')
+                    output = tr.get('output', '')
+                    
+                    if provider_name == "openai":
+                        # OpenAI uses 'function' role for tool outputs
+                        formatted.append({
+                            "role": "function", 
+                            "name": tool_name,
+                            "content": output
+                        })
+                    elif provider_name == "anthropic":
+                        # Anthropic doesn't support 'tool' role - use 'assistant' with formatted content
+                        formatted.append({
+                            "role": "assistant",
+                            "content": f"Tool '{tool_name}' returned the following output:\n\n{output}"
+                        })
+                    elif provider_name in ["ollama", "huggingface"]:
+                        # These providers may not have special tool formatting
+                        # Add a prefixed assistant message
+                        formatted.append({
+                            "role": "assistant",
+                            "content": f"TOOL OUTPUT [{tool_name}]: {output}"
+                        })
+                    else:
+                        # Default case: add prefixed content for clarity
+                        formatted.append({
+                            "role": "assistant", 
+                            "content": f"TOOL OUTPUT [{tool_name}]: {output}"
+                        })
+        
+        return formatted
     
     def send(self, message: str, 
              provider: Optional[Union[str, AbstractLLMInterface]] = None,
@@ -610,6 +649,7 @@ class Session:
             return {
                 "call_id": tool_call.id,
                 "name": tool_call.name,
+                "arguments": tool_call.arguments,
                 "output": None,
                 "error": error_msg
             }
@@ -645,6 +685,7 @@ class Session:
                     return {
                         "call_id": tool_call.id,
                         "name": tool_call.name,
+                        "arguments": tool_call.arguments,
                         "output": None,
                         "error": error_msg
                     }
@@ -666,6 +707,7 @@ class Session:
                         return {
                             "call_id": tool_call.id,
                             "name": tool_call.name,
+                            "arguments": tool_call.arguments,
                             "output": None,
                             "error": error_msg
                         }
@@ -673,10 +715,11 @@ class Session:
                     # If jsonschema is not available, skip validation
                     pass
             
-            # Return a successful result
+            # Return a successful result with tool name included
             return {
                 "call_id": tool_call.id,
                 "name": tool_call.name,
+                "arguments": tool_call.arguments,
                 "output": result,
                 "error": None
             }
@@ -687,6 +730,7 @@ class Session:
             return {
                 "call_id": tool_call.id,
                 "name": tool_call.name,
+                "arguments": tool_call.arguments,
                 "output": None,
                 "error": error_msg
             }
@@ -739,7 +783,9 @@ class Session:
         self, 
         tool_call_id: str, 
         result: Any, 
-        error: Optional[str] = None
+        error: Optional[str] = None,
+        tool_name: Optional[str] = None,
+        arguments: Optional[Dict[str, Any]] = None
     ) -> None:
         """
         Add a tool result to the session.
@@ -748,6 +794,8 @@ class Session:
             tool_call_id: ID of the tool call this result responds to
             result: The result of the tool execution
             error: Optional error message if the tool execution failed
+            tool_name: Optional name of the tool (for better provider formatting)
+            arguments: Optional arguments used in the tool call
         """
         # Use tracked assistant message index instead of searching
         if self._last_assistant_idx < 0:
@@ -771,6 +819,8 @@ class Session:
             # Convert to dict for backward compatibility
             tool_result = {
                 "call_id": tool_call_id,
+                "name": tool_name,
+                "arguments": arguments,
                 "output": str(result)
             }
             if error:
@@ -779,12 +829,128 @@ class Session:
             # Fallback to dict representation
             tool_result = {
                 "call_id": tool_call_id,
+                "name": tool_name,
+                "arguments": arguments,
                 "output": str(result)
             }
             if error:
                 tool_result["error"] = error
             
         last_assistant_msg.tool_results.append(tool_result)
+
+    def _adjust_system_prompt_for_tool_phase(
+        self, 
+        original_system_prompt: str, 
+        tool_call_count: int, 
+        executed_tools: List[str],
+        phase: str = "initial"
+    ) -> str:
+        """
+        Adjust the system prompt based on the current tool execution phase.
+        
+        This helps guide the LLM through different phases of the conversation:
+        - Initial phase: Encourage the LLM to use tools to gather information
+        - Processing phase: Guide the LLM to process tool outputs
+        - Synthesis phase: Direct the LLM to synthesize all gathered information
+        
+        Args:
+            original_system_prompt: The original system prompt
+            tool_call_count: How many tool calls have been executed
+            executed_tools: List of names of tools that have been executed
+            phase: Current phase ("initial", "processing", or "synthesis")
+            
+        Returns:
+            Adjusted system prompt
+        """
+        # Base system prompt from the original
+        base_prompt = original_system_prompt.strip()
+        
+        # Ensure there's proper spacing
+        if not base_prompt.endswith("."):
+            base_prompt += "."
+            
+        # Add a line break if needed
+        if not base_prompt.endswith("\n"):
+            base_prompt += "\n\n"
+            
+        # Phase-specific additions
+        if phase == "initial":
+            # Initial phase - encourage tool usage
+            addition = (
+                "When you need information to answer the user's question, use the appropriate tools provided to you. "
+                "Think step by step about which tools you need and why."
+            )
+        elif phase == "processing" and tool_call_count == 1:
+            # First tool just executed - guide tool output processing
+            tool_names = ", ".join(executed_tools)
+            addition = (
+                f"You've received output from the following tool(s): {tool_names}. "
+                "Process this information to help answer the user's question. "
+                "If you need more information, you can continue using tools."
+            )
+        elif phase == "processing" and tool_call_count > 1:
+            # Multiple tools executed - continue processing
+            tool_names = ", ".join(executed_tools)
+            addition = (
+                f"You've now used {tool_call_count} tools: {tool_names}. "
+                "Continue building your understanding based on this information. "
+                "If you still need more details, you can request additional tools."
+            )
+        elif phase == "synthesis":
+            # Final synthesis phase - create a complete answer
+            tool_names = ", ".join(executed_tools)
+            addition = (
+                f"You now have all necessary information from tools ({tool_names}). "
+                "Synthesize a complete, accurate answer to the user's original question based on all tool outputs. "
+                "Make sure your response is comprehensive and addresses all aspects of the query."
+            )
+        else:
+            # Default - minimal guidance
+            addition = "Use the available information to provide the best possible answer."
+            
+        return base_prompt + addition
+
+    def _track_tool_execution_metrics(
+        self,
+        tool_results: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Track metrics about tool execution success.
+        
+        Args:
+            tool_results: List of tool execution results
+            
+        Returns:
+            Dictionary of metrics including success rate and executed tools
+        """
+        metrics = {
+            "total_tools": len(tool_results),
+            "successful_tools": 0,
+            "failed_tools": 0,
+            "executed_tools": [],
+            "errors": []
+        }
+        
+        for result in tool_results:
+            tool_name = result.get("name", "unknown")
+            metrics["executed_tools"].append(tool_name)
+            
+            if result.get("error"):
+                metrics["failed_tools"] += 1
+                metrics["errors"].append({
+                    "tool": tool_name,
+                    "error": result.get("error")
+                })
+            else:
+                metrics["successful_tools"] += 1
+                
+        # Calculate success rate
+        if metrics["total_tools"] > 0:
+            metrics["success_rate"] = metrics["successful_tools"] / metrics["total_tools"]
+        else:
+            metrics["success_rate"] = 0
+            
+        return metrics
 
     def generate_with_tools(
         self,
@@ -796,6 +962,8 @@ class Session:
         top_p: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
         presence_penalty: Optional[float] = None,
+        max_tool_calls: int = 10,
+        adjust_system_prompt: bool = True,
         **kwargs
     ) -> "GenerateResponse":
         """
@@ -804,8 +972,12 @@ class Session:
         This method handles the complete flow of tool usage:
         1. Generate an initial response with tool definitions
         2. If the response contains tool calls, execute them
-        3. Add the tool results to the conversation
+        3. Add the tool results to the conversation (formatted according to provider requirements)
         4. Generate a follow-up response that incorporates the tool results
+        
+        Note: Tool results formatting varies by provider. Some providers (like OpenAI) support
+        dedicated roles for tool outputs, while others (like Anthropic) require formatting
+        tool outputs as assistant messages.
         
         Args:
             tool_functions: A dictionary mapping tool names to their implementation functions
@@ -816,6 +988,8 @@ class Session:
             top_p: The top_p value to use
             frequency_penalty: The frequency penalty to use
             presence_penalty: The presence penalty to use
+            max_tool_calls: Maximum number of tool call iterations to prevent infinite loops
+            adjust_system_prompt: Whether to adjust the system prompt based on tool execution phase
             **kwargs: Additional provider-specific parameters
             
         Returns:
@@ -826,6 +1000,14 @@ class Session:
         # Ensure we have tools available
         if not TOOLS_AVAILABLE:
             raise ValueError("Tool support is not available. Install the required dependencies.")
+        
+        # Store the original prompt and system prompt for follow-up requests
+        original_prompt = prompt if prompt else ""
+        original_system_prompt = self.system_prompt
+        
+        # Track executed tools for metrics and prompt adjustment
+        all_executed_tools = []
+        current_system_prompt = original_system_prompt
         
         # Add user message if provided
         if prompt:
@@ -840,10 +1022,20 @@ class Session:
         # Get conversation history formatted for this provider
         provider_messages = self.get_messages_for_provider(provider_name)
         
+        # Adjust system prompt for initial phase if needed
+        if adjust_system_prompt:
+            current_system_prompt = self._adjust_system_prompt_for_tool_phase(
+                original_system_prompt, 
+                0, 
+                all_executed_tools, 
+                "initial"
+            )
+            logger.debug(f"Session: Using initial phase system prompt")
+        
         # 1) Initial generate with tools
         response = provider.generate(
-            prompt=prompt if prompt else "",
-            system_prompt=self.system_prompt,
+            prompt=original_prompt,
+            system_prompt=current_system_prompt,
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -855,27 +1047,67 @@ class Session:
             **kwargs
         )
         logger.info("Session: Received initial response from LLM")
-        print("INITIAL RESPONSE: ", response)
 
         # 2) Loop: execute any tool calls and regenerate until no more tools requested
-        while response.has_tool_calls():
+        tool_call_count = 0
+        while response.has_tool_calls() and tool_call_count < max_tool_calls:
+            # Increment counter to prevent infinite loops
+            tool_call_count += 1
+            
             # Execute tool calls
-            logger.info("Session: LLM requested tool calls, executing them")
+            logger.info(f"Session: LLM requested tool calls (iteration {tool_call_count}/{max_tool_calls})")
             tool_results = self.execute_tool_calls(response, tool_functions)
+            
+            # Track tool execution metrics
+            metrics = self._track_tool_execution_metrics(tool_results)
+            logger.info(f"Session: Tool execution metrics - "
+                       f"Success: {metrics['successful_tools']}/{metrics['total_tools']} "
+                       f"({metrics['success_rate']:.0%})")
+            
+            # Update executed tools list for system prompt adjustment
+            all_executed_tools.extend(metrics['executed_tools'])
+            # Remove duplicates while preserving order
+            all_executed_tools = list(dict.fromkeys(all_executed_tools))
+            
+            # Debug: Log tool call details
+            for tool_result in tool_results:
+                logger.info(f"Session: Executed tool call - ID: {tool_result.get('call_id')}, "
+                            f"Name: {tool_result.get('name')}, "
+                            f"Args: {tool_result.get('arguments')}")
+            
             # Add the assistant message with tool results
-            logger.info(f"Session: Adding tool results to conversation: {len(tool_results)} results")
-            self.add_message(
+            logger.info(f"Session: Adding assistant message with {len(tool_results)} tool results")
+            tool_message = self.add_message(
                 MessageRole.ASSISTANT,
                 content=response.content or "",
-                tool_results=tool_results
+                tool_results=tool_results,
+                metadata={"tool_metrics": metrics}
             )
+            
+            # Adjust system prompt based on tool execution phase
+            if adjust_system_prompt:
+                # Determine the phase based on tool call count and whether there are more expected
+                phase = "synthesis" if tool_call_count >= max_tool_calls - 1 else "processing"
+                
+                current_system_prompt = self._adjust_system_prompt_for_tool_phase(
+                    original_system_prompt, 
+                    tool_call_count, 
+                    all_executed_tools, 
+                    phase
+                )
+                logger.debug(f"Session: Adjusting to {phase} phase system prompt")
+            
             # Prepare follow-up prompt
             updated_provider_messages = self.get_messages_for_provider(provider_name)
-            logger.info("Session: Sending follow-up prompt to LLM with updated conversation")
-            # Regenerate with tools still enabled
+            
+            # Debug: Log message structure being sent to the provider
+            logger.debug(f"Session: Sending follow-up messages to LLM: {updated_provider_messages}")
+            logger.info(f"Session: Generating follow-up response (iteration {tool_call_count}) with updated conversation")
+            
+            # Regenerate with tools still enabled, passing the original prompt
             response = provider.generate(
-                prompt="",
-                system_prompt=self.system_prompt,
+                prompt=original_prompt,
+                system_prompt=current_system_prompt,
                 model=model,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -886,11 +1118,62 @@ class Session:
                 messages=updated_provider_messages,
                 **kwargs
             )
-            logger.info("Session: Received follow-up response from LLM")
+            logger.info(f"Session: Received follow-up response from LLM (iteration {tool_call_count})")
+        
+        # Log if we hit the maximum tool call limit
+        if tool_call_count >= max_tool_calls and response.has_tool_calls():
+            logger.warning(f"Session: Maximum tool call limit ({max_tool_calls}) reached. "
+                           f"Some tool calls may not have been executed.")
+        
+        # Log transition to final answer mode if tools were used
+        if tool_call_count > 0:
+            # Final synthesis phase - create a complete answer
+            if adjust_system_prompt:
+                final_system_prompt = self._adjust_system_prompt_for_tool_phase(
+                    original_system_prompt, 
+                    tool_call_count, 
+                    all_executed_tools, 
+                    "synthesis"
+                )
+                logger.info(f"Session: Transitioned from tool calling mode to answer generation mode")
+                logger.debug(f"Session: Using synthesis phase system prompt")
+                
+                # One final generation with synthesis prompt if needed and we didn't already synthesize
+                if current_system_prompt != final_system_prompt and response.has_tool_calls():
+                    updated_provider_messages = self.get_messages_for_provider(provider_name)
+                    response = provider.generate(
+                        prompt=original_prompt,
+                        system_prompt=final_system_prompt,
+                        model=model,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        top_p=top_p,
+                        frequency_penalty=frequency_penalty,
+                        presence_penalty=presence_penalty,
+                        tools=self.tools,
+                        messages=updated_provider_messages,
+                        **kwargs
+                    )
+                    logger.info(f"Session: Generated final synthesis response after tool execution")
 
-        # 3) Final assistant response (no more tool calls)
+        # 3) Final assistant response
         final_content = response.content or ""
-        self.add_message(MessageRole.ASSISTANT, final_content)
+        final_message = self.add_message(
+            MessageRole.ASSISTANT, 
+            final_content,
+            metadata={
+                "tool_execution": {
+                    "tool_call_count": tool_call_count,
+                    "executed_tools": all_executed_tools,
+                    "phase": "synthesis" if tool_call_count > 0 else "initial"
+                }
+            }
+        )
+        
+        # Reset the system prompt to the original
+        if adjust_system_prompt and self.system_prompt != original_system_prompt:
+            self.system_prompt = original_system_prompt
+            
         return response
         
     def generate_with_tools_streaming(
@@ -903,6 +1186,8 @@ class Session:
         top_p: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
         presence_penalty: Optional[float] = None,
+        max_tool_calls: int = 5,
+        adjust_system_prompt: bool = True,
         **kwargs
     ) -> Generator[Union[str, Dict[str, Any]], None, None]:
         """
@@ -924,6 +1209,10 @@ class Session:
         - If tools were executed: Generate and stream a follow-up response
         - Final state: Add the follow-up response as an assistant message
         
+        Note: Tool results formatting varies by provider. Some providers (like OpenAI) support
+        dedicated roles for tool outputs, while others (like Anthropic) require formatting
+        tool outputs as assistant messages.
+        
         Args:
             tool_functions: A dictionary mapping tool names to their implementation functions
             prompt: The input prompt (if None, uses the existing conversation history)
@@ -933,6 +1222,8 @@ class Session:
             top_p: The top_p value to use
             frequency_penalty: The frequency penalty to use
             presence_penalty: The presence penalty to use
+            max_tool_calls: Maximum number of tool call iterations to prevent infinite loops
+            adjust_system_prompt: Whether to adjust the system prompt based on tool execution phase
             **kwargs: Additional provider-specific parameters
             
         Yields:
@@ -954,6 +1245,10 @@ class Session:
         if not TOOLS_AVAILABLE:
             raise ValueError("Tool support is not available. Install the required dependencies.")
         
+        # Store the original prompt and system prompt for follow-up requests
+        original_prompt = prompt if prompt else ""
+        original_system_prompt = self.system_prompt
+        
         # Add user message if provided
         if prompt:
             self.add_message(MessageRole.USER, prompt)
@@ -964,6 +1259,9 @@ class Session:
         # Variables to track state
         accumulated_content = ""    # Buffer for accumulating content chunks
         pending_tool_results = []   # Store tool results for later conversation state
+        tool_call_count = 0         # Track tool execution count
+        all_executed_tools = []     # Track all executed tools for system prompt adjustment
+        current_system_prompt = original_system_prompt
         
         # Get the provider name to format messages properly
         provider_name = self._get_provider_name(provider)
@@ -971,10 +1269,23 @@ class Session:
         # Get conversation history formatted for this provider
         provider_messages = self.get_messages_for_provider(provider_name)
         
+        logger = logging.getLogger("abstractllm.session")
+        logger.info(f"Session: Starting streaming generation with tools")
+        
+        # Adjust system prompt for initial phase if needed
+        if adjust_system_prompt:
+            current_system_prompt = self._adjust_system_prompt_for_tool_phase(
+                original_system_prompt, 
+                0, 
+                all_executed_tools, 
+                "initial"
+            )
+            logger.debug(f"Session: Using initial phase system prompt for streaming")
+        
         # Start streaming generation
         stream = provider.generate(
-            prompt=prompt if prompt else "",  # Empty if using conversation history
-            system_prompt=self.system_prompt,
+            prompt=original_prompt,  # Use original prompt consistently
+            system_prompt=current_system_prompt,
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -997,14 +1308,36 @@ class Session:
 
             # 2) Anthropic delta-style function/tool call event
             if hasattr(chunk, 'delta') and hasattr(chunk.delta, 'tool_use'):
+                # Check if we're at the tool call limit
+                if tool_call_count >= max_tool_calls:
+                    logger.warning(f"Session: Maximum tool call limit ({max_tool_calls}) reached. Skipping tool call.")
+                    continue
+                
+                tool_call_count += 1
                 tool_use = chunk.delta.tool_use
                 call_id = getattr(tool_use, 'id', f"call_{len(pending_tool_results)}")
                 name = getattr(tool_use, 'name', None) or ''
                 args = getattr(tool_use, 'input', {})
+                
+                # Log tool call details
+                logger.info(f"Session: Detected streaming tool call (iteration {tool_call_count}/{max_tool_calls}) - "
+                           f"ID: {call_id}, Name: {name}, Args: {args}")
+                
                 # Build a ToolCall object for execution
                 tool_call_obj = ToolCall(id=call_id, name=name, arguments=args)
                 tool_result = self.execute_tool_call(tool_call_obj, tool_functions)
                 pending_tool_results.append(tool_result)
+                
+                # Update executed tools list
+                if name:
+                    all_executed_tools.append(name)
+                    # Remove duplicates while preserving order
+                    all_executed_tools = list(dict.fromkeys(all_executed_tools))
+                
+                # Log tool execution result
+                logger.info(f"Session: Executed streaming tool call - ID: {call_id}, "
+                           f"Name: {name}, Result preview: {str(tool_result.get('output', ''))[:50]}...")
+                
                 # Yield unified tool_result dict
                 yield {"type": "tool_result", "tool_call": tool_result}
                 continue
@@ -1012,8 +1345,30 @@ class Session:
             # 3) End-of-stream ToolCallRequest (Provider yields this after text)
             if isinstance(chunk, ToolCallRequest) and hasattr(chunk, 'tool_calls') and chunk.tool_calls:
                 for tool_call in chunk.tool_calls:
+                    # Check if we're at the tool call limit
+                    if tool_call_count >= max_tool_calls:
+                        logger.warning(f"Session: Maximum tool call limit ({max_tool_calls}) reached. Skipping tool call.")
+                        continue
+                    
+                    tool_call_count += 1
+                    
+                    # Log tool call details
+                    logger.info(f"Session: Detected end-of-stream tool call (iteration {tool_call_count}/{max_tool_calls}) - "
+                               f"ID: {tool_call.id}, Name: {tool_call.name}, Args: {tool_call.arguments}")
+                    
                     tool_result = self.execute_tool_call(tool_call, tool_functions)
                     pending_tool_results.append(tool_result)
+                    
+                    # Update executed tools list
+                    if hasattr(tool_call, 'name') and tool_call.name:
+                        all_executed_tools.append(tool_call.name)
+                        # Remove duplicates while preserving order
+                        all_executed_tools = list(dict.fromkeys(all_executed_tools))
+                    
+                    # Log tool execution result
+                    logger.info(f"Session: Executed end-of-stream tool call - ID: {tool_call.id}, "
+                               f"Name: {tool_call.name}, Result preview: {str(tool_result.get('output', ''))[:50]}...")
+                    
                     yield {"type": "tool_result", "tool_call": tool_result}
                 continue
 
@@ -1024,19 +1379,47 @@ class Session:
         
         # After initial streaming is complete, add the final message with any tool results
         if accumulated_content:
+            # Calculate metrics if tools were executed
+            metrics = None
+            if pending_tool_results:
+                metrics = self._track_tool_execution_metrics(pending_tool_results)
+                logger.info(f"Session: Tool execution metrics - "
+                           f"Success: {metrics['successful_tools']}/{metrics['total_tools']} "
+                           f"({metrics['success_rate']:.0%})")
+            
             # Add the assistant message with accumulated content and any tool results
+            logger.info(f"Session: Adding assistant message with {len(pending_tool_results)} tool results")
             self.add_message(
                 MessageRole.ASSISTANT,
                 content=accumulated_content,
-                tool_results=pending_tool_results if pending_tool_results else None
+                tool_results=pending_tool_results if pending_tool_results else None,
+                metadata={"tool_metrics": metrics} if metrics else None
             )
             
         # If we executed tools, generate a follow-up response to incorporate the results
         if pending_tool_results:
-            # Generate follow-up response to incorporate tool results
+            # Adjust system prompt for synthesis phase
+            if adjust_system_prompt:
+                phase = "synthesis" if tool_call_count >= max_tool_calls - 1 else "processing"
+                current_system_prompt = self._adjust_system_prompt_for_tool_phase(
+                    original_system_prompt, 
+                    tool_call_count, 
+                    all_executed_tools, 
+                    phase
+                )
+                logger.debug(f"Session: Adjusting to {phase} phase system prompt for streaming follow-up")
+            
+            # Get updated provider messages
+            updated_provider_messages = self.get_messages_for_provider(provider_name)
+            
+            # Debug: Log message structure being sent to the provider
+            logger.debug(f"Session: Sending follow-up messages to LLM: {updated_provider_messages}")
+            logger.info(f"Session: Generating follow-up streaming response with {len(pending_tool_results)} tool results")
+            
+            # Generate follow-up response to incorporate tool results, using original prompt
             follow_up_stream = provider.generate(
-                prompt="",  # Use the conversation history with tool results
-                system_prompt=self.system_prompt,
+                prompt=original_prompt,  # Use original prompt consistently
+                system_prompt=current_system_prompt,
                 model=model,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -1044,6 +1427,7 @@ class Session:
                 frequency_penalty=frequency_penalty,
                 presence_penalty=presence_penalty,
                 tools=self.tools,
+                messages=updated_provider_messages,
                 stream=True,
                 **kwargs
             )
@@ -1062,7 +1446,22 @@ class Session:
 
             # Add the final follow-up response to the conversation
             if follow_up_content:
-                self.add_message(MessageRole.ASSISTANT, follow_up_content)
+                logger.info(f"Session: Adding final follow-up assistant message")
+                self.add_message(
+                    MessageRole.ASSISTANT, 
+                    follow_up_content,
+                    metadata={
+                        "tool_execution": {
+                            "tool_call_count": tool_call_count,
+                            "executed_tools": all_executed_tools,
+                            "phase": "synthesis" if tool_call_count > 0 else "initial"
+                        }
+                    }
+                )
+        
+        # Reset the system prompt to the original
+        if adjust_system_prompt and self.system_prompt != original_system_prompt:
+            self.system_prompt = original_system_prompt
 
 
 class SessionManager:

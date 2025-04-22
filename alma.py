@@ -244,23 +244,67 @@ class ALMA:
                     tool_functions=self.tool_functions,
                     model=self.model_name
                 ):
+                    # Debug the chunk type and content
+                    logger.debug(f"Chunk type: {type(chunk)}, Content: {str(chunk)[:100]}...")
+                    
                     if isinstance(chunk, str):
                         # Regular content chunk
                         print(chunk, end="", flush=True)
                         content_buffer.append(chunk)
-                    elif isinstance(chunk, dict) and chunk.get("type") == "tool_result":
-                        # Tool execution notification
-                        result = chunk.get("tool_call", {}) or chunk.get("result", {})
-                        tool_name = result.get("name", "unknown")
-                        tool_args = result.get("arguments", {})
-
+                    elif isinstance(chunk, dict):
+                        # Handle different dictionary formats
+                        if chunk.get("type") == "tool_result" and (chunk.get("tool_call") or chunk.get("result")):
+                            # Tool execution result
+                            result = chunk.get("tool_call", {}) or chunk.get("result", {})
+                            tool_name = result.get("name", "unknown")
+                            tool_args = result.get("arguments", {})
+                            
+                            # Log tool execution
+                            log_step(3, "LLM→AGENT", f"LLM requested tool: {tool_name}")
+                            log_step(4, "AGENT→TOOL", f"Executing tool: {tool_name} with args: {tool_args}")
+                            log_step(5, "TOOL→LLM", f"Tool execution completed, results sent to LLM")
+                            
+                            # Visual indicator of tool execution
+                            print(f"\n[Executing tool: {tool_name}]\n", flush=True)
+                    # Handle ToolCallRequest objects directly from providers
+                    elif hasattr(chunk, 'tool_calls') and getattr(chunk, 'tool_calls', None):
+                        tool_calls = chunk.tool_calls
+                        for tool_call in tool_calls:
+                            tool_name = getattr(tool_call, 'name', 'unknown')
+                            tool_args = getattr(tool_call, 'arguments', {})
+                            
+                            # Log tool execution
+                            log_step(3, "LLM→AGENT", f"LLM requested tool: {tool_name}")
+                            log_step(4, "AGENT→TOOL", f"Executing tool: {tool_name} with args: {tool_args}")
+                            log_step(5, "TOOL→LLM", f"Tool execution completed, results sent to LLM")
+                            
+                            # Visual indicator of tool execution
+                            print(f"\n[Executing tool: {tool_name}]\n", flush=True)
+                    # Handle individual tool call objects
+                    elif hasattr(chunk, 'name') and hasattr(chunk, 'arguments'):
+                        tool_name = chunk.name
+                        tool_args = chunk.arguments
+                        
                         # Log tool execution
                         log_step(3, "LLM→AGENT", f"LLM requested tool: {tool_name}")
                         log_step(4, "AGENT→TOOL", f"Executing tool: {tool_name} with args: {tool_args}")
                         log_step(5, "TOOL→LLM", f"Tool execution completed, results sent to LLM")
-
+                        
                         # Visual indicator of tool execution
                         print(f"\n[Executing tool: {tool_name}]\n", flush=True)
+                    else:
+                        # Try to extract content from other object types (like Anthropic message chunks)
+                        content = None
+                        if hasattr(chunk, "content") and chunk.content:
+                            content = chunk.content
+                        elif hasattr(chunk, "delta") and hasattr(chunk.delta, "text"):
+                            content = chunk.delta.text
+                            
+                        if content:
+                            print(content, end="", flush=True)
+                            content_buffer.append(content)
+                        else:
+                            logger.debug(f"Unhandled chunk type: {type(chunk)}")
             except TypeError as e:
                 # Streaming not supported by provider; fallback to non-streaming
                 logger.warning(f"Streaming not supported, falling back to run(): {e}")
