@@ -7,6 +7,7 @@ A minimal, clean agent implementation leveraging AbstractLLM and its tool call a
 import os
 import time
 import logging
+import subprocess
 from typing import Dict, List, Any, Optional, Callable, Union
 
 from abstractllm import create_llm
@@ -78,6 +79,48 @@ def read_file(file_path: str, max_lines: Optional[int] = None) -> str:
         return f"Error reading file: {str(e)}"
 
 
+def execute_command(command: str, timeout: int = 30) -> str:
+    """
+    Execute a shell command and return its output.
+    
+    Args:
+        command: The command to execute
+        timeout: Maximum execution time in seconds (default: 30)
+        
+    Returns:
+        The command output (stdout and stderr) as a string
+    """
+    logger = logging.getLogger("alma.tools")
+    logger.info(f"Executing command: {command}")
+    
+    try:
+        # Execute command with timeout
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+        
+        # Combine stdout and stderr
+        output = result.stdout
+        if result.stderr:
+            if output:
+                output += "\n\n--- STDERR ---\n" + result.stderr
+            else:
+                output = result.stderr
+                
+        # Add return code information
+        output += f"\n\nExit code: {result.returncode}"
+        
+        return output
+    except subprocess.TimeoutExpired:
+        return f"Error: Command execution timed out after {timeout} seconds."
+    except Exception as e:
+        return f"Error executing command: {str(e)}"
+
+
 class ALMA:
     """
     Abstract Language Model Agent - A minimal agent implementation leveraging AbstractLLM.
@@ -119,16 +162,19 @@ class ALMA:
         When you need information that might require a tool, use the appropriate tool.
         Always think step by step about which tools you need and why.
         For file access, use the read_file tool rather than making assumptions about file contents.
+        For executing commands, use the execute_command tool to run shell commands when needed.
         """
         
         # Set up default available tools
         self.tool_functions = {
             "read_file": read_file,
+            "execute_command": execute_command,
         }
         
         # Define tool schemas 
         self.tools = [
-            function_to_tool_definition(read_file)
+            function_to_tool_definition(read_file),
+            function_to_tool_definition(execute_command),
         ]
         
         # Create initial session
