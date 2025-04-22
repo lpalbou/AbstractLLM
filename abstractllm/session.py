@@ -834,17 +834,15 @@ class Session:
         # Get the provider if needed
         provider = self._get_provider()
         
-        # Generate an initial response
-        logger.info("Session: Sending initial prompt to LLM with tools available")
-        
         # Get the provider name to format messages properly
         provider_name = self._get_provider_name(provider)
         
         # Get conversation history formatted for this provider
         provider_messages = self.get_messages_for_provider(provider_name)
         
-        initial_response = provider.generate(
-            prompt=prompt if prompt else "",  # Empty if using conversation history
+        # 1) Initial generate with tools
+        response = provider.generate(
+            prompt=prompt if prompt else "",
             system_prompt=self.system_prompt,
             model=model,
             temperature=temperature,
@@ -856,69 +854,44 @@ class Session:
             messages=provider_messages,
             **kwargs
         )
+        logger.info("Session: Received initial response from LLM")
+        print("INITIAL RESPONSE: ", response)
 
-        print("INITIAL RESPONSE: ", initial_response)
-        
-        # If no tool calls, add the response and return
-        if not initial_response.has_tool_calls():
-            logger.info("Session: LLM did not request any tool calls, returning direct response")
-            self.add_message(MessageRole.ASSISTANT, initial_response.content or "")
-            return initial_response
-            
-        # Execute the tool calls
-        logger.info("Session: LLM requested tool calls, executing them")
-        tool_results = self.execute_tool_calls(initial_response, tool_functions)
+        # 2) Loop: execute any tool calls and regenerate until no more tools requested
+        while response.has_tool_calls():
+            # Execute tool calls
+            logger.info("Session: LLM requested tool calls, executing them")
+            tool_results = self.execute_tool_calls(response, tool_functions)
+            # Add the assistant message with tool results
+            logger.info(f"Session: Adding tool results to conversation: {len(tool_results)} results")
+            self.add_message(
+                MessageRole.ASSISTANT,
+                content=response.content or "",
+                tool_results=tool_results
+            )
+            # Prepare follow-up prompt
+            updated_provider_messages = self.get_messages_for_provider(provider_name)
+            logger.info("Session: Sending follow-up prompt to LLM with updated conversation")
+            # Regenerate with tools still enabled
+            response = provider.generate(
+                prompt="",
+                system_prompt=self.system_prompt,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                tools=self.tools,
+                messages=updated_provider_messages,
+                **kwargs
+            )
+            logger.info("Session: Received follow-up response from LLM")
 
-        print("TOOL RESULTS: ", tool_results)
-        
-        # Add the assistant message with tool calls
-        logger.info(f"Session: Adding tool results to conversation: {len(tool_results)} results")
-        self.add_message(
-            MessageRole.ASSISTANT,
-            content=initial_response.content or "",
-            tool_results=tool_results
-        )
-        
-        # Generate a follow-up response
-        logger.info("Session: Sending follow-up prompt to LLM with tool results")
-        
-        # Get updated conversation history including tool results
-        updated_provider_messages = self.get_messages_for_provider(provider_name)
-        print("UPDATED PROVIDER MESSAGES: ", updated_provider_messages)
-        
-        follow_up_response = provider.generate(
-            prompt="",  # Use the conversation history with tool results
-            system_prompt=self.system_prompt,
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
-            frequency_penalty=frequency_penalty,
-            presence_penalty=presence_penalty,
-            # Turn off tools for the follow-up summary
-            tools=None,
-            messages=updated_provider_messages,
-            **kwargs
-        )
-
-        print("FOLLOW UP RESPONSE: ", follow_up_response)
-
-        check = self.get_messages_for_provider(provider_name)
-        print("CHECK: ", check)
-        
-        # Add the final assistant response
-        logger.info("Session: Received follow-up response from LLM, adding to conversation")
-        
-        # Ensure we extract content properly
-        final_content = follow_up_response.content if hasattr(follow_up_response, 'content') else ""
-        
-        # Log the content we're adding
-        logger.debug(f"Adding final content to conversation: {final_content}")
-        
-        # Add to conversation
+        # 3) Final assistant response (no more tool calls)
+        final_content = response.content or ""
         self.add_message(MessageRole.ASSISTANT, final_content)
-        
-        return follow_up_response
+        return response
         
     def generate_with_tools_streaming(
         self,
