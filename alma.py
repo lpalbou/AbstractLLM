@@ -8,6 +8,7 @@ import os
 import time
 import logging
 import subprocess
+import argparse
 from typing import Dict, List, Any, Optional, Callable, Union
 
 from abstractllm import create_llm
@@ -15,16 +16,43 @@ from abstractllm.session import Session, SessionManager
 from abstractllm.tools import function_to_tool_definition
 from abstractllm.types import GenerateResponse
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("alma.log")
-    ]
-)
+# Configure logging - we'll set the level dynamically based on verbose flag
 logger = logging.getLogger("alma")
+# Create handlers but don't add them yet - we'll do that in main()
+console_handler = logging.StreamHandler()
+file_handler = logging.FileHandler("alma.log")
+
+
+def configure_logging(verbose: bool = False):
+    """Configure logging based on verbose flag."""
+    # Set format for handlers
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+    console_handler.setFormatter(formatter)
+    file_handler.setFormatter(formatter)
+    
+    # Set level based on verbose flag
+    level = logging.DEBUG if verbose else logging.WARNING
+    
+    # Configure root logger for abstractllm package
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+    
+    # Make sure handlers aren't duplicated
+    if console_handler not in root_logger.handlers:
+        root_logger.addHandler(console_handler)
+    if file_handler not in root_logger.handlers:
+        root_logger.addHandler(file_handler)
+    
+    # Make our logger slightly more verbose
+    logger.setLevel(logging.INFO if verbose else logging.WARNING)
+    
+    # Configure specific loggers for different components
+    logging.getLogger("abstractllm").setLevel(level)
+    logging.getLogger("alma.tools").setLevel(logging.INFO if verbose else logging.WARNING)
+    
+    # If not verbose, suppress httpx logging
+    if not verbose:
+        logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def log_step(step_number: int, step_name: str, message: str) -> None:
@@ -131,7 +159,8 @@ class ALMA:
         provider_name: str = "anthropic",
         model_name: str = "claude-3-5-haiku-20241022",
         api_key: Optional[str] = None,
-        session_id: Optional[str] = None
+        session_id: Optional[str] = None,
+        verbose: bool = False
     ):
         """
         Initialize the ALMA agent.
@@ -141,10 +170,12 @@ class ALMA:
             model_name: The model to use (default: claude-3-5-haiku-20241022)
             api_key: The API key for the provider (optional)
             session_id: A unique ID for this session (optional)
+            verbose: Whether to log detailed information
         """
         self.provider_name = provider_name
         self.model_name = model_name
         self.session_id = session_id or f"alma-{int(time.time())}"
+        self.verbose = verbose
         
         # Initialize the provider with configuration
         provider_config = {
@@ -243,7 +274,9 @@ class ALMA:
             # STEP 3: LLM→AGENT - Received LLM response (tool execution done internally)
             log_step(3, "LLM→AGENT", "Received LLM response; tool calls handled internally by session.generate_with_tools")
             
-            print("RESPONSE: ", response)
+            if self.verbose:
+                logger.info(f"RESPONSE: {response}")
+                
             # Get the final response content
             final_response = response.content if response.content else ""
             
@@ -291,7 +324,8 @@ class ALMA:
                     model=self.model_name
                 ):
                     # Debug the chunk type and content
-                    logger.debug(f"Chunk type: {type(chunk)}, Content: {str(chunk)[:100]}...")
+                    if self.verbose:
+                        logger.debug(f"Chunk type: {type(chunk)}, Content: {str(chunk)[:100]}...")
                     
                     if isinstance(chunk, str):
                         # Regular content chunk
@@ -349,7 +383,7 @@ class ALMA:
                         if content:
                             print(content, end="", flush=True)
                             content_buffer.append(content)
-                        else:
+                        elif self.verbose:
                             logger.debug(f"Unhandled chunk type: {type(chunk)}")
             except TypeError as e:
                 # Streaming not supported by provider; fallback to non-streaming
@@ -377,7 +411,9 @@ class ALMA:
     
     def run_interactive(self, stream: bool = True):
         """Run the agent in interactive mode."""
-        print("ALMA Interactive Mode ( Streaming: " , stream , ") - Type 'exit' to quit.\n")
+        print("ALMA Interactive Mode " + 
+              ("(Streaming)" if stream else "(Non-streaming)") + 
+              " - Type 'exit' to quit.\n")
         
         while True:
             # Get user input
@@ -398,20 +434,23 @@ class ALMA:
 
 def main():
     """Main entry point when script is run directly."""
-    import argparse
-    
     parser = argparse.ArgumentParser(description="ALMA - Abstract Language Model Agent")
     parser.add_argument("--provider", default="anthropic", help="LLM provider to use")
     parser.add_argument("--model", default="claude-3-5-haiku-20241022", help="Model name to use")
     parser.add_argument("--query", help="Query to process (if not provided, runs in interactive mode)")
     parser.add_argument("--stream", action="store_true", help="Use streaming output")
+    parser.add_argument("--verbose", action="store_true", help="Show detailed logs")
     
     args = parser.parse_args()
+    
+    # Configure logging based on verbose flag
+    configure_logging(args.verbose)
     
     # Create agent
     agent = ALMA(
         provider_name=args.provider,
-        model_name=args.model
+        model_name=args.model,
+        verbose=args.verbose
     )
     
     # Process query or run in interactive mode
