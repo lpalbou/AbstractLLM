@@ -10,6 +10,23 @@ Version: 0.4.7
 
 IMPORTANT : This is a Work In Progress. Things evolve rapidly. The library is not yet safe to use except for testing.
 
+## Table of Contents
+
+- [Features](#features)
+- [Example Implementations](#example-implementations)
+- [Quick Start](#quick-start)
+- [Tool Call Capabilities](#tool-call-capabilities)
+- [Type-Safe Parameters](#type-safe-parameters-with-enums)
+- [Configuration](#configuration)
+- [System Prompts](#system-prompts)
+- [Provider Chains](#provider-chains)
+- [Session Management](#session-management)
+- [Vision Capabilities](#vision-capabilities)
+- [Command-Line Examples](#command-line-examples)
+- [Installation](#installation)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## Features
 
 - 🔄 **Unified API**: Consistent interface for OpenAI, Anthropic, Ollama, and Hugging Face models
@@ -63,6 +80,8 @@ ALMA supports powerful tools:
 - Command execution with `execute_command`
 
 The implementation follows best practices from `docs/toolcalls/` for secure, LLM-first tool calling, where tools are only called when requested by the LLM rather than through direct pattern matching.
+
+For examples of how to implement tool calls in your own code, see the [Tool Call Capabilities](#tool-call-capabilities) section below.
 
 **Important Note**: These example implementations are provided for demonstration purposes only and are not intended for production use. They showcase how to integrate AbstractLLM into your own applications.
 
@@ -201,6 +220,147 @@ llm = create_llm("openai", api_key="your-api-key")
 response = llm.generate("Explain quantum computing in simple terms.")
 print(response)
 ```
+
+## Tool Call Capabilities
+
+AbstractLLM provides robust support for LLM tool calling capabilities, allowing you to define tools that the model can use during generation:
+
+```python
+from abstractllm import create_llm
+from abstractllm.session import Session
+from abstractllm.tools import function_to_tool_definition
+
+# Define a simple tool function
+def read_file(file_path: str) -> str:
+    """Read the contents of a file.
+    
+    Args:
+        file_path: The path of the file to read
+        
+    Returns:
+        The file contents as a string
+    """
+    try:
+        with open(file_path, 'r') as f:
+            return f.read()
+    except Exception as e:
+        return f"Error reading file: {str(e)}"
+
+# Create a session with tools
+session = Session(
+    system_prompt="You are a helpful assistant that can use tools to answer questions.",
+    provider="anthropic",  # or "openai" for OpenAI function calling
+    provider_config={"model": "claude-3-5-haiku-20241022"}
+)
+
+# Add the tool to the session
+session.add_tool(function_to_tool_definition(read_file))
+
+# Define available tool functions
+tool_functions = {
+    "read_file": read_file
+}
+
+# Use generate_with_tools to handle the LLM-tool interaction flow
+response = session.generate_with_tools(
+    tool_functions=tool_functions,
+    prompt="What is in the file README.md?"
+)
+
+print(response.content)
+```
+
+### Streaming with Tool Calls
+
+AbstractLLM also supports streaming responses while using tools:
+
+```python
+# Setup as above, then use generate_with_tools_streaming
+for chunk in session.generate_with_tools_streaming(
+    tool_functions=tool_functions,
+    prompt="What is in the file README.md?"
+):
+    if isinstance(chunk, str):
+        # Regular content from the LLM
+        print(chunk, end="", flush=True)
+    elif isinstance(chunk, dict) and chunk.get("type") == "tool_result":
+        # Tool execution result
+        print(f"\n[Tool executed: {chunk.get('tool_call', {}).get('name')}]\n")
+```
+
+### Building a Tool-Enhanced Agent
+
+To create a more complete tool-enabled agent like ALMA (see `alma.py`), combine session management with tool calling:
+
+```python
+from abstractllm import create_llm
+from abstractllm.session import Session
+from abstractllm.tools import function_to_tool_definition
+
+# Define your tool functions
+def read_file(file_path: str) -> str:
+    """Read the contents of a file."""
+    try:
+        with open(file_path, 'r') as f:
+            return f.read()
+    except Exception as e:
+        return f"Error reading file: {str(e)}"
+
+def execute_command(command: str) -> str:
+    """Execute a shell command and return its output."""
+    import subprocess
+    try:
+        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
+        output = result.stdout
+        if result.stderr:
+            output += f"\n\n--- STDERR ---\n{result.stderr}"
+        return output
+    except Exception as e:
+        return f"Error executing command: {str(e)}"
+
+# Initialize a session with system prompt
+session = Session(
+    system_prompt="""
+    You are a helpful assistant that can use tools to answer questions.
+    When you need information, use the appropriate tool.
+    For file access, use the read_file tool rather than making assumptions.
+    For executing commands, use the execute_command tool when needed.
+    """,
+    provider="anthropic",
+    provider_config={"model": "claude-3-5-haiku-20241022"}
+)
+
+# Add tools to the session
+session.add_tool(function_to_tool_definition(read_file))
+session.add_tool(function_to_tool_definition(execute_command))
+
+# Define available tool functions
+tool_functions = {
+    "read_file": read_file,
+    "execute_command": execute_command
+}
+
+# Process a user query
+def process_query(query: str):
+    print(f"Processing: {query}")
+    
+    # Add user message to session for context
+    session.add_message("user", query)
+    
+    # Use generate_with_tools to handle the tool execution flow
+    response = session.generate_with_tools(
+        tool_functions=tool_functions
+    )
+    
+    # Return the final response
+    return response.content
+
+# Example usage
+result = process_query("Read the file README.md and tell me how many lines it has")
+print(result)
+```
+
+For more advanced examples and best practices, see the [Tool Calls Guide](docs/toolcalls/index.md).
 
 ## Type-Safe Parameters with Enums
 
