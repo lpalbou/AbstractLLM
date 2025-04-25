@@ -6,7 +6,9 @@
 
 A lightweight, unified interface for interacting with multiple Large Language Model providers.
 
-Version: 0.4.6
+Version: 0.4.7
+
+IMPORTANT : This is a Work In Progress. Things evolve rapidly. The library is not yet safe to use except for testing.
 
 ## Features
 
