@@ -8,22 +8,17 @@ A lightweight, unified interface for interacting with multiple Large Language Mo
 
 Version: 0.5.3
 
-IMPORTANT : This is a Work In Progress. Things evolve rapidly. The library is not yet safe to use except for testing.
+**IMPORTANT**: This is a Work In Progress. Things evolve rapidly. The library is not yet safe to use except for testing.
 
 ## Table of Contents
 
 - [Features](#features)
-- [Example Implementations](#example-implementations)
+- [Documentation](#documentation)
 - [Quick Start](#quick-start)
-- [Tool Call Capabilities](#tool-call-capabilities)
-- [Type-Safe Parameters](#type-safe-parameters-with-enums)
-- [Configuration](#configuration)
-- [System Prompts](#system-prompts)
-- [Provider Chains](#provider-chains)
-- [Session Management](#session-management)
-- [Vision Capabilities](#vision-capabilities)
-- [Command-Line Examples](#command-line-examples)
 - [Installation](#installation)
+- [Example Implementations](#example-implementations)
+- [Command-Line Examples](#command-line-examples)
+- [Provider Support](#provider-support)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -39,7 +34,137 @@ IMPORTANT : This is a Work In Progress. Things evolve rapidly. The library is no
 - 🔤 **Type-Safe Parameters**: Enum-based parameters for enhanced IDE support and error prevention
 - 🔄 **Provider Chains**: Create fallback chains and load balancing across multiple providers
 - 💬 **Session Management**: Maintain conversation context when switching between providers
+- 🛠️ **Tool Calling**: Unified interface for function/tool calling capabilities across providers
 - 🛑 **Unified Error Handling**: Consistent error handling across all providers
+
+## Documentation
+
+AbstractLLM now has comprehensive documentation covering all aspects of the library:
+
+- **[Getting Started](docs/getting-started/index.md)**: Installation and basic usage
+- **[User Guide](docs/user-guide/index.md)**:
+  - [Basic Text Generation](docs/user-guide/basic-generation.md)
+  - [Working with Sessions](docs/user-guide/sessions.md)
+  - [Tool Calling](docs/user-guide/tools.md)
+  - [Vision Capabilities](docs/user-guide/vision.md)
+  - [Streaming Responses](docs/user-guide/streaming.md)
+  - [Asynchronous Generation](docs/user-guide/async.md)
+  - [Error Handling](docs/user-guide/error-handling.md)
+  - [Provider Interchangeability](docs/user-guide/interchangeability.md)
+  - [Logging and Debugging](docs/user-guide/logging.md)
+- **[Provider Guide](docs/providers/index.md)**:
+  - [OpenAI](docs/providers/openai.md)
+  - [Anthropic](docs/providers/anthropic.md)
+  - [Ollama](docs/providers/ollama.md)
+  - [HuggingFace](docs/providers/huggingface.md)
+- **[Advanced Features](docs/advanced-features/index.md)**:
+  - [Provider-Specific Features](docs/advanced-features/provider-specific.md)
+  - [Custom Providers](docs/advanced-features/custom-providers.md)
+  - [Security Best Practices](docs/advanced-features/security.md)
+  - [Performance Optimization](docs/advanced-features/performance.md)
+  - [Multi-Modal Content](docs/advanced-features/multimodal.md)
+  - [Tool Interfaces](docs/advanced-features/tools.md)
+- **[Architecture](docs/architecture/index.md)**:
+  - [Provider System](docs/architecture/providers.md)
+  - [Media System](docs/architecture/media.md)
+  - [Tool System](docs/architecture/tools.md)
+  - [Configuration](docs/architecture/configuration.md)
+  - [Error Handling](docs/architecture/error-handling.md)
+- **[API Reference](docs/api-reference/index.md)**: Detailed API documentation
+- **[Examples](docs/examples/index.md)**: Code examples for common use cases
+- **[Contributing](docs/contributing/index.md)**: Guide for contributors
+
+## Quick Start
+
+```python
+from abstractllm import create_llm
+
+# Create an LLM instance
+llm = create_llm("openai", api_key="your-api-key")
+
+# Generate a response
+response = llm.generate("Explain quantum computing in simple terms.")
+print(response)
+
+# Switch to a different provider
+anthropic_llm = create_llm("anthropic", model="claude-3-5-sonnet-20241022")
+response = anthropic_llm.generate("Tell me about yourself.")
+print(response)
+```
+
+### Basic Tool Calling
+
+```python
+from abstractllm import create_llm
+from abstractllm.session import Session
+
+# Define your tool function
+def get_weather(location: str) -> str:
+    """Get the current weather for a location."""
+    # Simulated weather data
+    return f"The weather in {location} is currently sunny and 72°F."
+
+# Create a provider and session
+provider = create_llm("openai", model="gpt-4")
+session = Session(
+    system_prompt="You are a helpful assistant that can check the weather.",
+    provider=provider,
+    tools=[get_weather]  # Tool function is automatically registered
+)
+
+# Generate with tool support
+response = session.generate_with_tools("What's the weather like in San Francisco?")
+print(response.content)
+```
+
+For more detailed examples and advanced features, please see the [documentation](#documentation).
+
+## Installation
+
+```bash
+# Basic installation (core functionality only)
+pip install abstractllm
+
+# Provider-specific installations
+pip install abstractllm[openai]     # OpenAI API
+pip install abstractllm[anthropic]  # Anthropic/Claude API
+pip install abstractllm[huggingface]  # HuggingFace models (includes torch)
+pip install abstractllm[ollama]     # Ollama API
+pip install abstractllm[tools]      # Tool calling functionality
+
+# Multiple providers
+pip install abstractllm[openai,anthropic]
+
+# All dependencies
+pip install abstractllm[all]
+```
+
+### Important: Provider Dependencies
+
+Each provider requires specific dependencies to function:
+
+- **OpenAI**: Requires the `openai` package
+- **Anthropic**: Requires the `anthropic` package
+- **HuggingFace**: Requires `torch`, `transformers`, and `huggingface-hub` 
+- **Ollama**: Requires `requests` for sync and `aiohttp` for async operations
+- **Tool Calling**: Requires `docstring-parser`, `jsonschema`, and `pydantic`
+
+If you try to use a provider without its dependencies, you'll get a clear error message telling you which package to install.
+
+### Recommended Installation
+
+For most users, we recommend installing at least one provider along with the base package:
+
+```bash
+# For just OpenAI support
+pip install abstractllm[openai]
+
+# For OpenAI and tool calling support
+pip install abstractllm[openai,tools]
+
+# For all providers and tools (most comprehensive)
+pip install abstractllm[all]
+```
 
 ## Example Implementations
 
@@ -79,12 +204,6 @@ ALMA supports powerful tools:
 - File reading with `read_file`
 - Command execution with `execute_command`
 
-The implementation follows best practices from `docs/toolcalls/` for secure, LLM-first tool calling, where tools are only called when requested by the LLM rather than through direct pattern matching.
-
-For examples of how to implement tool calls in your own code, see the [Tool Call Capabilities](#tool-call-capabilities) section below.
-
-**Important Note**: These example implementations are provided for demonstration purposes only and are not intended for production use. They showcase how to integrate AbstractLLM into your own applications.
-
 ## Command-Line Examples
 
 ### Text Generation
@@ -100,9 +219,6 @@ python query.py "what is AI ?" --provider ollama --log-level DEBUG
 
 # Using HuggingFace with GGUF model
 python query.py "what is AI ?" --provider huggingface --model https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_L.gguf
-
-# Using HuggingFace with regular model
-python query.py "what is AI ?" --provider huggingface --model ibm-granite/granite-3.2-2b-instruct
 ```
 
 ### Text File Analysis
@@ -112,12 +228,6 @@ python query.py "describe the content of this file ?" -f tests/examples/test_dat
 
 # Using Anthropic
 python query.py "describe the content of this file ?" -f tests/examples/test_data.csv --provider anthropic
-
-# Using Ollama
-python query.py "describe the content of this file ?" -f tests/examples/test_data.csv --provider ollama  
-
-# Using HuggingFace
-python query.py "describe the content of this file ?" -f tests/examples/test_data.csv --provider huggingface --model ibm-granite/granite-3.2-2b-instruct
 ```
 
 ### Image Analysis
@@ -129,758 +239,66 @@ python query.py "describe this image with a set of keywords" -f tests/examples/m
 python query.py "describe this image with a set of keywords" -f tests/examples/mountain_path.jpg --provider ollama --model llama3.2-vision:latest
 
 # Using OpenAI with GPT-4 Vision
-python query.py "describe this image with a set of keywords" -f tests/examples/mountain_path.jpg --provider openai  
+python query.py "describe this image with a set of keywords" -f tests/examples/mountain_path.jpg --provider openai --model gpt-4o
 ```
 
-### Logging Configuration
+## Provider Support
 
-The command-line tool supports flexible logging configuration:
-
-```bash
-# Basic logging (to logs/ directory)
-python query.py "Hello" --provider openai
-
-# Custom log directory
-python query.py "Hello" --provider openai --log-dir /path/to/logs
-
-# Debug level logging
-python query.py "Hello" --provider openai --log-level DEBUG
-
-# Force console output with file logging
-python query.py "Hello" --provider openai --console-output
-
-# Full logging configuration
-python query.py "Hello" --provider openai \
-    --log-dir /var/log/myapp/llm \
-    --log-level DEBUG \
-    --console-output
-```
-
-The logging system provides:
-- Request/response logging in JSON format
-- Automatic log directory creation
-- Log rotation support
-- Configurable log levels (DEBUG, INFO, WARNING, ERROR)
-- Optional console output alongside file logging
-- Secure handling of sensitive data (API keys never logged)
-
-Log files are organized as follows:
-- `abstractllm_YYYYMMDD_HHMMSS.log`: Main log file with all events
-- `{provider}_request_YYYYMMDD_HHMMSS.json`: Individual request details
-- `{provider}_response_YYYYMMDD_HHMMSS.json`: Individual response details
-
-## Installation
-
-### Setting up a Virtual Environment
-
-You can use either conda or venv to create a virtual environment:
-
-#### Using conda
-```bash
-# Create a new conda environment
-conda create -n abstractllm python=3.8
-# Activate the environment
-conda activate abstractllm
-```
-
-#### Using venv
-```bash
-# Create a new virtual environment
-python -m venv abstractllm-env
-# Activate the environment (Linux/Mac)
-source abstractllm-env/bin/activate
-# Activate the environment (Windows)
-.\abstractllm-env\Scripts\activate
-```
-
-### Installing the Package
-
-```bash
-# Basic installation (core functionality only)
-# This will install basic dependencies but no provider-specific packages
-pip install abstractllm
-
-# Provider-specific installations (choose the ones you need)
-pip install abstractllm[openai]     # For OpenAI API
-pip install abstractllm[anthropic]  # For Anthropic/Claude API
-pip install abstractllm[huggingface]  # For HuggingFace models (includes torch)
-pip install abstractllm[ollama]     # For Ollama API
-pip install abstractllm[tools]      # Required for tool calling functionality
-
-# Multiple providers at once
-pip install abstractllm[openai,anthropic]
-
-# All dependencies at once (recommended for full functionality)
-pip install abstractllm[all]
-```
-
-#### Important: Provider Dependencies
-
-Each provider requires specific dependencies to function:
-
-- **OpenAI**: Requires the `openai` package
-- **Anthropic**: Requires the `anthropic` package
-- **HuggingFace**: Requires `torch`, `transformers`, and `huggingface-hub` 
-- **Ollama**: Requires `requests` for sync and `aiohttp` for async operations
-- **Tool Calling**: Requires `docstring-parser`, `jsonschema`, and `pydantic`
-
-If you try to use a provider without its dependencies, you'll get a clear error message telling you which package to install.
-
-#### Recommended Installation
-
-For most users, we recommend installing at least one provider along with the base package:
-
-```bash
-# For just OpenAI support
-pip install abstractllm[openai]
-
-# For OpenAI and tool calling support
-pip install abstractllm[openai,tools]
-
-# For all providers and tools (most comprehensive)
-pip install abstractllm[all]
-```
-
-#### Tool Dependencies
-
-If you plan to use AbstractLLM's tool calling capabilities, ensure you have the required dependencies by installing with the `[tools]` extra:
-
-```bash
-pip install abstractllm[tools]
-```
-
-This will install:
-- `docstring-parser`: Required for converting Python functions to tool definitions
-- `jsonschema`: Required for validating tool inputs and outputs
-- `pydantic`: Required for schema parsing and validation
-
-If you encounter the error "Tool support is not available" when using tool functions, you need to install these dependencies.
-
-## Quick Start
-
-```python
-from abstractllm import create_llm
-
-# Create an LLM instance
-llm = create_llm("openai", api_key="your-api-key")
-
-# Generate a response
-response = llm.generate("Explain quantum computing in simple terms.")
-print(response)
-```
-
-## Tool Call Capabilities
-
-AbstractLLM provides two ways to implement tool calls, depending on your needs:
-
-> **Note:** To use tool calling capabilities, you must install the required dependencies with:
-> ```bash
-> pip install abstractllm[tools]
-> ```
-> See the [Tool Dependencies](#tool-dependencies) section for more details.
->
-> **New in v0.5.1**: Fixed package extras to properly support `[all]` and `[tools]` installations. 
-> **New in v0.5.0**: Simplified tool calling API and automatic provider model detection.
-
-### 1. Simplest Approach - Everything in One Place
-
-```python
-from abstractllm import create_llm
-from abstractllm.session import Session
-
-# Define your tool function
-def read_file(file_path: str) -> str:
-    """Read the contents of a file."""
-    try:
-        with open(file_path, 'r') as f:
-            return f.read()
-    except Exception as e:
-        return f"Error reading file: {str(e)}"
-
-# Step 1: Initialize the provider with the desired model
-provider = create_llm("anthropic", 
-                     model="claude-3-5-haiku-20241022")
-
-# Step 2: Create a session with the provider and pass tool directly
-session = Session(
-    system_prompt="You are a helpful assistant that can read files when needed.",
-    provider=provider,
-    tools=[read_file]  # Tool function is automatically registered
-)
-
-# Step 3: Generate response with tool support
-response = session.generate_with_tools(
-    prompt="What is in the file README.md?"
-    # No need for tool_functions or model parameter - they're inferred from the session
-)
-
-print(response.content)
-```
-
-**When to use this approach**: When you want the cleanest, most straightforward code and don't need custom tool handling or complex execution logic. Your tool functions are automatically registered and executed.
-
-### 2. Customizable Approach - Separate Definition and Execution
-
-```python
-from abstractllm import create_llm
-from abstractllm.session import Session
-from abstractllm.tools import function_to_tool_definition
-
-# Define your tool functions
-def read_file(file_path: str) -> str:
-    """Read the contents of a file."""
-    try:
-        with open(file_path, 'r') as f:
-            return f.read()
-    except Exception as e:
-        return f"Error reading file: {str(e)}"
-
-def execute_command(command: str) -> str:
-    """Execute a shell command and return its output."""
-    import subprocess
-    try:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
-        output = result.stdout
-        if result.stderr:
-            output += f"\n\n--- STDERR ---\n{result.stderr}"
-        return output
-    except Exception as e:
-        return f"Error executing command: {str(e)}"
-
-# Step 1: Initialize the provider with model
-provider = create_llm("anthropic", 
-                     model="claude-3-5-haiku-20241022")
-
-# Step 2: Create a session with the provider
-session = Session(
-    system_prompt="You are a helpful assistant that can use tools when needed.",
-    provider=provider
-)
-
-# Step 3: Register tool definitions separately
-session.add_tool(function_to_tool_definition(read_file))
-session.add_tool(function_to_tool_definition(execute_command))
-
-# Step 4: Create custom implementations for specific use cases
-def secure_file_read(file_path: str) -> str:
-    """Enhanced implementation with security checks"""
-    import os
-    # Define allowed directories
-    allowed_dirs = [os.getcwd(), "/tmp"]
-    # Security: Normalize path and check if it's within allowed directories
-    abs_path = os.path.abspath(os.path.normpath(file_path))
-    if not any(abs_path.startswith(allowed_dir) for allowed_dir in allowed_dirs):
-        return f"Error: Access to {file_path} is restricted for security reasons"
-    # Proceed with reading if secure
-    try:
-        with open(abs_path, 'r') as f:
-            return f.read()
-    except Exception as e:
-        return f"Error reading file: {str(e)}"
-
-# Step 5: Generate with custom tool implementations
-response = session.generate_with_tools(
-    prompt="Read the file README.md and tell me how many lines it has",
-    tool_functions={
-        "read_file": secure_file_read,  # Use custom implementation
-        "execute_command": execute_command  # Use original implementation
-    }
-)
-
-print(response.content)
-```
-
-**When to use this approach**: When you need more control over tool execution, such as:
-- Enhanced security for file or command operations
-- Custom logging or monitoring during tool execution
-- Different implementations based on environment or context
-- Specialized error handling or input validation
-
-### Comparison: Simple vs. Customizable Approaches
-
-| Feature | Simple Approach | Customizable Approach |
-|---------|----------------|------------------------|
-| **Code complexity** | Minimal - 3 steps | More detailed - 5 steps |
-| **Tool registration** | Automatic when creating session | Manual with `add_tool()` |
-| **Tool implementation** | Fixed - uses original functions | Flexible - can provide custom implementations |
-| **Security controls** | Basic - relies on original functions | Enhanced - can add custom security checks |
-| **Maintenance** | Easier - fewer moving parts | More involved - separate definition and execution |
-| **Best for** | Quick prototyping, simple agents | Production systems, security-critical applications |
-
-For more advanced examples and best practices, see the [Tool Calls Guide](docs/toolcalls/index.md).
-
-## Type-Safe Parameters with Enums
-
-AbstractLLM provides enums for type-safe parameter settings:
-
-```python
-from abstractllm import create_llm, ModelParameter, ModelCapability
-
-# Create LLM with enum parameters
-llm = create_llm("openai", 
-                **{
-                    ModelParameter.API_KEY: "your-api-key",
-                    ModelParameter.MODEL: "gpt-4",
-                    ModelParameter.TEMPERATURE: 0.7
-                })
-
-# Check capabilities with enums
-capabilities = llm.get_capabilities()
-if capabilities[ModelCapability.STREAMING]:
-    # Use streaming...
-    pass
-```
-
-## Supported Providers
+AbstractLLM supports multiple LLM providers, each with its own unique features and capabilities:
 
 ### OpenAI
-
 ```python
-from abstractllm import create_llm, ModelParameter
-
-llm = create_llm("openai", 
-                **{
-                    ModelParameter.API_KEY: "your-api-key",
-                    ModelParameter.MODEL: "gpt-4"
-                })
+llm = create_llm("openai", model="gpt-4", api_key="your-api-key")
 ```
+
+Key features:
+- GPT-4 and GPT-3.5 models
+- Vision capabilities with GPT-4o
+- Function calling/tool use
+- Token-by-token streaming
+- JSON mode
 
 ### Anthropic
-
 ```python
-from abstractllm import create_llm, ModelParameter
-
-llm = create_llm("anthropic", 
-                **{
-                    ModelParameter.API_KEY: "your-api-key",
-                    ModelParameter.MODEL: "claude-3-opus-20240229"
-                })
+llm = create_llm("anthropic", model="claude-3-5-sonnet-20241022", api_key="your-api-key")
 ```
+
+Key features:
+- Claude 3 and Claude 3.5 models
+- Very large context windows (up to 100K tokens)
+- Vision capabilities
+- Tool use with Claude 3
+- Strong reasoning and instruction following
 
 ### Ollama
-
 ```python
-from abstractllm import create_llm, ModelParameter
-
-llm = create_llm("ollama", 
-                **{
-                    ModelParameter.BASE_URL: "http://localhost:11434",
-                    ModelParameter.MODEL: "llama2"
-                })
+llm = create_llm("ollama", model="llama3", api_base="http://localhost:11434")
 ```
 
-### Hugging Face
+Key features:
+- Local model deployment
+- No data sharing with external services
+- Support for various open-source models (Llama, Mistral, etc.)
+- Custom model support
 
-The HuggingFace provider offers robust support for both regular HuggingFace models and GGUF quantized models:
-
+### HuggingFace
 ```python
-from abstractllm import create_llm, ModelParameter
-
-# Using a regular HuggingFace model
-llm = create_llm("huggingface", 
-                **{
-                    ModelParameter.MODEL: "ibm-granite/granite-3.2-2b-instruct",
-                    ModelParameter.DEVICE: "auto",  # Automatic device detection
-                    ModelParameter.TEMPERATURE: 0.7
-                })
-
-# Using a GGUF model (direct URL)
-llm = create_llm("huggingface", 
-                **{
-                    ModelParameter.MODEL: "https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_L.gguf",
-                    ModelParameter.DEVICE: "auto"  # Supports CPU, CUDA, MPS (Metal)
-                })
-
-# Using a local GGUF model
-llm = create_llm("huggingface", 
-                **{
-                    ModelParameter.MODEL: "/path/to/local/model.gguf",
-                    ModelParameter.DEVICE: "auto"
-                })
+llm = create_llm("huggingface", model="ibm-granite/granite-3.2-2b-instruct")
 ```
 
-Key Features:
-- **Device Support**: 
-  - Automatic detection of CUDA (NVIDIA GPUs)
-  - MPS support for Apple Silicon
-  - CPU fallback when needed
-- **Model Types**:
-  - Regular HuggingFace models
-  - GGUF quantized models (4-bit to 8-bit)
-  - Local model files
-  - Direct URL loading
-- **Caching**: Automatic model caching and management
-- **Memory Optimization**: Configurable memory usage and device mapping
-- **Prompt Formatting**: Automatic formatting based on model type
-
-Command-line examples:
-```bash
-# Using a regular HuggingFace model
-python query.py "what is AI ?" --provider huggingface --model ibm-granite/granite-3.2-2b-instruct
-
-# Using a GGUF model (direct URL)
-python query.py "what is AI ?" --provider huggingface --model https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_L.gguf
-
-# Using a higher quality GGUF model
-python query.py "what is AI ?" --provider huggingface --model https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q6_K_L.gguf
-```
-
-#### Important Notes
-
-1. **Device Selection**:
-   - The provider automatically detects and uses the best available device
-   - For GGUF models on macOS, Metal acceleration is automatically enabled
-   - For GGUF models on Linux/Windows, CUDA is automatically enabled if available
-
-2. **GGUF Models**:
-   - Support direct loading from URLs
-   - Automatic caching in `~/.cache/abstractllm/models`
-   - Verification of downloaded model integrity
-   - Progress tracking for large downloads
-
-3. **Memory Management**:
-   - Configurable thread count for CPU operations
-   - Automatic GPU layer optimization
-   - Low memory usage options available
-
-4. **Model Compatibility**:
-   - Most HuggingFace models are supported
-   - GGUF models require the `llama-cpp-python` package
-   - Install with: `pip install llama-cpp-python`
-
-5. **Performance**:
-   - GGUF models offer excellent performance with lower memory usage
-   - Automatic optimization based on hardware
-   - Progress logging for long operations
-
-The HuggingFace provider is fully functional and production-ready, particularly with GGUF models which offer excellent performance and memory efficiency.
-
-## Configuration
-
-You can configure the LLM's behavior in several ways:
-
-```python
-from abstractllm import create_llm, ModelParameter
-
-# Using string keys (backwards compatible)
-llm = create_llm("openai", temperature=0.7, system_prompt="You are a helpful assistant.")
-
-# Using enum keys (type-safe)
-llm = create_llm("openai", **{
-    ModelParameter.TEMPERATURE: 0.5,
-    ModelParameter.SYSTEM_PROMPT: "You are a helpful scientific assistant."
-})
-
-# Update later with enums
-llm.update_config({ModelParameter.TEMPERATURE: 0.5})
-
-# Update with kwargs
-llm.set_config(temperature=0.9)
-
-# Per-request
-response = llm.generate("Hello", temperature=0.9)
-```
-
-## System Prompts
-
-System prompts help shape the model's personality and behavior:
-
-```python
-from abstractllm import create_llm, ModelParameter
-
-# Using string keys
-llm = create_llm("openai", system_prompt="You are a helpful scientific assistant.")
-
-# Using enum keys
-llm = create_llm("openai", **{
-    ModelParameter.SYSTEM_PROMPT: "You are a helpful scientific assistant."
-})
-
-# Or for a specific request
-response = llm.generate(
-    "What is quantum entanglement?", 
-    system_prompt="You are a physics professor explaining to a high school student."
-)
-```
-
-## Provider Chains
-
-AbstractLLM supports creating chains of providers with fallback capabilities to ensure robust operation:
-
-```python
-from abstractllm.chain import create_fallback_chain, create_capability_chain, create_load_balanced_chain
-
-# Create a fallback chain that tries providers in sequence
-chain = create_fallback_chain(
-    providers=["openai", "anthropic", "ollama"],
-    max_retries=2
-)
-
-# Generate with automatic fallback if a provider fails
-response = chain.generate("Explain quantum computing in simple terms.")
-
-# Create a chain that selects providers based on capabilities
-vision_chain = create_capability_chain(
-    required_capabilities=[ModelCapability.VISION],
-    preferred_providers=["openai", "anthropic"]
-)
-
-# Generate with a provider that supports vision
-image_url = "https://example.com/image.jpg"
-response = vision_chain.generate("What's in this image?", image=image_url)
-
-# Create a load-balanced chain for distributing requests
-balanced_chain = create_load_balanced_chain(
-    providers=["openai", "anthropic", "ollama"]
-)
-
-# Requests will be distributed across providers
-response1 = balanced_chain.generate("What is AI?")
-response2 = balanced_chain.generate("What is machine learning?")
-```
-
-## Session Management
-
-AbstractLLM includes session management for maintaining conversation context even when switching providers:
-
-> **Enhanced in v0.5.0**: Improved tool support and automatic provider model detection.
-
-```python
-from abstractllm.session import Session, SessionManager
-
-# Create a session with a system prompt
-session = Session(
-    system_prompt="You are a helpful assistant specializing in physics.",
-    provider="openai"
-)
-
-# Send a message using the default provider
-response = session.send("What is the theory of relativity?")
-print(f"OpenAI: {response}")
-
-# Switch providers for the next message while maintaining context
-response = session.send(
-    "Can you explain it in simpler terms?",
-    provider="anthropic"
-)
-print(f"Anthropic: {response}")
-
-# Save the session for later
-session.save("physics_session.json")
-
-# Later, load the session and continue
-loaded_session = Session.load("physics_session.json")
-response = loaded_session.send("How is this related to quantum mechanics?")
-
-# Managing multiple sessions
-manager = SessionManager(sessions_dir="my_sessions")
-physics_session = manager.create_session(
-    system_prompt="You are a physics professor.",
-    provider="openai"
-)
-history_session = manager.create_session(
-    system_prompt="You are a historian.",
-    provider="anthropic"
-)
-
-# Use different sessions for different topics
-physics_response = physics_session.send("What is quantum entanglement?")
-history_response = history_session.send("Tell me about ancient Egypt.")
-
-# Save all sessions
-manager.save_all()
-```
-
-## Vision Capabilities
-
-AbstractLLM supports vision capabilities for models that can process images:
-
-```python
-from abstractllm import create_llm, ModelParameter, ModelCapability
-
-# Create an LLM instance with a vision-capable model
-llm = create_llm("openai", **{
-    ModelParameter.MODEL: "gpt-4o",  # Vision-capable model
-})
-
-# Check if vision is supported
-capabilities = llm.get_capabilities()
-if capabilities.get(ModelCapability.VISION):
-    # Use vision capabilities
-    image_url = "https://example.com/image.jpg"
-    response = llm.generate("What's in this image?", image=image_url)
-    print(response)
-    
-    # You can also use local image files
-    local_image = "/path/to/image.jpg"
-    response = llm.generate("Describe this image", image=local_image)
-    
-    # Or multiple images
-    images = ["https://example.com/image1.jpg", "/path/to/image2.jpg"]
-    response = llm.generate("Compare these images", images=images)
-```
-
-Supported vision models include:
-- OpenAI: `gpt-4-vision-preview`, `gpt-4-turbo`, `gpt-4o`
-- Anthropic: `claude-3-opus`, `claude-3-sonnet`, `claude-3-haiku`, `claude-3.5-sonnet`, `claude-3.5-haiku`
-- Ollama: `llama3.2-vision`, `deepseek-janus-pro`
-
-See the [Vision Capabilities Guide](docs/vision_guide.md) for more details.
-
-## Capabilities
-
-Check what capabilities a provider supports:
-
-```python
-from abstractllm import create_llm, ModelCapability
-
-llm = create_llm("openai")
-capabilities = llm.get_capabilities()
-
-# Check using string keys
-if capabilities["streaming"]:
-    print("Streaming is supported!")
-    
-# Check using enum keys (type-safe)
-if capabilities[ModelCapability.STREAMING]:
-    print("Streaming is supported!")
-    
-if capabilities[ModelCapability.VISION]:
-    print("Vision capabilities are supported!")
-```
-
-## Error Handling
-
-AbstractLLM provides a unified error handling system across all providers:
-
-```python
-from abstractllm import create_llm
-from abstractllm.exceptions import (
-    AbstractLLMError,
-    AuthenticationError,
-    QuotaExceededError,
-    ContextWindowExceededError
-)
-
-try:
-    llm = create_llm("openai", api_key="invalid-key")
-    response = llm.generate("Hello")
-except AuthenticationError as e:
-    print(f"Authentication failed: {e}")
-    # Try with a different key or provider
-except QuotaExceededError as e:
-    print(f"Quota exceeded: {e}")
-    # Implement rate limiting or fallback to another provider
-except ContextWindowExceededError as e:
-    print(f"Context window exceeded: {e}")
-    # Implement chunking or summarization
-except AbstractLLMError as e:
-    print(f"Generic error: {e}")
-    # Handle all other AbstractLLM errors
-```
-
-## Logging
-
-AbstractLLM includes built-in logging with hierarchical configuration:
-
-```python
-import logging
-from abstractllm.utils.logging import setup_logging
-
-# Set up logging with desired level
-setup_logging(level=logging.INFO)
-
-# Set up logging with different levels for providers
-setup_logging(level=logging.INFO, provider_level=logging.DEBUG)
-
-# Now all requests and responses will be logged
-llm = create_llm("openai")
-response = llm.generate("Hello, world!")
-```
-
-The logging system provides:
-
-- **INFO level**: Basic operation logging (queries being made, generation starting/completing)
-- **DEBUG level**: Detailed information including parameters, prompts, URLs, and responses
-- **Provider-specific loggers**: Each provider class uses its own logger (e.g., `abstractllm.providers.openai.OpenAIProvider`)
-- **Security-conscious logging**: API keys are never logged, even at DEBUG level
-
-## Testing
-
-AbstractLLM includes a comprehensive test suite that tests all aspects of the library with real implementations (no mocks).
-
-### Development Setup
-
-For development and testing, it's recommended to install the package in development mode:
-
-```bash
-# Clone the repository
-git clone https://github.com/lpalbou/abstractllm.git
-cd abstractllm
-
-# Install the package in development mode
-pip install -e .
-
-# Install test dependencies
-pip install -r requirements-test.txt
-```
-
-This installs the package in "editable" mode, meaning changes to the source code will be immediately available without reinstalling.
-
-### Running Tests
-
-```bash
-# Run all tests
-pytest tests/
-
-# Run only tests for specific providers
-pytest tests/ -m openai
-pytest tests/ -m anthropic
-pytest tests/ -m huggingface
-pytest tests/ -m ollama
-pytest tests/ -m vision
-
-# Run specific test
-python -m pytest tests/test_vision_captions.py::test_caption_quality -v --log-cli-level=INFO
-
-# Run tests with coverage report
-pytest tests/ --cov=abstractllm --cov-report=term
-```
-
-### Environment Variables for Testing
-
-The test suite uses these environment variables:
-
-- `OPENAI_API_KEY`: Your OpenAI API key
-- `ANTHROPIC_API_KEY`: Your Anthropic API key
-- `TEST_GPT4`: Set to "true" to enable GPT-4 tests
-- `TEST_CLAUDE3`: Set to "true" to enable Claude 3 tests
-- `TEST_VISION`: Set to "true" to enable vision capability tests
-- `TEST_HUGGINGFACE`: Set to "true" to enable HuggingFace-specific tests
-- `TEST_OLLAMA`: Set to "true" to enable Ollama-specific tests
-- `TEST_HF_CACHE`: Set to "true" to enable HuggingFace cache management tests
-
-To run the test script:
-
-```bash
-./run_tests.sh
-```
-
-## Advanced Usage
-
-See the [Usage Guide](https://github.com/lpalbou/abstractllm/blob/main/docs/usage.md) for advanced usage patterns, including:
-
-- Using multiple providers
-- Implementing fallback chains
-- Error handling
-- Streaming responses
-- Async generation
-- And more
+Key features:
+- Support for thousands of open-source models
+- Local model deployment
+- Integration with HuggingFace Hub
+- Support for GGUF quantized models
+- Custom model fine-tuning
+
+For detailed information about each provider, see the [Provider Guide](docs/providers/index.md).
 
 ## Contributing
 
-Contributions are welcome! 
-Read more about how to contribute in the [CONTRIBUTING](CONTRIBUTING.md) file.
+Contributions are welcome! Read more about how to contribute in the [Contributing Guide](docs/contributing/index.md) or the [CONTRIBUTING.md](CONTRIBUTING.md) file.
+
 Please feel free to submit a [Pull Request](https://github.com/lpalbou/abstractllm/pulls).
 
 ## License
