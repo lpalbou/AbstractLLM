@@ -5,8 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
+## [0.5.3] - 2025-05-04
 ### Added
 - Added core dependencies to ensure basic functionality works without extras
 - Ollama provider now explicitly checks for required dependencies (requests and aiohttp)
@@ -16,20 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated providers to use lazy imports for better dependency management
 - Modified README installation instructions to be more explicit about dependencies
 
-### Deprecated
-- N/A
-
-### Removed
-- N/A
-
 ### Fixed
 - Fixed dependency issues when installing the base package without extras
 - Providers now check for required dependencies and provide clear error messages
 - Resolved cross-dependency issues between providers (e.g., torch dependency affecting Anthropic usage)
 - Improved error handling for missing dependencies with helpful installation instructions
 
-### Security
-- N/A
+## [0.5.2] - 2025-05-03
+### Fixed
+- Fixed resolution of provider-specific dependencies
+- Improved error messages when optional dependencies are missing
+- Enhanced dependency management for cleaner installations
 
 ## [0.5.1] - 2025-05-02
 ### Fixed
@@ -57,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved error handling in provider model detection
 - Clarified tool dependency requirements in error messages
 - Better fallbacks when optional dependencies are not installed
+
+### Security
+- N/A
 
 ## [0.4.7] - 2025-04-25
 - Added tool call support for compatible models
