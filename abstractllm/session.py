@@ -33,8 +33,18 @@ try:
     )
     from abstractllm.types import GenerateResponse
     TOOLS_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     TOOLS_AVAILABLE = False
+    # Define concrete error message with specific installation instructions
+    TOOLS_ERROR_MESSAGE = (
+        "Tool support is not available. Please install the required dependencies:\n"
+        "1. pip install jsonschema\n"
+        "2. pip install docstring-parser\n"
+        "3. pip install pydantic\n\n"
+        "For convenience, you can install all tool dependencies with:\n"
+        "pip install abstractllm[tools]\n\n"
+        f"Original error: {str(e)}"
+    )
     if not TYPE_CHECKING:
         class ToolDefinition:
             pass
@@ -175,6 +185,9 @@ class Session:
             tools: Optional list of tool definitions or functions available for the LLM to use.
                   Functions will be automatically converted to tool definitions and their
                   implementations stored for use with generate_with_tools.
+                  
+        Raises:
+            ValueError: If tools are provided but tool support is not available
         """
         self.messages: List[Message] = []
         self.system_prompt = system_prompt
@@ -202,8 +215,13 @@ class Session:
         if system_prompt:
             self.add_message(MessageRole.SYSTEM, system_prompt)
             
-        # Add tools if provided and tools are available
-        if tools and TOOLS_AVAILABLE:
+        # Add tools if provided - but defer validation until add_tool is called
+        if tools:
+            # Only check tool availability when tools are actually provided
+            if not TOOLS_AVAILABLE:
+                raise ValueError(TOOLS_ERROR_MESSAGE)
+                
+            # Register each tool
             for tool in tools:
                 self.add_tool(tool)
     
@@ -619,7 +637,7 @@ class Session:
             ValueError: If tools are not available
         """
         if not TOOLS_AVAILABLE:
-            raise ValueError("Tool support is not available. Install the required dependencies.")
+            raise ValueError(TOOLS_ERROR_MESSAGE)
         
         # Convert tool to ToolDefinition and store original implementation if callable
         if callable(tool):
@@ -1057,7 +1075,7 @@ class Session:
         
         # Ensure we have tools available
         if not TOOLS_AVAILABLE:
-            raise ValueError("Tool support is not available. Install the required dependencies.")
+            raise ValueError(TOOLS_ERROR_MESSAGE)
         
         # Store the original prompt and system prompt for follow-up requests
         original_prompt = prompt if prompt else ""
@@ -1284,7 +1302,7 @@ class Session:
         """
         # Ensure we have tools available
         if not TOOLS_AVAILABLE:
-            raise ValueError("Tool support is not available. Install the required dependencies.")
+            raise ValueError(TOOLS_ERROR_MESSAGE)
         
         # Store the original prompt and system prompt for follow-up requests
         original_prompt = prompt if prompt else ""

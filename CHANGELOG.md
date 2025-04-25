@@ -25,20 +25,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - N/A
 
-## [0.4.8] - 2025-04-28
+## [0.5.0] - 2025-05-01
 ### Added
 - Enhanced examples in README.md with simplified tool call patterns
 - Added comparison table for tool call approaches
+- Added clear documentation for tool dependencies and installation options
+- Improved installation instructions with clear options for different use cases
 
 ### Changed
 - Improved Session class to automatically use provider's model in tool calls
 - Simplified tool call implementation with cleaner API
 - Updated documentation with step-by-step examples
+- Enhanced error messages for missing tool dependencies
 
 ### Fixed
 - Fixed Session.generate_with_tools to properly use model from provider
 - Fixed tool registration and execution to require less boilerplate
 - Improved error handling in provider model detection
+- Clarified tool dependency requirements in error messages
+- Better fallbacks when optional dependencies are not installed
 
 ## [0.4.7] - 2025-04-25
 - Added tool call support for compatible models

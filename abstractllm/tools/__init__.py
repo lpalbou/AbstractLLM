@@ -1,4 +1,17 @@
-"""Tools package for AbstractLLM."""
+"""
+Tools package for AbstractLLM.
+
+This package provides utilities for defining, converting, and validating tools/functions
+that can be used with LLM providers that support tool calling.
+
+Required dependencies:
+    - docstring-parser: For extracting information from function docstrings
+    - jsonschema: For validating tool definitions, arguments, and results
+    - pydantic: For schema generation and validation
+
+To install all required dependencies:
+    pip install abstractllm[tools]
+"""
 
 from .types import (
     ToolDefinition,

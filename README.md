@@ -6,7 +6,7 @@
 
 A lightweight, unified interface for interacting with multiple Large Language Model providers.
 
-Version: 0.4.8
+Version: 0.5.0
 
 IMPORTANT : This is a Work In Progress. Things evolve rapidly. The library is not yet safe to use except for testing.
 
@@ -196,17 +196,46 @@ source abstractllm-env/bin/activate
 ### Installing the Package
 
 ```bash
-# Basic installation
+# Basic installation (core functionality only)
 pip install abstractllm
 
-# With provider-specific dependencies
-pip install abstractllm[openai]
-pip install abstractllm[anthropic]
-pip install abstractllm[huggingface]
+# Choose the providers you need
+pip install abstractllm[openai]     # For OpenAI API
+pip install abstractllm[anthropic]  # For Anthropic/Claude API
+pip install abstractllm[huggingface]  # For HuggingFace models (includes torch)
+pip install abstractllm[tools]  # Required for tool calling functionality
 
-# All dependencies
+# All dependencies at once
 pip install abstractllm[all]
 ```
+
+Most users will want to install at least one provider along with the base package. For example:
+
+```bash
+# For just OpenAI support
+pip install abstractllm[openai]
+
+# For OpenAI and tool calling support
+pip install abstractllm[openai,tools]
+
+# For all providers and tools
+pip install abstractllm[all]
+```
+
+#### Tool Dependencies
+
+If you plan to use AbstractLLM's tool calling capabilities, ensure you have the required dependencies by installing with the `[tools]` extra:
+
+```bash
+pip install abstractllm[tools]
+```
+
+This will install:
+- `docstring-parser`: Required for converting Python functions to tool definitions
+- `jsonschema`: Required for validating tool inputs and outputs
+- `pydantic`: Required for schema parsing and validation
+
+If you encounter the error "Tool support is not available" when using tool functions, you need to install these dependencies.
 
 ## Quick Start
 
@@ -224,6 +253,14 @@ print(response)
 ## Tool Call Capabilities
 
 AbstractLLM provides two ways to implement tool calls, depending on your needs:
+
+> **Note:** To use tool calling capabilities, you must install the required dependencies with:
+> ```bash
+> pip install abstractllm[tools]
+> ```
+> See the [Tool Dependencies](#tool-dependencies) section for more details.
+>
+> **New in v0.5.0**: Simplified tool calling API and automatic provider model detection.
 
 ### 1. Simplest Approach - Everything in One Place
 
@@ -585,6 +622,8 @@ response2 = balanced_chain.generate("What is machine learning?")
 ## Session Management
 
 AbstractLLM includes session management for maintaining conversation context even when switching providers:
+
+> **Enhanced in v0.5.0**: Improved tool support and automatic provider model detection.
 
 ```python
 from abstractllm.session import Session, SessionManager

@@ -2,7 +2,10 @@
 
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field, validator
+try:
+    from pydantic import BaseModel, Field, validator
+except ImportError:
+    raise ImportError("pydantic is required for tool functionality. Install with `pip install pydantic` or `pip install abstractllm[tools]`.")
 
 
 class ToolDefinition(BaseModel):

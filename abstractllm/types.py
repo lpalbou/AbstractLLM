@@ -15,10 +15,21 @@ if TYPE_CHECKING:
 # This is done conditionally to avoid circular imports
 try:
     from abstractllm.tools.types import ToolCallRequest
-except ImportError:
+except ImportError as e:
     # Fallback if tools package is not available
     if not TYPE_CHECKING:
-        ToolCallRequest = Any
+        # Provide a user-friendly class to avoid failures in basic usage
+        class ToolCallRequest:
+            """Placeholder for actual ToolCallRequest when tools not available."""
+            def __init__(self, *args, **kwargs):
+                pass
+                
+            def has_tool_calls(self) -> bool:
+                """Always returns False since tools are not available."""
+                return False
+                
+        # Store the original error for introspection
+        TOOL_IMPORT_ERROR = str(e)
 
 
 @dataclass
