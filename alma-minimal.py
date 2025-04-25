@@ -11,6 +11,11 @@ Uses the simplest approach to tool calling with an interactive REPL.
 from abstractllm import create_llm
 from abstractllm.session import Session
 import os
+import logging
+
+# Set up logging for debugging
+logging.basicConfig(level=logging.INFO, 
+                   format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
 
 def read_file(file_path: str) -> str:
     """Read the contents of a file."""
@@ -23,8 +28,12 @@ def read_file(file_path: str) -> str:
 def main():    
     # Initialize the provider with the model - this is the key step
     # The Session will use this provider's model by default
-    provider = create_llm("anthropic", 
-                        model="claude-3-5-haiku-20241022")
+    #provider = create_llm("anthropic", 
+    #                    model="claude-3-5-haiku-20241022")
+    
+    model_name = "cogito"
+    model_name = "qwen2.5"
+    provider = create_llm("ollama", model=model_name)
     
     # Create session with the provider and tool function
     # The tool is automatically registered for both definition and execution
@@ -56,16 +65,65 @@ def main():
             # Generate response with tool support
             # The session will use the provider's model and registered tools
             print("\nAssistant: ", end="")
+            
+            # Add debug output
+            print("\n[DEBUG] Generating response with tools...")
             response = session.generate_with_tools(
-                prompt=user_input
+                prompt=user_input,
+                max_tool_calls=3  # Limit tool calls to avoid infinite loops
             )
-            print(response.content)
+            print(f"[DEBUG] Response type: {type(response)}")
+            
+            # Handle different response types:
+            # - If response has .content attribute (tool was used), use that
+            # - If response is a string (direct answer, no tool used), use as is
+            if hasattr(response, 'content'):
+                print(f"[DEBUG] Response has content attribute: {hasattr(response, 'content')}")
+                if hasattr(response, 'has_tool_calls'):
+                    print(f"[DEBUG] Response has_tool_calls method: {response.has_tool_calls()}")
+                
+                # Check if we're dealing with a tool call request that hasn't been resolved
+                if hasattr(response, 'has_tool_calls') and response.has_tool_calls():
+                    print("[DEBUG] Still getting tool calls after max_tool_calls reached - forcing direct question")
+                    
+                    # If we're still getting tool calls after max_tool_calls, 
+                    # the model is stuck in a loop. Force a direct question instead.
+                    # First, get the content from the last tool execution
+                    tool_content = None
+                    for message in session.messages:
+                        if hasattr(message, 'tool_results') and message.tool_results:
+                            # Get the last tool result content
+                            tool_content = message.tool_results[-1].get('output', '')
+                    
+                    if tool_content:
+                        # For a summarization task, we ask the model directly with the content
+                        direct_prompt = f"Here is the content of the file that was read. Please provide a concise summary:\n\n{tool_content}"
+                        
+                        # Generate response without tool support (direct query)
+                        print("[DEBUG] Sending direct question with file content...")
+                        direct_response = provider.generate(
+                            prompt=direct_prompt,
+                            system_prompt="You are a helpful assistant summarizing file contents."
+                        )
+                        
+                        print(direct_response)
+                    else:
+                        print("Unable to get content from tool execution. Please try again.")
+                else:
+                    # Normal content response
+                    print(response.content)
+            else:
+                # Direct string response
+                print(f"[DEBUG] Direct string response")
+                print(response)
             
         except KeyboardInterrupt:
             print("\nGoodbye!")
             break
         except Exception as e:
             print(f"\nError: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
 if __name__ == "__main__":
     main() 

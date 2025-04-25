@@ -77,10 +77,13 @@ VISION_CAPABLE_MODELS = [
 
 # Models that support tool calls
 TOOL_CALL_CAPABLE_MODELS = [
-    "llama3",
+    "llama3.2",
     "llama3.1",
     "mistral",
-    "gemma2"
+    "gemma3",
+    "cogito",
+    "qwen2.5",
+    "phi4-mini"
 ]
 
 class OllamaProvider(AbstractLLMInterface):
@@ -199,8 +202,16 @@ class OllamaProvider(AbstractLLMInterface):
         # Extract tool calls from the response
         tool_calls = []
         for tc in response["message"].get("tool_calls", []):
-            # Parse arguments
-            args = tc.get("parameters") or tc.get("arguments", {})
+            # Get function data - Ollama uses the OpenAI format with function nested
+            function_data = tc.get("function", {})
+            
+            # Get name from function object (Ollama format) or directly (fallback)
+            name = function_data.get("name", tc.get("name", ""))
+            
+            # Get arguments from function object (Ollama format) or directly (fallback)
+            args = function_data.get("arguments", tc.get("parameters", tc.get("arguments", {})))
+            
+            # Parse arguments if needed
             if isinstance(args, str):
                 try:
                     args = json.loads(args)
@@ -211,7 +222,7 @@ class OllamaProvider(AbstractLLMInterface):
             # Create a tool call object
             tool_call_obj = ToolCall(
                 id=tc.get("id", f"call_{len(tool_calls)}"),
-                name=tc.get("name", tc.get("function", {}).get("name", "")),
+                name=name,
                 arguments=args
             )
             tool_calls.append(tool_call_obj)

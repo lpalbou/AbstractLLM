@@ -1094,6 +1094,7 @@ class Session:
         
         # Get the provider name to format messages properly
         provider_name = self._get_provider_name(provider)
+        logger.info(f"Using provider: {provider_name}")
         
         # Get conversation history formatted for this provider
         provider_messages = self.get_messages_for_provider(provider_name)
@@ -1108,6 +1109,8 @@ class Session:
             )
             logger.debug(f"Session: Using initial phase system prompt")
         
+        logger.info(f"Generating initial response with tools. Provider: {provider_name}")
+        
         # 1) Initial generate with tools
         response = provider.generate(
             prompt=original_prompt,
@@ -1121,7 +1124,18 @@ class Session:
             messages=provider_messages,
             **kwargs
         )
-        logger.info("Session: Received initial response from LLM")
+        
+        logger.info(f"Received initial response from LLM, type: {type(response)}")
+        if hasattr(response, 'has_tool_calls'):
+            logger.info(f"Response has_tool_calls method, result: {response.has_tool_calls()}")
+        
+        # Log raw response for debugging
+        if hasattr(response, 'to_dict'):
+            logger.debug(f"Raw response: {response.to_dict()}")
+        elif isinstance(response, dict):
+            logger.debug(f"Raw response: {response}")
+        else:
+            logger.debug(f"Raw response (content): {response}")
 
         # If no tool_functions were provided but we have registered tools, create placeholder functions
         if tool_functions is None:
@@ -1136,7 +1150,7 @@ class Session:
 
         # 2) Loop: execute any tool calls and regenerate until no more tools requested
         tool_call_count = 0
-        while response.has_tool_calls() and tool_call_count < max_tool_calls:
+        while hasattr(response, 'has_tool_calls') and response.has_tool_calls() and tool_call_count < max_tool_calls:
             # Increment counter to prevent infinite loops
             tool_call_count += 1
             
@@ -1204,9 +1218,17 @@ class Session:
                 **kwargs
             )
             logger.info(f"Session: Received follow-up response from LLM (iteration {tool_call_count})")
+            
+            # Log follow-up response for debugging
+            if hasattr(response, 'to_dict'):
+                logger.debug(f"Raw follow-up response: {response.to_dict()}")
+            elif isinstance(response, dict):
+                logger.debug(f"Raw follow-up response: {response}")
+            else:
+                logger.debug(f"Raw follow-up response (content): {response}")
         
         # Log if we hit the maximum tool call limit
-        if tool_call_count >= max_tool_calls and response.has_tool_calls():
+        if tool_call_count >= max_tool_calls and hasattr(response, 'has_tool_calls') and response.has_tool_calls():
             logger.warning(f"Session: Maximum tool call limit ({max_tool_calls}) reached. "
                            f"Some tool calls may not have been executed.")
         
@@ -1224,7 +1246,7 @@ class Session:
                 logger.debug(f"Session: Using synthesis phase system prompt")
                 
                 # One final generation with synthesis prompt if needed and we didn't already synthesize
-                if current_system_prompt != final_system_prompt and response.has_tool_calls():
+                if current_system_prompt != final_system_prompt and hasattr(response, 'has_tool_calls') and response.has_tool_calls():
                     updated_provider_messages = self.get_messages_for_provider(provider_name)
                     response = provider.generate(
                         prompt=original_prompt,
@@ -1239,9 +1261,24 @@ class Session:
                         **kwargs
                     )
                     logger.info(f"Session: Generated final synthesis response after tool execution")
+                    
+                    # Log final response for debugging
+                    if hasattr(response, 'to_dict'):
+                        logger.debug(f"Raw final response: {response.to_dict()}")
+                    elif isinstance(response, dict):
+                        logger.debug(f"Raw final response: {response}")
+                    else:
+                        logger.debug(f"Raw final response (content): {response}")
 
         # 3) Final assistant response
-        final_content = response.content or ""
+        # Handle both response types - string or object with content attribute
+        if isinstance(response, str):
+            final_content = response
+            logger.info("Response is a string")
+        else:
+            final_content = response.content if hasattr(response, 'content') else str(response)
+            logger.info(f"Response has content attribute: {hasattr(response, 'content')}")
+
         final_message = self.add_message(
             MessageRole.ASSISTANT, 
             final_content,
