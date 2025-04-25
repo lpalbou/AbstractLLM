@@ -246,6 +246,44 @@ class AnthropicProvider(AbstractLLMInterface):
         logger.debug(f"Tool call support for {model}: {has_support}")
         return has_support
     
+    def _sanitize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Sanitize messages to avoid trailing whitespace errors from Anthropic API.
+        
+        Args:
+            messages: List of message dictionaries
+            
+        Returns:
+            Sanitized message list
+        """
+        sanitized_messages = []
+        
+        for message in messages:
+            sanitized_message = message.copy()
+            
+            # Handle different content formats
+            if isinstance(message.get('content'), str):
+                # Simple string content
+                sanitized_message['content'] = message['content'].strip()
+            elif isinstance(message.get('content'), list):
+                # Content list with different types of blocks
+                sanitized_content = []
+                for content_block in message['content']:
+                    if isinstance(content_block, dict):
+                        sanitized_block = content_block.copy()
+                        # Handle text blocks
+                        if content_block.get('type') == 'text' and 'text' in content_block:
+                            sanitized_block['text'] = content_block['text'].strip()
+                        sanitized_content.append(sanitized_block)
+                    else:
+                        # Non-dict content (shouldn't happen in normal usage)
+                        sanitized_content.append(content_block)
+                sanitized_message['content'] = sanitized_content
+            
+            sanitized_messages.append(sanitized_message)
+            
+        return sanitized_messages
+    
     def generate(self, 
                 prompt: str, 
                 system_prompt: Optional[str] = None, 
@@ -383,6 +421,9 @@ class AnthropicProvider(AbstractLLMInterface):
         if tools:
             processed_tools = self._process_tools(tools)
             logger.debug(f"Processed tools: {processed_tools}")
+        
+        # Sanitize messages to avoid trailing whitespace errors
+        messages = self._sanitize_messages(messages)
         
         # Make API call
         try:
@@ -654,6 +695,9 @@ class AnthropicProvider(AbstractLLMInterface):
         processed_tools = None
         if tools:
             processed_tools = self._process_tools(tools)
+            
+        # Sanitize messages to avoid trailing whitespace errors
+        messages = self._sanitize_messages(messages)
         
         # Make API call
         try:

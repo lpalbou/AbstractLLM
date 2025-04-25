@@ -225,6 +225,9 @@ class Session:
         if isinstance(role, MessageRole):
             role = role.value
             
+        # Trim whitespace from content to avoid API errors
+        content = content.strip() if content else ""
+            
         message = Message(
             role=role, 
             content=content, 
@@ -303,8 +306,11 @@ class Session:
             if provider_name == "anthropic" and m.role == 'system':
                 continue
                 
-            # Add the main message
-            formatted.append({"role": m.role, "content": m.content})
+            # Add the main message with content stripped of trailing whitespace
+            formatted.append({
+                "role": m.role, 
+                "content": m.content.strip() if isinstance(m.content, str) else m.content
+            })
             
             # Process any tool results with provider-specific formatting
             if getattr(m, 'tool_results', None):
@@ -323,20 +329,20 @@ class Session:
                         # Anthropic doesn't support 'tool' role - use 'assistant' with formatted content
                         formatted.append({
                             "role": "assistant",
-                            "content": f"Tool '{tool_name}' returned the following output:\n\n{output}"
+                            "content": f"Tool '{tool_name}' returned the following output:\n\n{output}".strip()
                         })
                     elif provider_name in ["ollama", "huggingface"]:
                         # These providers may not have special tool formatting
                         # Add a prefixed assistant message
                         formatted.append({
                             "role": "assistant",
-                            "content": f"TOOL OUTPUT [{tool_name}]: {output}"
+                            "content": f"TOOL OUTPUT [{tool_name}]: {output}".strip()
                         })
                     else:
                         # Default case: add prefixed content for clarity
                         formatted.append({
                             "role": "assistant", 
-                            "content": f"TOOL OUTPUT [{tool_name}]: {output}"
+                            "content": f"TOOL OUTPUT [{tool_name}]: {output}".strip()
                         })
         
         return formatted

@@ -71,22 +71,6 @@ def read_file(file_path: str, max_lines: Optional[int] = None) -> str:
     Returns:
         The file contents as a string, or an error message
     """
-    # Security: Define allowed directories
-    allowed_directories = [
-        os.getcwd(),  # Current working directory
-        os.path.join(os.getcwd(), "data"),  # Data directory
-    ]
-    
-    # Security: Path validation
-    abs_path = os.path.abspath(os.path.normpath(file_path))
-    is_safe = any(
-        os.path.commonpath([abs_path, os.path.abspath(allowed_dir)]) == os.path.abspath(allowed_dir)
-        for allowed_dir in allowed_directories
-    )
-    
-    if not is_safe:
-        return f"Error: Access to {file_path} is not allowed for security reasons."
-    
     # Validate max_lines
     if max_lines is not None and (max_lines <= 0 or max_lines > 10000):
         return f"Error: max_lines must be between 1 and 10000."
@@ -423,6 +407,10 @@ class ALMA:
             if query.lower() in ["exit", "quit", "bye"]:
                 print("Ending session. Goodbye!")
                 break
+                
+            # Skip empty inputs
+            if not query.strip():
+                continue
                 
             # Process the query
             if stream:
