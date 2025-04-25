@@ -98,7 +98,8 @@ cython_debug/
 Thumbs.db 
 
 investigate/
-.cursor
-.cursor/rules
+
+# Cursor editor files
+.cursor/
+.cursor/**/*
 *.mdc
-.cursor/rules/always.mdc
