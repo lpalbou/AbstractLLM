@@ -66,6 +66,12 @@ setup(
             "pydantic>=2.0.0",
             "jsonschema>=4.0.0",
         ],
+        "dev": [
+            "pytest>=7.0.0",
+            "pytest-cov>=4.0.0",
+            "black>=23.0.0",
+            "isort>=5.0.0",
+        ],
     },
     entry_points={
         "console_scripts": [

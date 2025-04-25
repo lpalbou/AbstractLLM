@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - N/A
 
+## [0.5.1] - 2025-05-02
+### Fixed
+- Added missing optional dependencies in pyproject.toml to properly support package extras
+- Fixed installation of extras like `[all]`, `[tools]`, `[openai]`, etc.
+- Added development extras for improved developer experience
+- Synchronized the build system configuration between setup.py and pyproject.toml
+
 ## [0.5.0] - 2025-05-01
 ### Added
 - Enhanced examples in README.md with simplified tool call patterns

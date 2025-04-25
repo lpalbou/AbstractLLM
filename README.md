@@ -6,7 +6,7 @@
 
 A lightweight, unified interface for interacting with multiple Large Language Model providers.
 
-Version: 0.5.0
+Version: 0.5.1
 
 IMPORTANT : This is a Work In Progress. Things evolve rapidly. The library is not yet safe to use except for testing.
 
@@ -260,6 +260,7 @@ AbstractLLM provides two ways to implement tool calls, depending on your needs:
 > ```
 > See the [Tool Dependencies](#tool-dependencies) section for more details.
 >
+> **New in v0.5.1**: Fixed package extras to properly support `[all]` and `[tools]` installations. 
 > **New in v0.5.0**: Simplified tool calling API and automatic provider model detection.
 
 ### 1. Simplest Approach - Everything in One Place
