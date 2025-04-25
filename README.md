@@ -6,7 +6,7 @@
 
 A lightweight, unified interface for interacting with multiple Large Language Model providers.
 
-Version: 0.5.1
+Version: 0.5.2
 
 IMPORTANT : This is a Work In Progress. Things evolve rapidly. The library is not yet safe to use except for testing.
 
@@ -197,19 +197,38 @@ source abstractllm-env/bin/activate
 
 ```bash
 # Basic installation (core functionality only)
+# This will install basic dependencies but no provider-specific packages
 pip install abstractllm
 
-# Choose the providers you need
+# Provider-specific installations (choose the ones you need)
 pip install abstractllm[openai]     # For OpenAI API
 pip install abstractllm[anthropic]  # For Anthropic/Claude API
 pip install abstractllm[huggingface]  # For HuggingFace models (includes torch)
-pip install abstractllm[tools]  # Required for tool calling functionality
+pip install abstractllm[ollama]     # For Ollama API
+pip install abstractllm[tools]      # Required for tool calling functionality
 
-# All dependencies at once
+# Multiple providers at once
+pip install abstractllm[openai,anthropic]
+
+# All dependencies at once (recommended for full functionality)
 pip install abstractllm[all]
 ```
 
-Most users will want to install at least one provider along with the base package. For example:
+#### Important: Provider Dependencies
+
+Each provider requires specific dependencies to function:
+
+- **OpenAI**: Requires the `openai` package
+- **Anthropic**: Requires the `anthropic` package
+- **HuggingFace**: Requires `torch`, `transformers`, and `huggingface-hub` 
+- **Ollama**: Requires `requests` for sync and `aiohttp` for async operations
+- **Tool Calling**: Requires `docstring-parser`, `jsonschema`, and `pydantic`
+
+If you try to use a provider without its dependencies, you'll get a clear error message telling you which package to install.
+
+#### Recommended Installation
+
+For most users, we recommend installing at least one provider along with the base package:
 
 ```bash
 # For just OpenAI support
@@ -218,7 +237,7 @@ pip install abstractllm[openai]
 # For OpenAI and tool calling support
 pip install abstractllm[openai,tools]
 
-# For all providers and tools
+# For all providers and tools (most comprehensive)
 pip install abstractllm[all]
 ```
 

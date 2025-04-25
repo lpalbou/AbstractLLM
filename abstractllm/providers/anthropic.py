@@ -26,6 +26,13 @@ from abstractllm.exceptions import (
     ProviderAPIError
 )
 
+# Check if Anthropic package is available
+try:
+    import anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+
 # Handle circular imports with TYPE_CHECKING
 if TYPE_CHECKING:
     from abstractllm.tools.types import ToolCallRequest, ToolDefinition
@@ -92,6 +99,10 @@ class AnthropicProvider(AbstractLLMInterface):
             config: Configuration dictionary
         """
         super().__init__(config)
+        
+        # Check if required dependencies are available
+        if not ANTHROPIC_AVAILABLE:
+            raise ImportError("Anthropic package is required for AnthropicProvider. Install with: pip install abstractllm[anthropic]")
         
         # Set default configuration for Anthropic
         default_config = {

@@ -8,10 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- N/A
+- Added core dependencies to ensure basic functionality works without extras
+- Ollama provider now explicitly checks for required dependencies (requests and aiohttp)
+- Improved documentation for provider-specific dependency requirements
 
 ### Changed
-- N/A
+- Updated providers to use lazy imports for better dependency management
+- Modified README installation instructions to be more explicit about dependencies
 
 ### Deprecated
 - N/A
@@ -20,7 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - N/A
 
 ### Fixed
-- N/A
+- Fixed dependency issues when installing the base package without extras
+- Providers now check for required dependencies and provide clear error messages
+- Resolved cross-dependency issues between providers (e.g., torch dependency affecting Anthropic usage)
+- Improved error handling for missing dependencies with helpful installation instructions
 
 ### Security
 - N/A

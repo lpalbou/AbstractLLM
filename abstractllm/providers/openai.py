@@ -25,6 +25,13 @@ from abstractllm.exceptions import (
     ProviderAPIError
 )
 
+# Check if OpenAI package is available
+try:
+    import openai
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
 # Handle circular imports with TYPE_CHECKING
 if TYPE_CHECKING:
     from abstractllm.tools.types import ToolCallRequest, ToolDefinition
@@ -70,6 +77,10 @@ class OpenAIProvider(AbstractLLMInterface):
             config: Configuration dictionary with required parameters.
         """
         super().__init__(config)
+        
+        # Check if required dependencies are available
+        if not OPENAI_AVAILABLE:
+            raise ImportError("OpenAI package is required for OpenAIProvider. Install with: pip install abstractllm[openai]")
         
         # Set default configuration for OpenAI
         default_config = {

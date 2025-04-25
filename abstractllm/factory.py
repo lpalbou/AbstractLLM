@@ -7,6 +7,7 @@ import importlib
 import logging
 from abstractllm.interface import AbstractLLMInterface, ModelParameter
 import os
+import importlib.util
 
 # Configure logger
 logger = logging.getLogger("abstractllm.factory")
@@ -25,11 +26,35 @@ _REQUIRED_API_KEYS = {
     "anthropic": "ANTHROPIC_API_KEY"
 }
 
+# Optional dependency mapping for providers
+_PROVIDER_DEPENDENCIES = {
+    "openai": ["openai"],
+    "anthropic": ["anthropic"],
+    "huggingface": ["torch", "transformers", "huggingface_hub"],
+    "ollama": []  # No external dependencies
+}
+
 def get_llm_providers() -> list[str]:
     """
     Get a list of all available LLM providers.
     """
     return list(_PROVIDERS.keys())
+
+def _check_dependency(module_name: str) -> bool:
+    """
+    Check if a Python module is installed and can be imported.
+    
+    Args:
+        module_name: The name of the module to check
+        
+    Returns:
+        True if the module is available, False otherwise
+    """
+    try:
+        spec = importlib.util.find_spec(module_name)
+        return spec is not None
+    except (ImportError, AttributeError):
+        return False
 
 def create_llm(provider: str, **config) -> AbstractLLMInterface:
     """
@@ -51,6 +76,20 @@ def create_llm(provider: str, **config) -> AbstractLLMInterface:
             f"Provider '{provider}' not supported. "
             f"Available providers: {', '.join(_PROVIDERS.keys())}"
         )
+    
+    # Check required dependencies before importing
+    if provider in _PROVIDER_DEPENDENCIES:
+        missing_deps = []
+        for dep in _PROVIDER_DEPENDENCIES[provider]:
+            if not _check_dependency(dep):
+                missing_deps.append(dep)
+        
+        if missing_deps:
+            deps_str = ", ".join(missing_deps)
+            raise ImportError(
+                f"Missing required dependencies for provider '{provider}': {deps_str}. "
+                f"Please install them using: pip install abstractllm[{provider}]"
+            )
     
     # Import the provider class
     module_path, class_name = _PROVIDERS[provider].rsplit(".", 1)
@@ -77,7 +116,6 @@ def create_llm(provider: str, **config) -> AbstractLLMInterface:
             raise ValueError(
                 f"{provider} API key not provided. Use --api-key or set {env_var} environment variable."
             )
-        
     
     # Create provider instance with config
     return provider_class(config) 

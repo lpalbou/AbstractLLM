@@ -7,10 +7,21 @@ from pathlib import Path
 import os
 import json
 import asyncio
-import aiohttp
-import requests
 import logging
 import copy
+
+# Check for required packages
+try:
+    import requests
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
+
+try:
+    import aiohttp
+    AIOHTTP_AVAILABLE = True
+except ImportError:
+    AIOHTTP_AVAILABLE = False
 
 from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability
 from abstractllm.utils.logging import (
@@ -85,6 +96,10 @@ class OllamaProvider(AbstractLLMInterface):
             config: Configuration dictionary
         """
         super().__init__(config)
+        
+        # Check if required dependencies are available
+        if not REQUESTS_AVAILABLE:
+            raise ImportError("The 'requests' package is required for OllamaProvider. Install with: pip install abstractllm[ollama]")
         
         # Set default configuration for Ollama
         default_config = {
@@ -579,6 +594,10 @@ class OllamaProvider(AbstractLLMInterface):
         Raises:
             Exception: If the generation fails
         """
+        # Check if aiohttp is available for async operations
+        if not AIOHTTP_AVAILABLE:
+            raise ImportError("The 'aiohttp' package is required for async operations. Install with: pip install abstractllm[ollama]")
+            
         # Update config with any provided kwargs
         if kwargs:
             self.config_manager.update_config(kwargs)

@@ -11,28 +11,44 @@ import logging
 import time
 import gc
 from concurrent.futures import ThreadPoolExecutor
-import torch
-from transformers import (
-    AutoTokenizer, 
-    AutoModelForCausalLM,
-    AutoModelForVision2Seq,
-    AutoProcessor,
-    TextIteratorStreamer,
-    BlipProcessor,
-    BlipForConditionalGeneration,
-    AutoConfig,
-    PreTrainedModel,
-    PreTrainedTokenizer,
-    PreTrainedTokenizerFast,
-    LlavaForConditionalGeneration,
-    LlavaProcessor
-)
+import json
 from pathlib import Path
-from PIL import Image
 import psutil
 import requests
 from urllib.parse import urlparse
-import json
+
+# Lazy import dependencies - will raise proper errors when used if not installed
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+
+try:
+    from transformers import (
+        AutoTokenizer, 
+        AutoModelForCausalLM,
+        AutoModelForVision2Seq,
+        AutoProcessor,
+        TextIteratorStreamer,
+        BlipProcessor,
+        BlipForConditionalGeneration,
+        AutoConfig,
+        PreTrainedModel,
+        PreTrainedTokenizer,
+        PreTrainedTokenizerFast,
+        LlavaForConditionalGeneration,
+        LlavaProcessor
+    )
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    TRANSFORMERS_AVAILABLE = False
+
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
 
 from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability
 from abstractllm.utils.logging import log_request, log_response, log_request_url
@@ -47,7 +63,6 @@ from abstractllm.exceptions import (
 )
 from abstractllm.media.image import ImageInput
 from abstractllm.utils.config import ConfigurationManager
-
 from abstractllm.media.interface import MediaInput
 
 # Configure logger
@@ -68,11 +83,11 @@ VISION_CAPABLE_MODELS = {
 
 # Model architecture to class mapping
 MODEL_CLASSES = {
-    "vision_seq2seq": (BlipProcessor, BlipForConditionalGeneration),
-    "vision_causal_lm": (AutoProcessor, AutoModelForCausalLM),
-    "vision_encoder": (AutoProcessor, AutoModelForVision2Seq),
-    "causal_lm": (AutoTokenizer, AutoModelForCausalLM),
-    "llava": (LlavaProcessor, LlavaForConditionalGeneration)
+    "vision_seq2seq": (BlipProcessor, BlipForConditionalGeneration) if TRANSFORMERS_AVAILABLE else (None, None),
+    "vision_causal_lm": (AutoProcessor, AutoModelForCausalLM) if TRANSFORMERS_AVAILABLE else (None, None),
+    "vision_encoder": (AutoProcessor, AutoModelForVision2Seq) if TRANSFORMERS_AVAILABLE else (None, None),
+    "causal_lm": (AutoTokenizer, AutoModelForCausalLM) if TRANSFORMERS_AVAILABLE else (None, None),
+    "llava": (LlavaProcessor, LlavaForConditionalGeneration) if TRANSFORMERS_AVAILABLE else (None, None)
 }
 
 # Add after the existing MODEL_CLASSES definition
@@ -96,6 +111,16 @@ class HuggingFaceProvider(AbstractLLMInterface):
         """Initialize the HuggingFace provider."""
         super().__init__(config)
         
+        # Check if required dependencies are available
+        if not TORCH_AVAILABLE:
+            raise ImportError("PyTorch (torch) is required for HuggingFace provider. Install with: pip install abstractllm[huggingface]")
+        
+        if not TRANSFORMERS_AVAILABLE:
+            raise ImportError("Transformers is required for HuggingFace provider. Install with: pip install abstractllm[huggingface]")
+            
+        if not PIL_AVAILABLE and self.config_manager.get_param("vision_support", False):
+            logger.warning("PIL is not installed. Image processing capabilities will be limited.")
+            
         # Set default configuration for HuggingFace
         default_config = {
             ModelParameter.MODEL: "https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_L.gguf",
@@ -136,6 +161,9 @@ class HuggingFaceProvider(AbstractLLMInterface):
     @staticmethod
     def _get_optimal_device() -> str:
         """Determine the optimal device for model loading."""
+        if not TORCH_AVAILABLE:
+            return "cpu"
+            
         try:
             if torch.cuda.is_available():
                 logger.info(f"CUDA detected with {torch.cuda.device_count()} device(s)")
