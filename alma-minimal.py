@@ -67,11 +67,14 @@ def main():
             print("\nAssistant: ", end="")
             
             # Add debug output
-            print("\n[DEBUG] Generating response with tools...")
-            response = session.generate_with_tools(
+            print("\n[DEBUG] Generating response...")
+            
+            # Use the unified generate method
+            response = session.generate(
                 prompt=user_input,
                 max_tool_calls=3  # Limit tool calls to avoid infinite loops
             )
+            
             print(f"[DEBUG] Response type: {type(response)}")
             
             # Handle different response types:

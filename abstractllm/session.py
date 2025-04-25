@@ -7,6 +7,7 @@ including tracking conversation history and metadata across multiple requests.
 
 from typing import Dict, List, Any, Optional, Union, Tuple, Callable, Generator, TYPE_CHECKING
 from datetime import datetime
+from pathlib import Path
 import json
 import os
 import uuid
@@ -377,6 +378,8 @@ class Session:
         """
         Send a message to the LLM and add the response to the conversation.
         
+        This is a wrapper around the unified generate method.
+        
         Args:
             message: The message to send
             provider: Provider to use (overrides the session provider)
@@ -386,46 +389,12 @@ class Session:
         Returns:
             The LLM's response
         """
-        # Add the user message to the conversation
-        self.add_message(MessageRole.USER, message)
-        
-        # Determine which provider to use
-        llm = self._get_provider(provider)
-        
-        # Get provider name for formatting
-        provider_name = self._get_provider_name(llm)
-        
-        # Check if the provider supports chat history
-        capabilities = llm.get_capabilities()
-        supports_chat = capabilities.get(ModelCapability.MULTI_TURN, False)
-        
-        # Prepare the request based on provider capabilities
-        if supports_chat:
-            messages = self.get_messages_for_provider(provider_name)
-            
-            # Add provider-specific handling here as needed
-            if provider_name == "openai":
-                response = llm.generate(messages=messages, stream=stream, **kwargs)
-            elif provider_name == "anthropic":
-                response = llm.generate(messages=messages, stream=stream, **kwargs)
-            else:
-                # Default approach for other providers that support chat
-                response = llm.generate(messages=messages, stream=stream, **kwargs)
-        else:
-            # For providers that don't support chat history, format a prompt
-            formatted_prompt = self.get_formatted_prompt()
-            response = llm.generate(
-                formatted_prompt, 
-                system_prompt=self.system_prompt,
-                stream=stream, 
-                **kwargs
-            )
-        
-        # If not streaming, add the response to the conversation
-        if not stream:
-            self.add_message(MessageRole.ASSISTANT, response)
-            
-        return response
+        return self.generate(
+            prompt=message,
+            provider=provider,
+            stream=stream,
+            **kwargs
+        )
     
     def send_async(self, message: str,
                   provider: Optional[Union[str, AbstractLLMInterface]] = None,
@@ -1031,7 +1000,7 @@ class Session:
         self,
         tool_functions: Optional[Dict[str, Callable[..., Any]]] = None,
         prompt: Optional[str] = None,
-        provider: Optional[str] = None,
+        provider: Optional[Union[str, AbstractLLMInterface]] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         top_p: Optional[float] = None,
@@ -1039,6 +1008,8 @@ class Session:
         presence_penalty: Optional[float] = None,
         max_tool_calls: int = 10,
         adjust_system_prompt: bool = True,
+        system_prompt: Optional[str] = None,
+        files: Optional[List[Union[str, Path]]] = None,
         **kwargs
     ) -> "GenerateResponse":
         """
@@ -1079,7 +1050,7 @@ class Session:
         
         # Store the original prompt and system prompt for follow-up requests
         original_prompt = prompt if prompt else ""
-        original_system_prompt = self.system_prompt
+        original_system_prompt = system_prompt if system_prompt is not None else self.system_prompt
         
         # Track executed tools for metrics and prompt adjustment
         all_executed_tools = []
@@ -1090,10 +1061,10 @@ class Session:
             self.add_message(MessageRole.USER, prompt)
             
         # Get the provider if needed
-        provider = self._get_provider()
+        provider_instance = self._get_provider(provider)
         
         # Get the provider name to format messages properly
-        provider_name = self._get_provider_name(provider)
+        provider_name = self._get_provider_name(provider_instance)
         logger.info(f"Using provider: {provider_name}")
         
         # Get conversation history formatted for this provider
@@ -1112,7 +1083,7 @@ class Session:
         logger.info(f"Generating initial response with tools. Provider: {provider_name}")
         
         # 1) Initial generate with tools
-        response = provider.generate(
+        response = provider_instance.generate(
             prompt=original_prompt,
             system_prompt=current_system_prompt,
             temperature=temperature,
@@ -1122,6 +1093,7 @@ class Session:
             presence_penalty=presence_penalty,
             tools=self.tools,
             messages=provider_messages,
+            files=files,
             **kwargs
         )
         
@@ -1205,7 +1177,7 @@ class Session:
             logger.info(f"Session: Generating follow-up response (iteration {tool_call_count}) with updated conversation")
             
             # Regenerate with tools still enabled, passing the original prompt
-            response = provider.generate(
+            response = provider_instance.generate(
                 prompt=original_prompt,
                 system_prompt=current_system_prompt,
                 temperature=temperature,
@@ -1215,6 +1187,7 @@ class Session:
                 presence_penalty=presence_penalty,
                 tools=self.tools,
                 messages=updated_provider_messages,
+                files=files,
                 **kwargs
             )
             logger.info(f"Session: Received follow-up response from LLM (iteration {tool_call_count})")
@@ -1248,7 +1221,7 @@ class Session:
                 # One final generation with synthesis prompt if needed and we didn't already synthesize
                 if current_system_prompt != final_system_prompt and hasattr(response, 'has_tool_calls') and response.has_tool_calls():
                     updated_provider_messages = self.get_messages_for_provider(provider_name)
-                    response = provider.generate(
+                    response = provider_instance.generate(
                         prompt=original_prompt,
                         system_prompt=final_system_prompt,
                         temperature=temperature,
@@ -1258,6 +1231,7 @@ class Session:
                         presence_penalty=presence_penalty,
                         tools=self.tools,
                         messages=updated_provider_messages,
+                        files=files,
                         **kwargs
                     )
                     logger.info(f"Session: Generated final synthesis response after tool execution")
@@ -1302,6 +1276,7 @@ class Session:
         tool_functions: Optional[Dict[str, Callable[..., Any]]] = None,
         prompt: Optional[str] = None,
         model: Optional[str] = None,
+        provider: Optional[Union[str, AbstractLLMInterface]] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         top_p: Optional[float] = None,
@@ -1309,6 +1284,8 @@ class Session:
         presence_penalty: Optional[float] = None,
         max_tool_calls: int = 5,
         adjust_system_prompt: bool = True,
+        system_prompt: Optional[str] = None,
+        files: Optional[List[Union[str, Path]]] = None,
         **kwargs
     ) -> Generator[Union[str, Dict[str, Any]], None, None]:
         """
@@ -1350,7 +1327,7 @@ class Session:
             self.add_message(MessageRole.USER, prompt)
             
         # Get the provider if needed
-        provider = self._get_provider()
+        provider_instance = self._get_provider(provider)
         
         # Variables to track state
         accumulated_content = ""    # Buffer for accumulating content chunks
@@ -1360,7 +1337,7 @@ class Session:
         current_system_prompt = original_system_prompt
         
         # Get the provider name to format messages properly
-        provider_name = self._get_provider_name(provider)
+        provider_name = self._get_provider_name(provider_instance)
         
         # Get conversation history formatted for this provider
         provider_messages = self.get_messages_for_provider(provider_name)
@@ -1370,7 +1347,7 @@ class Session:
         
         # If no model is specified, try to get it from the provider's config
         if model is None:
-            provider_model = self._get_provider_model(provider)
+            provider_model = self._get_provider_model(provider_instance)
             if provider_model:
                 model = provider_model
                 logger.debug(f"Session: Using model {model} from provider config")
@@ -1395,7 +1372,7 @@ class Session:
             logger.debug(f"Session: Using initial phase system prompt for streaming")
         
         # Start streaming generation
-        stream = provider.generate(
+        stream = provider_instance.generate(
             prompt=original_prompt,  # Use original prompt consistently
             system_prompt=current_system_prompt,
             model=model,
@@ -1529,7 +1506,7 @@ class Session:
             logger.info(f"Session: Generating follow-up streaming response with {len(pending_tool_results)} tool results")
             
             # Generate follow-up response to incorporate tool results, using original prompt
-            follow_up_stream = provider.generate(
+            follow_up_stream = provider_instance.generate(
                 prompt=original_prompt,  # Use original prompt consistently
                 system_prompt=current_system_prompt,
                 model=model,
@@ -1602,6 +1579,175 @@ class Session:
             
         # No model found
         return None
+
+    def generate(
+        self,
+        prompt: Optional[str] = None,
+        provider: Optional[Union[str, AbstractLLMInterface]] = None,
+        system_prompt: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        top_p: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+        tool_functions: Optional[Dict[str, Callable[..., Any]]] = None,
+        max_tool_calls: int = 10,
+        adjust_system_prompt: bool = True,
+        stream: bool = False,
+        files: Optional[List[Union[str, Path]]] = None,
+        **kwargs
+    ) -> Union[str, "GenerateResponse", Generator[Union[str, Dict[str, Any]], None, None]]:
+        """
+        Unified method to generate a response with or without tool support.
+        
+        This method intelligently handles all generation use cases:
+        1. Simple text generation with no tools
+        2. Generation with tool support including executing tools and follow-up
+        3. Streaming response with or without tools
+        
+        Args:
+            prompt: The input prompt or user query
+            provider: Provider to use (overrides the session provider)
+            system_prompt: Override the system prompt
+            temperature: Temperature for generation
+            max_tokens: Maximum tokens to generate
+            top_p: Top-p sampling value
+            frequency_penalty: Frequency penalty
+            presence_penalty: Presence penalty
+            tool_functions: Optional dictionary mapping tool names to their implementations
+            max_tool_calls: Maximum number of tool call iterations
+            adjust_system_prompt: Whether to adjust system prompt based on tool execution phase
+            stream: Whether to stream the response
+            files: Optional list of files to process
+            **kwargs: Additional provider-specific parameters
+            
+        Returns:
+            - String response for simple generation
+            - GenerateResponse for tool-using generation
+            - Generator for streaming responses
+        """
+        logger = logging.getLogger("abstractllm.session")
+        
+        # Get provider
+        provider_instance = self._get_provider(provider)
+        provider_name = self._get_provider_name(provider_instance)
+        logger.info(f"Using provider: {provider_name}")
+        
+        # Determine if we should use tool functionality
+        use_tools = False
+        if tool_functions is not None or self.tools:
+            if not TOOLS_AVAILABLE:
+                raise ValueError(TOOLS_ERROR_MESSAGE)
+            use_tools = True
+            logger.info(f"Tool support enabled with {len(self.tools)} registered tools")
+        
+        # If streaming is requested with tools, use specialized streaming method
+        if stream and use_tools:
+            return self.generate_with_tools_streaming(
+                prompt=prompt,
+                tool_functions=tool_functions,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                max_tool_calls=max_tool_calls,
+                adjust_system_prompt=adjust_system_prompt,
+                files=files,
+                **kwargs
+            )
+        
+        # For regular streaming without tools
+        if stream and not use_tools:
+            # Add the user message if provided
+            if prompt:
+                self.add_message(MessageRole.USER, prompt)
+                
+            # Get conversation history
+            system_prompt_to_use = system_prompt or self.system_prompt
+            messages = self.get_messages_for_provider(provider_name)
+            
+            # Generate streaming response
+            stream_response = provider_instance.generate(
+                prompt=prompt,
+                system_prompt=system_prompt_to_use,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                stream=True,
+                files=files,
+                **kwargs
+            )
+            
+            # Create generator that adds the assistant message at the end
+            accumulated_content = ""
+            
+            def stream_wrapper():
+                nonlocal accumulated_content
+                for chunk in stream_response:
+                    if isinstance(chunk, str):
+                        accumulated_content += chunk
+                        yield chunk
+                    elif hasattr(chunk, "content"):
+                        content_chunk = chunk.content
+                        if content_chunk:
+                            accumulated_content += content_chunk
+                            yield content_chunk
+                
+                # Add the final message to the conversation
+                if accumulated_content:
+                    self.add_message(MessageRole.ASSISTANT, accumulated_content)
+            
+            return stream_wrapper()
+        
+        # For tool-based generation
+        if use_tools:
+            return self.generate_with_tools(
+                prompt=prompt,
+                tool_functions=tool_functions,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                max_tool_calls=max_tool_calls,
+                adjust_system_prompt=adjust_system_prompt,
+                provider=provider_instance,  # Use the provider instance directly
+                system_prompt=system_prompt,
+                files=files,
+                **kwargs
+            )
+        
+        # Standard generation without tools or streaming
+        # Add the user message if provided
+        if prompt:
+            self.add_message(MessageRole.USER, prompt)
+            
+        # Get conversation history
+        system_prompt_to_use = system_prompt or self.system_prompt
+        messages = self.get_messages_for_provider(provider_name)
+        
+        # Generate response
+        response = provider_instance.generate(
+            prompt=prompt,
+            system_prompt=system_prompt_to_use,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            frequency_penalty=frequency_penalty,
+            presence_penalty=presence_penalty,
+            files=files,
+            **kwargs
+        )
+        
+        # Add the response to the conversation
+        self.add_message(MessageRole.ASSISTANT, response)
+        
+        return response
 
 
 class SessionManager:

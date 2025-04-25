@@ -253,7 +253,7 @@ class ALMA:
             # Use the session's generate_with_tools method to handle the flow (tools are executed inside)
             # Note: tool_functions could be omitted since we registered the tools with add_tool,
             # but providing it explicitly ensures consistent behavior
-            response = session.generate_with_tools(
+            response = session.generate(
                 tool_functions=self.tool_functions,
                 model=self.model_name
             )
