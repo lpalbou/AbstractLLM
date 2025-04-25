@@ -28,13 +28,19 @@ def read_file(file_path: str) -> str:
 def main():    
     # Initialize the provider with the model - this is the key step
     # The Session will use this provider's model by default
-    #provider = create_llm("anthropic", 
-    #                    model="claude-3-5-haiku-20241022")
     
     model_name = "cogito"
     model_name = "qwen2.5"
     provider = create_llm("ollama", model=model_name)
-    
+
+    # TEST WITH ANTHROPIC
+    # provider = create_llm("anthropic", 
+    #                    model="claude-3-5-haiku-20241022")
+
+    # TEST WITH OPENAI
+    # provider = create_llm("openai", 
+    #                     model="gpt-4o")
+
     # Create session with the provider and tool function
     # The tool is automatically registered for both definition and execution
     session = Session(
