@@ -35,7 +35,7 @@ llm = create_llm(
 To use the OpenAI provider, install AbstractLLM with OpenAI dependencies:
 
 ```bash
-pip install abstractllm[openai]
+pip install "abstractllm[openai]"
 ```
 
 ## Supported Models

@@ -9,12 +9,12 @@ This guide demonstrates how to use the AbstractLLM package in your applications.
 pip install abstractllm
 
 # Install with specific provider dependencies
-pip install abstractllm[openai]     # For OpenAI
-pip install abstractllm[anthropic]  # For Anthropic
-pip install abstractllm[huggingface]  # For Hugging Face
+pip install "abstractllm[openai]"           # For OpenAI
+pip install "abstractllm[anthropic]"        # For Anthropic
+pip install "abstractllm[huggingface]"      # For Hugging Face
 
 # Install with all provider dependencies
-pip install abstractllm[all]
+pip install "abstractllm[all]"
 ```
 
 ## Basic Usage

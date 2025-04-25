@@ -38,20 +38,20 @@ AbstractLLM is currently a **Work In Progress** and is **not yet safe to use exc
 
 ```bash
 # Basic installation (core functionality only)
-pip install abstractllm
+pip install "abstractllm
 
-# Provider-specific installations
-pip install abstractllm[openai]     # OpenAI API
-pip install abstractllm[anthropic]  # Anthropic/Claude API
-pip install abstractllm[huggingface]  # HuggingFace models (includes torch)
-pip install abstractllm[ollama]     # Ollama API
-pip install abstractllm[tools]      # Tool calling functionality
+# Provider-specific installations"
+pip install "abstractllm[openai]"       # OpenAI API
+pip install "abstractllm[anthropic]"    # Anthropic/Claude API
+pip install "abstractllm[huggingface]"  # HuggingFace models (includes torch)
+pip install "abstractllm[ollama]"       # Ollama API
+pip install "abstractllm[tools]"        # Tool calling functionality
 
 # Multiple providers
-pip install abstractllm[openai,anthropic]
+pip install "abstractllm[openai,anthropic]"
 
 # All dependencies
-pip install abstractllm[all]
+pip install "abstractllm[all]"
 ```
 
 ## Quick Example

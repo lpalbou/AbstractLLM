@@ -160,7 +160,7 @@ As of version 0.5.3, tool call support is available for compatible models across
 
 Tool call dependencies are required for this functionality to work:
 ```bash
-pip install abstractllm[tools]
+pip install "abstractllm[tools]"
 ```
 
 ## Vision Capabilities

@@ -28,7 +28,7 @@ llm = create_llm(
 To use the Anthropic provider, install AbstractLLM with Anthropic dependencies:
 
 ```bash
-pip install abstractllm[anthropic]
+pip install "abstractllm[anthropic]"
 ```
 
 ## Supported Models

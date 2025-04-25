@@ -30,7 +30,7 @@ For local models, no API key is required.
 To use the HuggingFace provider, install AbstractLLM with HuggingFace dependencies:
 
 ```bash
-pip install abstractllm[huggingface]
+pip install "abstractllm[huggingface]"
 ```
 
 This will install PyTorch, Transformers, and other required dependencies.

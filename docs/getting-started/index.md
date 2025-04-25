@@ -20,16 +20,16 @@ Install with specific provider dependencies:
 
 ```bash
 # OpenAI
-pip install abstractllm[openai]
+pip install "abstractllm[openai]"
 
 # Anthropic (Claude)
-pip install abstractllm[anthropic]
+pip install "abstractllm[anthropic]"
 
 # Ollama (local models)
-pip install abstractllm[ollama]
+pip install "abstractllm[ollama]"
 
 # HuggingFace (includes PyTorch)
-pip install abstractllm[huggingface]
+pip install "abstractllm[huggingface]"
 ```
 
 ### Multiple Providers
@@ -37,7 +37,7 @@ pip install abstractllm[huggingface]
 You can combine multiple providers:
 
 ```bash
-pip install abstractllm[openai,anthropic]
+pip install "abstractllm[openai,anthropic]"
 ```
 
 ### All Dependencies
@@ -45,7 +45,7 @@ pip install abstractllm[openai,anthropic]
 To install all dependencies:
 
 ```bash
-pip install abstractllm[all]
+pip install "abstractllm[all]"
 ```
 
 ### Tool Calling Support
@@ -53,7 +53,7 @@ pip install abstractllm[all]
 To use the tool/function calling capabilities:
 
 ```bash
-pip install abstractllm[tools]
+pip install "abstractllm[tools]"
 ```
 
 ## Basic Usage

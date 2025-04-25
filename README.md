@@ -126,17 +126,17 @@ For more detailed examples and advanced features, please see the [documentation]
 pip install abstractllm
 
 # Provider-specific installations
-pip install abstractllm[openai]     # OpenAI API
-pip install abstractllm[anthropic]  # Anthropic/Claude API
-pip install abstractllm[huggingface]  # HuggingFace models (includes torch)
-pip install abstractllm[ollama]     # Ollama API
-pip install abstractllm[tools]      # Tool calling functionality
+pip install "abstractllm[openai]"       # OpenAI API
+pip install "abstractllm[anthropic]"    # Anthropic/Claude API
+pip install "abstractllm[huggingface]"  # HuggingFace models (includes torch)
+pip install "abstractllm[ollama]"       # Ollama API
+pip install "abstractllm[tools]"        # Tool calling functionality
 
 # Multiple providers
-pip install abstractllm[openai,anthropic]
+pip install "abstractllm[openai,anthropic]"
 
 # All dependencies
-pip install abstractllm[all]
+pip install "abstractllm[all]"
 ```
 
 ### Important: Provider Dependencies
@@ -157,13 +157,13 @@ For most users, we recommend installing at least one provider along with the bas
 
 ```bash
 # For just OpenAI support
-pip install abstractllm[openai]
+pip install "abstractllm[openai]"
 
 # For OpenAI and tool calling support
-pip install abstractllm[openai,tools]
+pip install "abstractllm[openai,tools]"
 
 # For all providers and tools (most comprehensive)
-pip install abstractllm[all]
+pip install "abstractllm[all]"
 ```
 
 ## Example Implementations

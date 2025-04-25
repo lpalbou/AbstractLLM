@@ -16,7 +16,7 @@ Before using the Ollama provider, you need to:
 To use the Ollama provider, install AbstractLLM with the Ollama dependencies:
 
 ```bash
-pip install abstractllm[ollama]
+pip install "abstractllm[ollama]"
 ```
 
 ### Creating an Instance
