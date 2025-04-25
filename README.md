@@ -24,6 +24,48 @@ IMPORTANT : This is a Work In Progress. Things evolve rapidly. The library is no
 - 💬 **Session Management**: Maintain conversation context when switching between providers
 - 🛑 **Unified Error Handling**: Consistent error handling across all providers
 
+## Example Implementations
+
+AbstractLLM includes two example implementations that demonstrate how to use the library:
+
+### query.py - Simple Command-Line Interface
+
+A straightforward example showing how to use AbstractLLM for basic queries:
+
+```bash
+# Basic text generation
+python query.py "What is the capital of France?" --provider anthropic --model claude-3-5-haiku-20241022
+
+# Processing a text file
+python query.py "Summarize this text" -f tests/examples/test_file2.txt --provider anthropic
+
+# Analyzing an image
+python query.py "Describe this image" -f tests/examples/mountain_path.jpg --provider openai --model gpt-4o
+```
+
+### alma.py - Tool-Enhanced Agent
+
+ALMA (Abstract Language Model Agent) demonstrates how to build a tool-enabled agent using AbstractLLM's tool calling capabilities:
+
+```bash
+# Basic usage
+python alma.py --query "Tell me about the current time" --provider anthropic
+
+# File reading and command execution with streaming output
+python alma.py --query "Read the file at tests/examples/test_file2.txt and tell me what it's about" --stream
+
+# Interactive mode with detailed logging
+python alma.py --verbose
+```
+
+ALMA supports powerful tools:
+- File reading with `read_file`
+- Command execution with `execute_command`
+
+The implementation follows best practices from `docs/toolcalls/` for secure, LLM-first tool calling, where tools are only called when requested by the LLM rather than through direct pattern matching.
+
+**Important Note**: These example implementations are provided for demonstration purposes only and are not intended for production use. They showcase how to integrate AbstractLLM into your own applications.
+
 ## Command-Line Examples
 
 ### Text Generation
