@@ -172,7 +172,9 @@ class Session:
             provider: Provider name or instance to use for this session
             provider_config: Configuration for the provider
             metadata: Session metadata
-            tools: Optional list of tool definitions available for the LLM to use
+            tools: Optional list of tool definitions or functions available for the LLM to use.
+                  Functions will be automatically converted to tool definitions and their
+                  implementations stored for use with generate_with_tools.
         """
         self.messages: List[Message] = []
         self.system_prompt = system_prompt
@@ -181,6 +183,9 @@ class Session:
         self.created_at = datetime.now()
         self.last_updated = self.created_at
         self.tools: List["ToolDefinition"] = []
+        
+        # Store the original function implementations
+        self._tool_implementations: Dict[str, Callable[..., Any]] = {}
         
         # Track last assistant message index for tool results
         self._last_assistant_idx = -1
@@ -616,8 +621,12 @@ class Session:
         if not TOOLS_AVAILABLE:
             raise ValueError("Tool support is not available. Install the required dependencies.")
         
-        # Convert tool to ToolDefinition
+        # Convert tool to ToolDefinition and store original implementation if callable
         if callable(tool):
+            # Store the original function implementation
+            func_name = tool.__name__
+            self._tool_implementations[func_name] = tool
+            
             # Convert function to tool definition
             tool_def = function_to_tool_definition(tool)
         elif isinstance(tool, dict):
@@ -958,11 +967,53 @@ class Session:
             
         return metrics
 
+    def _create_tool_functions_dict(self) -> Dict[str, Callable[..., Any]]:
+        """
+        Create a dictionary of tool functions from registered tool definitions.
+        
+        This uses stored function implementations when available, or creates
+        placeholder functions that raise NotImplementedError when no implementation
+        is available.
+        
+        Returns:
+            Dictionary mapping tool names to functions (actual or placeholder)
+        """
+        logger = logging.getLogger("abstractllm.session")
+        tool_functions = {}
+        
+        for tool in self.tools:
+            # Get the tool name from different possible formats
+            if hasattr(tool, 'name'):
+                tool_name = tool.name
+            elif isinstance(tool, dict):
+                tool_name = tool.get('name', 'unknown')
+            else:
+                tool_name = 'unknown'
+            
+            # Use the stored implementation if available
+            if tool_name in self._tool_implementations:
+                tool_functions[tool_name] = self._tool_implementations[tool_name]
+                logger.debug(f"Session: Using stored implementation for tool '{tool_name}'")
+            else:
+                # Create a placeholder function with proper closure to capture the tool name
+                def create_placeholder(name):
+                    def placeholder_func(*args, **kwargs):
+                        raise NotImplementedError(
+                            f"No implementation provided for tool '{name}'. "
+                            f"Please provide a tool_functions dictionary with an implementation for this tool."
+                        )
+                    return placeholder_func
+                
+                tool_functions[tool_name] = create_placeholder(tool_name)
+                logger.debug(f"Session: Created placeholder function for tool '{tool_name}'")
+            
+        return tool_functions
+        
     def generate_with_tools(
         self,
-        tool_functions: Dict[str, Callable[..., Any]],
+        tool_functions: Optional[Dict[str, Callable[..., Any]]] = None,
         prompt: Optional[str] = None,
-        model: Optional[str] = None,
+        provider: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         top_p: Optional[float] = None,
@@ -986,7 +1037,8 @@ class Session:
         tool outputs as assistant messages.
         
         Args:
-            tool_functions: A dictionary mapping tool names to their implementation functions
+            tool_functions: A dictionary mapping tool names to their implementation functions.
+                            If None, uses placeholder functions for registered tools.
             prompt: The input prompt (if None, uses the existing conversation history)
             model: The model to use
             temperature: The temperature to use
@@ -1042,7 +1094,6 @@ class Session:
         response = provider.generate(
             prompt=original_prompt,
             system_prompt=current_system_prompt,
-            model=model,
             temperature=temperature,
             max_tokens=max_tokens,
             top_p=top_p,
@@ -1053,6 +1104,17 @@ class Session:
             **kwargs
         )
         logger.info("Session: Received initial response from LLM")
+
+        # If no tool_functions were provided but we have registered tools, create placeholder functions
+        if tool_functions is None:
+            if not self.tools:
+                logger.warning("Session: No tool_functions provided and no tools registered in the session")
+                # No tools registered, return the response as is
+                return response
+            
+            # Create tool functions from registered tools
+            tool_functions = self._create_tool_functions_dict()
+            logger.info(f"Session: Using {len(tool_functions)} registered tools from session")
 
         # 2) Loop: execute any tool calls and regenerate until no more tools requested
         tool_call_count = 0
@@ -1114,7 +1176,6 @@ class Session:
             response = provider.generate(
                 prompt=original_prompt,
                 system_prompt=current_system_prompt,
-                model=model,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 top_p=top_p,
@@ -1150,7 +1211,6 @@ class Session:
                     response = provider.generate(
                         prompt=original_prompt,
                         system_prompt=final_system_prompt,
-                        model=model,
                         temperature=temperature,
                         max_tokens=max_tokens,
                         top_p=top_p,
@@ -1184,7 +1244,7 @@ class Session:
         
     def generate_with_tools_streaming(
         self,
-        tool_functions: Dict[str, Callable[..., Any]],
+        tool_functions: Optional[Dict[str, Callable[..., Any]]] = None,
         prompt: Optional[str] = None,
         model: Optional[str] = None,
         temperature: Optional[float] = None,
@@ -1199,28 +1259,15 @@ class Session:
         """
         Generate a streaming response with tool execution support.
         
-        This method handles a complex streaming workflow that includes:
-        1. Streaming initial response content from the LLM
-        2. Detecting tool calls during streaming
-        3. Executing detected tool calls
-        4. Yielding both content chunks and tool execution results
-        5. Buffering content for state management
-        6. Managing the conversation flow with tool results
-        7. Generating a follow-up response after tool execution
-        
-        The streaming state machine works as follows:
-        - Initial state: Process incoming chunks from the LLM
-        - When a tool call is detected: Execute the tool and yield a tool result
-        - After all chunks are processed: Add the accumulated content as an assistant message
-        - If tools were executed: Generate and stream a follow-up response
-        - Final state: Add the follow-up response as an assistant message
-        
-        Note: Tool results formatting varies by provider. Some providers (like OpenAI) support
-        dedicated roles for tool outputs, while others (like Anthropic) require formatting
-        tool outputs as assistant messages.
+        This method handles streaming generation with tool calls:
+        1. Stream initial response with tool definitions
+        2. If a tool call is detected in the stream, execute it
+        3. Add tool results to the conversation
+        4. Continue streaming with follow-up content that incorporates tool results
         
         Args:
-            tool_functions: A dictionary mapping tool names to their implementation functions
+            tool_functions: A dictionary mapping tool names to their implementation functions.
+                            If None, uses placeholder functions for registered tools.
             prompt: The input prompt (if None, uses the existing conversation history)
             model: The model to use
             temperature: The temperature to use
@@ -1233,19 +1280,7 @@ class Session:
             **kwargs: Additional provider-specific parameters
             
         Yields:
-            Either string chunks for content or dictionaries for tool results.
-            String chunks are yielded as-is for direct content display.
-            Tool results are yielded as dictionaries with the following format:
-            {
-                "type": "tool_result",
-                "tool_call": {
-                    "call_id": "unique_id",
-                    "name": "tool_name",
-                    "arguments": {...},
-                    "output": "result as string",
-                    "error": "error message if any"
-                }
-            }
+            Content chunks (strings) or tool result dictionaries
         """
         # Ensure we have tools available
         if not TOOLS_AVAILABLE:
@@ -1277,6 +1312,22 @@ class Session:
         
         logger = logging.getLogger("abstractllm.session")
         logger.info(f"Session: Starting streaming generation with tools")
+        
+        # If no model is specified, try to get it from the provider's config
+        if model is None:
+            provider_model = self._get_provider_model(provider)
+            if provider_model:
+                model = provider_model
+                logger.debug(f"Session: Using model {model} from provider config")
+        
+        # If no tool_functions were provided but we have registered tools, create placeholder functions
+        if tool_functions is None:
+            if not self.tools:
+                logger.warning("Session: No tool_functions provided and no tools registered in the session")
+            else:
+                # Create tool functions from registered tools
+                tool_functions = self._create_tool_functions_dict()
+                logger.info(f"Session: Using {len(tool_functions)} registered tools from session")
         
         # Adjust system prompt for initial phase if needed
         if adjust_system_prompt:
@@ -1468,6 +1519,34 @@ class Session:
         # Reset the system prompt to the original
         if adjust_system_prompt and self.system_prompt != original_system_prompt:
             self.system_prompt = original_system_prompt
+
+    def _get_provider_model(self, provider: AbstractLLMInterface) -> Optional[str]:
+        """
+        Get the model name from a provider instance.
+        
+        Args:
+            provider: Provider instance
+            
+        Returns:
+            Model name or None if not found
+        """
+        if not hasattr(provider, 'config'):
+            return None
+            
+        # Check for 'model' in config dictionary
+        if 'model' in provider.config:
+            return provider.config['model']
+            
+        # Check for ModelParameter.MODEL in config dictionary
+        if hasattr(ModelParameter, 'MODEL') and ModelParameter.MODEL in provider.config:
+            return provider.config[ModelParameter.MODEL]
+            
+        # Check for model as a direct attribute
+        if hasattr(provider, 'model'):
+            return provider.model
+            
+        # No model found
+        return None
 
 
 class SessionManager:

@@ -25,6 +25,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - N/A
 
+## [0.4.8] - 2025-04-28
+### Added
+- Enhanced examples in README.md with simplified tool call patterns
+- Added comparison table for tool call approaches
+
+### Changed
+- Improved Session class to automatically use provider's model in tool calls
+- Simplified tool call implementation with cleaner API
+- Updated documentation with step-by-step examples
+
+### Fixed
+- Fixed Session.generate_with_tools to properly use model from provider
+- Fixed tool registration and execution to require less boilerplate
+- Improved error handling in provider model detection
+
 ## [0.4.7] - 2025-04-25
 - Added tool call support for compatible models
 - Added interactive ALMA command line agent

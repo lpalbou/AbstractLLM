@@ -251,6 +251,8 @@ class ALMA:
             log_step(2, "AGENT→LLM", f"Sending query to {self.provider_name} with available tools: {tool_names}")
             
             # Use the session's generate_with_tools method to handle the flow (tools are executed inside)
+            # Note: tool_functions could be omitted since we registered the tools with add_tool,
+            # but providing it explicitly ensures consistent behavior
             response = session.generate_with_tools(
                 tool_functions=self.tool_functions,
                 model=self.model_name
@@ -304,7 +306,7 @@ class ALMA:
             # Attempt streaming; if streaming API not supported, fall back to non-streaming
             try:
                 for chunk in session.generate_with_tools_streaming(
-                    tool_functions=self.tool_functions,
+                    tool_functions=self.tool_functions,  # Optional since tools are registered, but included for clarity
                     model=self.model_name
                 ):
                     # Debug the chunk type and content

@@ -6,7 +6,7 @@
 
 A lightweight, unified interface for interacting with multiple Large Language Model providers.
 
-Version: 0.4.7
+Version: 0.4.8
 
 IMPORTANT : This is a Work In Progress. Things evolve rapidly. The library is not yet safe to use except for testing.
 
@@ -223,74 +223,46 @@ print(response)
 
 ## Tool Call Capabilities
 
-AbstractLLM provides robust support for LLM tool calling capabilities, allowing you to define tools that the model can use during generation:
+AbstractLLM provides two ways to implement tool calls, depending on your needs:
+
+### 1. Simplest Approach - Everything in One Place
 
 ```python
 from abstractllm import create_llm
 from abstractllm.session import Session
-from abstractllm.tools import function_to_tool_definition
 
-# Define a simple tool function
+# Define your tool function
 def read_file(file_path: str) -> str:
-    """Read the contents of a file.
-    
-    Args:
-        file_path: The path of the file to read
-        
-    Returns:
-        The file contents as a string
-    """
+    """Read the contents of a file."""
     try:
         with open(file_path, 'r') as f:
             return f.read()
     except Exception as e:
         return f"Error reading file: {str(e)}"
 
-# Create a session with tools
+# Step 1: Initialize the provider with the desired model
+provider = create_llm("anthropic", 
+                     model="claude-3-5-haiku-20241022")
+
+# Step 2: Create a session with the provider and pass tool directly
 session = Session(
-    system_prompt="You are a helpful assistant that can use tools to answer questions.",
-    provider="anthropic",  # or "openai" for OpenAI function calling
-    provider_config={"model": "claude-3-5-haiku-20241022"}
+    system_prompt="You are a helpful assistant that can read files when needed.",
+    provider=provider,
+    tools=[read_file]  # Tool function is automatically registered
 )
 
-# Add the tool to the session
-session.add_tool(function_to_tool_definition(read_file))
-
-# Define available tool functions
-tool_functions = {
-    "read_file": read_file
-}
-
-# Use generate_with_tools to handle the LLM-tool interaction flow
+# Step 3: Generate response with tool support
 response = session.generate_with_tools(
-    tool_functions=tool_functions,
     prompt="What is in the file README.md?"
+    # No need for tool_functions or model parameter - they're inferred from the session
 )
 
 print(response.content)
 ```
 
-### Streaming with Tool Calls
+**When to use this approach**: When you want the cleanest, most straightforward code and don't need custom tool handling or complex execution logic. Your tool functions are automatically registered and executed.
 
-AbstractLLM also supports streaming responses while using tools:
-
-```python
-# Setup as above, then use generate_with_tools_streaming
-for chunk in session.generate_with_tools_streaming(
-    tool_functions=tool_functions,
-    prompt="What is in the file README.md?"
-):
-    if isinstance(chunk, str):
-        # Regular content from the LLM
-        print(chunk, end="", flush=True)
-    elif isinstance(chunk, dict) and chunk.get("type") == "tool_result":
-        # Tool execution result
-        print(f"\n[Tool executed: {chunk.get('tool_call', {}).get('name')}]\n")
-```
-
-### Building a Tool-Enhanced Agent
-
-To create a more complete tool-enabled agent like ALMA (see `alma.py`), combine session management with tool calling:
+### 2. Customizable Approach - Separate Definition and Execution
 
 ```python
 from abstractllm import create_llm
@@ -318,47 +290,65 @@ def execute_command(command: str) -> str:
     except Exception as e:
         return f"Error executing command: {str(e)}"
 
-# Initialize a session with system prompt
+# Step 1: Initialize the provider with model
+provider = create_llm("anthropic", 
+                     model="claude-3-5-haiku-20241022")
+
+# Step 2: Create a session with the provider
 session = Session(
-    system_prompt="""
-    You are a helpful assistant that can use tools to answer questions.
-    When you need information, use the appropriate tool.
-    For file access, use the read_file tool rather than making assumptions.
-    For executing commands, use the execute_command tool when needed.
-    """,
-    provider="anthropic",
-    provider_config={"model": "claude-3-5-haiku-20241022"}
+    system_prompt="You are a helpful assistant that can use tools when needed.",
+    provider=provider
 )
 
-# Add tools to the session
+# Step 3: Register tool definitions separately
 session.add_tool(function_to_tool_definition(read_file))
 session.add_tool(function_to_tool_definition(execute_command))
 
-# Define available tool functions
-tool_functions = {
-    "read_file": read_file,
-    "execute_command": execute_command
-}
+# Step 4: Create custom implementations for specific use cases
+def secure_file_read(file_path: str) -> str:
+    """Enhanced implementation with security checks"""
+    import os
+    # Define allowed directories
+    allowed_dirs = [os.getcwd(), "/tmp"]
+    # Security: Normalize path and check if it's within allowed directories
+    abs_path = os.path.abspath(os.path.normpath(file_path))
+    if not any(abs_path.startswith(allowed_dir) for allowed_dir in allowed_dirs):
+        return f"Error: Access to {file_path} is restricted for security reasons"
+    # Proceed with reading if secure
+    try:
+        with open(abs_path, 'r') as f:
+            return f.read()
+    except Exception as e:
+        return f"Error reading file: {str(e)}"
 
-# Process a user query
-def process_query(query: str):
-    print(f"Processing: {query}")
-    
-    # Add user message to session for context
-    session.add_message("user", query)
-    
-    # Use generate_with_tools to handle the tool execution flow
-    response = session.generate_with_tools(
-        tool_functions=tool_functions
-    )
-    
-    # Return the final response
-    return response.content
+# Step 5: Generate with custom tool implementations
+response = session.generate_with_tools(
+    prompt="Read the file README.md and tell me how many lines it has",
+    tool_functions={
+        "read_file": secure_file_read,  # Use custom implementation
+        "execute_command": execute_command  # Use original implementation
+    }
+)
 
-# Example usage
-result = process_query("Read the file README.md and tell me how many lines it has")
-print(result)
+print(response.content)
 ```
+
+**When to use this approach**: When you need more control over tool execution, such as:
+- Enhanced security for file or command operations
+- Custom logging or monitoring during tool execution
+- Different implementations based on environment or context
+- Specialized error handling or input validation
+
+### Comparison: Simple vs. Customizable Approaches
+
+| Feature | Simple Approach | Customizable Approach |
+|---------|----------------|------------------------|
+| **Code complexity** | Minimal - 3 steps | More detailed - 5 steps |
+| **Tool registration** | Automatic when creating session | Manual with `add_tool()` |
+| **Tool implementation** | Fixed - uses original functions | Flexible - can provide custom implementations |
+| **Security controls** | Basic - relies on original functions | Enhanced - can add custom security checks |
+| **Maintenance** | Easier - fewer moving parts | More involved - separate definition and execution |
+| **Best for** | Quick prototyping, simple agents | Production systems, security-critical applications |
 
 For more advanced examples and best practices, see the [Tool Calls Guide](docs/toolcalls/index.md).
 
