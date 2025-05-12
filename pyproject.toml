@@ -8,11 +8,11 @@ version = "0.5.3"
 authors = [
     { name = "Laurent-Philippe Albou", email = "lpalbou@gmail.com" },
 ]
-description = "A Python library for abstracting LLM interactions"
+description = "A unified interface for large language models with support for OpenAI, Anthropic, Hugging Face, Ollama, and MLX"
 readme = "README.md"
 requires-python = ">=3.8"
 license = "MIT"
-keywords = ["llm", "ai", "abstraction"]
+keywords = ["llm", "ai", "abstraction", "openai", "gpt", "claude", "huggingface", "ollama", "mlx", "apple silicon"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -22,6 +22,9 @@ classifiers = [
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
 ]
 # Core dependencies that are always needed
 dependencies = [
@@ -47,6 +50,14 @@ ollama = [
     "requests>=2.25.0",  # For synchronous API calls
     "aiohttp>=3.8.0",    # For asynchronous API calls
 ]
+mlx = [
+    "mlx>=0.0.25",        # Core MLX framework
+    "mlx-lm>=0.0.7",      # Language model support
+    "huggingface_hub>=0.15.0",
+    "transformers>=4.30.0",  # For chat templating
+    "numpy>=1.24.0",         # Often needed by MLX
+    "humanize>=4.6.0"        # For human-readable sizes in caching utilities
+]
 tools = [
     "docstring-parser>=0.15",
     "pydantic>=2.0.0",
@@ -64,6 +75,7 @@ all = [
     "docstring-parser>=0.15",
     "pydantic>=2.0.0",
     "jsonschema>=4.0.0",
+    # MLX dependencies are not included in 'all' as they're platform-specific
 ]
 dev = [
     "pytest>=7.0.0",

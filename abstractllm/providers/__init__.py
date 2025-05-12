@@ -22,3 +22,9 @@ __all__ = [
 # "AnthropicProvider", 
 # "OllamaProvider",
 # "HuggingFaceProvider", 
+
+# Register MLX provider if available
+from abstractllm.providers.registry import register_mlx_provider
+
+# Try to register the MLX provider
+register_mlx_provider() 

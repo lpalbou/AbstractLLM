@@ -24,6 +24,53 @@ def register_provider(name: str, module_path: str, class_name: str) -> None:
     }
     logger.debug(f"Registered provider: {name}")
 
+def register_mlx_provider() -> bool:
+    """
+    Register the MLX provider if available.
+    
+    This function checks if the current platform is Apple Silicon and if
+    the required MLX dependencies are installed before registering the provider.
+    
+    Returns:
+        bool: True if the provider was registered, False otherwise
+    """
+    # Check platform first before importing anything
+    import platform
+    is_macos = platform.system().lower() == "darwin"
+    is_arm = platform.processor() == "arm"
+    
+    # Log availability status
+    if not is_macos or not is_arm:
+        logger.info(
+            "MLX provider not registered: requires macOS with Apple Silicon. "
+            f"Current platform: {platform.system()} {platform.processor()}"
+        )
+        return False
+    
+    # Import MLX dependencies
+    try:
+        import mlx.core
+        logger.debug("MLX package is available")
+    except ImportError as e:
+        logger.info(f"MLX provider not registered: mlx package not available - {e}")
+        return False
+        
+    try:
+        import mlx_lm
+        logger.debug("MLX-LM package is available")
+    except ImportError as e:
+        logger.info(f"MLX provider not registered: mlx-lm package not available - {e}")
+        return False
+    
+    # Register the provider
+    try:
+        register_provider("mlx", "abstractllm.providers.mlx_provider", "MLXProvider")
+        logger.info("MLX provider successfully registered for Apple Silicon")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to register MLX provider through registry system: {e}")
+        return False
+
 def get_provider_class(name: str) -> Optional[Type[Any]]:
     """
     Get the provider class, lazily importing it if necessary.

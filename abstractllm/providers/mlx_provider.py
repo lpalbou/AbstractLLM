@@ -64,7 +64,7 @@ class MLXProvider(AbstractLLMInterface):
         
         # Set default configuration
         default_config = {
-            ModelParameter.MODEL: "mlx-community/qwen2.5-coder-14b-instruct-abliterated",
+            ModelParameter.MODEL: "mlx-community/Josiefied-Qwen3-8B-abliterated-v1-4bit",
             ModelParameter.TEMPERATURE: 0.7,
             ModelParameter.MAX_TOKENS: 4096,
             ModelParameter.TOP_P: 0.9,
@@ -84,6 +84,80 @@ class MLXProvider(AbstractLLMInterface):
         # Log initialization
         model = self.config_manager.get_param(ModelParameter.MODEL)
         logger.info(f"Initialized MLX provider with model: {model}")
+        
+        # Check if the model name indicates vision capabilities
+        model_name = self.config_manager.get_param(ModelParameter.MODEL)
+        logger.debug(f"Checking if model name indicates vision capabilities: {model_name}")
+        if self._check_vision_capability(model_name):
+            logger.debug(f"Model name indicates vision capabilities: {model_name}")
+            self._is_vision_model = True
+        
+    @staticmethod
+    def list_cached_models(cache_dir: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        List all models cached by this implementation.
+        
+        Args:
+            cache_dir: Custom cache directory path (uses default if None)
+            
+        Returns:
+            List of cached model information
+        """
+        # For now, just leverage HF's cache scanning
+        try:
+            from huggingface_hub import scan_cache_dir
+            
+            # Use default HF cache if not specified
+            if cache_dir is None:
+                cache_dir = "~/.cache/huggingface/hub"
+                
+            if cache_dir and '~' in cache_dir:
+                cache_dir = os.path.expanduser(cache_dir)
+            
+            logger.info(f"Scanning cache directory: {cache_dir}")
+                
+            # Scan the cache
+            cache_info = scan_cache_dir(cache_dir)
+            
+            # Filter to only include MLX models
+            mlx_models = []
+            for repo in cache_info.repos:
+                # Look for MLX models by name or content
+                if "mlx" in repo.repo_id.lower():
+                    mlx_models.append({
+                        "name": repo.repo_id,
+                        "size": repo.size_on_disk,
+                        "last_used": repo.last_accessed,
+                        "implementation": "mlx"
+                    })
+            
+            logger.info(f"Found {len(mlx_models)} MLX models in cache")
+            return mlx_models
+        except ImportError:
+            logger.warning("huggingface_hub not available for cache scanning")
+            return []
+
+    @staticmethod
+    def clear_model_cache(model_name: Optional[str] = None) -> None:
+        """
+        Clear model cache for this implementation.
+        
+        Args:
+            model_name: Specific model to clear (or all if None)
+        """
+        # Clear the in-memory cache
+        if model_name:
+            # Remove specific model from cache
+            if model_name in MLXProvider._model_cache:
+                del MLXProvider._model_cache[model_name]
+                logger.info(f"Removed {model_name} from in-memory cache")
+            else:
+                logger.info(f"Model {model_name} not found in in-memory cache")
+        else:
+            # Clear all in-memory cache
+            model_count = len(MLXProvider._model_cache)
+            MLXProvider._model_cache.clear()
+            logger.info(f"Cleared {model_count} models from in-memory cache")
         
     def _check_apple_silicon(self) -> None:
         """Check if running on Apple Silicon."""
@@ -126,6 +200,7 @@ class MLXProvider(AbstractLLMInterface):
             
             # Check if this is a vision model
             self._is_vision_model = self._check_vision_capability(model_name)
+            logger.info(f"Successfully loaded model {model_name} from cache")
             return
         
         # If not in memory cache, load from disk/HF
@@ -133,18 +208,22 @@ class MLXProvider(AbstractLLMInterface):
         
         try:
             # Import MLX-LM utilities
-            from mlx_lm.utils import load
+            from mlx_lm import load
             
             # Check if this is a vision model
-            self._is_vision_model = self._check_vision_capability(model_name)
-            if self._is_vision_model:
+            if self._check_vision_capability(model_name):
+                self._is_vision_model = True
                 logger.info(f"Detected vision capabilities in model {model_name}")
             
             # Log loading parameters
             logger.debug(f"Loading MLX model: {model_name}")
             
-            # Load the model using MLX-LM (removed cache_dir parameter)
+            # Load the model using MLX-LM
+            start_time = time.time()
             self._model, self._tokenizer = load(model_name)
+            load_time = time.time() - start_time
+            logger.info(f"Model loaded in {load_time:.2f} seconds")
+            
             self._is_loaded = True
             
             # Add to in-memory cache
@@ -158,16 +237,21 @@ class MLXProvider(AbstractLLMInterface):
 
     def _update_model_cache(self, model_name: str) -> None:
         """Update the model cache with the current model."""
-        self._model_cache[model_name] = (self._model, self._tokenizer, time.time())
-        
-        # Prune cache if needed
-        if len(self._model_cache) > self._max_cached_models:
-            # Find oldest model by last access time
-            oldest_key = min(self._model_cache.keys(), 
-                            key=lambda k: self._model_cache[k][2])
-            logger.info(f"Removing {oldest_key} from model cache")
-            del self._model_cache[oldest_key]
+        # Only cache if we have a model and tokenizer
+        if self._model is not None and self._tokenizer is not None:
+            logger.debug(f"Adding model {model_name} to in-memory cache")
+            self._model_cache[model_name] = (self._model, self._tokenizer, time.time())
             
+            # Prune cache if needed
+            if len(self._model_cache) > self._max_cached_models:
+                # Find oldest model by last access time
+                oldest_key = min(self._model_cache.keys(), 
+                                key=lambda k: self._model_cache[k][2])
+                logger.info(f"Removing {oldest_key} from model cache")
+                del self._model_cache[oldest_key]
+        else:
+            logger.warning(f"Cannot cache model {model_name} - model or tokenizer is None")
+        
     def _check_vision_capability(self, model_name: str) -> bool:
         """
         Check if a model has vision capabilities based on its name.
@@ -181,13 +265,17 @@ class MLXProvider(AbstractLLMInterface):
         # List of keywords that indicate vision capabilities
         vision_keywords = ["llava", "clip", "vision", "blip", "image", "vit", "visual", "multimodal"]
         
+        # Log the model name being checked
+        logger.debug(f"Checking vision capability for model: {model_name}")
+        
         # Check if any vision keyword is in the model name (case insensitive)
         model_name_lower = model_name.lower()
         for keyword in vision_keywords:
             if keyword in model_name_lower:
                 logger.debug(f"Vision capability detected for model {model_name} (matched '{keyword}')")
                 return True
-            
+        
+        logger.debug(f"No vision capability detected for model {model_name}")
         return False
 
     def generate(self, 
@@ -213,18 +301,21 @@ class MLXProvider(AbstractLLMInterface):
                     {"role": "user", "content": prompt}
                 ]
                 try:
-                    # Try to use HF's template application
-                    from transformers import AutoTokenizer
-                    formatted_prompt = AutoTokenizer.apply_chat_template(
-                        messages, 
-                        chat_template=self._tokenizer.chat_template,
+                    # Use the tokenizer's apply_chat_template method directly
+                    logger.debug("Applying chat template for system prompt")
+                    formatted_prompt = self._tokenizer.apply_chat_template(
+                        messages,
+                        add_generation_prompt=True,
                         tokenize=False
                     )
+                    logger.debug(f"Applied chat template: {formatted_prompt[:100]}...")
                 except Exception as e:
                     logger.warning(f"Failed to apply chat template: {e}")
+                    # Fallback to simple concatenation
                     formatted_prompt = f"{system_prompt}\n\n{prompt}"
             else:
                 # Simple concatenation fallback
+                logger.debug("No chat template available, using simple concatenation")
                 formatted_prompt = f"{system_prompt}\n\n{prompt}"
         
         # Process files if provided
@@ -288,26 +379,27 @@ class MLXProvider(AbstractLLMInterface):
             raise RuntimeError(f"Failed to encode prompt: {str(e)}")
         
         # Import MLX-LM generation utilities
-        from mlx_lm.utils import generate
+        from mlx_lm import generate, stream_generate
+        from mlx_lm.sample_utils import make_sampler
+        
+        # Create a sampler with the specified parameters
+        sampler = make_sampler(
+            temp=temperature,
+            top_p=top_p
+        )
         
         # Handle streaming vs non-streaming
         if stream:
-            return self._generate_stream(
-                prompt_tokens, 
-                temperature, 
-                max_tokens, 
-                top_p
-            )
+            return self._generate_stream(prompt_tokens, sampler, max_tokens)
         else:
-            # Generate text (non-streaming)
             try:
+                # Generate text (non-streaming)
                 output = generate(
                     self._model,
                     self._tokenizer,
                     prompt=prompt_tokens,
-                    temp=temperature,
                     max_tokens=max_tokens,
-                    top_p=top_p
+                    sampler=sampler
                 )
                 
                 # Create response
@@ -317,11 +409,13 @@ class MLXProvider(AbstractLLMInterface):
                 log_response("mlx", output)
                 
                 return GenerateResponse(
-                    text=output,
+                    content=output,
                     model=self.config_manager.get_param(ModelParameter.MODEL),
-                    prompt_tokens=len(prompt_tokens),
-                    completion_tokens=completion_tokens,
-                    total_tokens=len(prompt_tokens) + completion_tokens
+                    usage={
+                        "prompt_tokens": len(prompt_tokens),
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": len(prompt_tokens) + completion_tokens
+                    }
                 )
             except Exception as e:
                 logger.error(f"Error generating text: {e}")
@@ -329,59 +423,44 @@ class MLXProvider(AbstractLLMInterface):
     
     def _generate_stream(self, 
                        prompt_tokens, 
-                       temperature: float, 
-                       max_tokens: int, 
-                       top_p: float) -> Generator[GenerateResponse, None, None]:
+                       sampler, 
+                       max_tokens: int) -> Generator[GenerateResponse, None, None]:
         """Generate a streaming response."""
         import mlx.core as mx
-        from mlx_lm.utils import generate_step
+        from mlx_lm import stream_generate
         
-        # Convert to MLX array if not already
-        if not isinstance(prompt_tokens, mx.array):
-            prompt_tokens = mx.array(prompt_tokens)
-        
-        # Initial state
-        tokens = prompt_tokens
-        finish_reason = None
-        current_text = ""
-        
-        # Generate tokens one by one
-        for _ in range(max_tokens):
-            next_token, _ = generate_step(
-                self._model,
-                tokens,
-                temperature=temperature,
-                top_p=top_p
-            )
+        # Use the stream_generate function from mlx_lm
+        for output in stream_generate(
+            self._model,
+            self._tokenizer,
+            prompt=prompt_tokens,
+            max_tokens=max_tokens,
+            sampler=sampler
+        ):
+            # Extract the text from the output if it's not a string
+            text = output.text if hasattr(output, 'text') else output
             
-            # Add token to sequence
-            tokens = mx.concatenate([tokens, next_token[None]])
-            
-            # Convert to text
-            current_text = self._tokenizer.decode(tokens.tolist()[len(prompt_tokens):])
-            
-            # Check for EOS token
-            if hasattr(self._tokenizer, "eos_token") and self._tokenizer.eos_token in current_text:
-                current_text = current_text.replace(self._tokenizer.eos_token, "")
-                finish_reason = "stop"
+            # Skip empty chunks
+            if not text or len(text.strip()) == 0:
+                continue
+                
+            # Estimate token counts - don't try to encode with tokenizer as it may fail
+            # with the GenerationResponse object
+            completion_tokens = len(text.split())
             
             # Create response chunk
             yield GenerateResponse(
-                text=current_text,
+                content=text,
                 model=self.config_manager.get_param(ModelParameter.MODEL),
-                prompt_tokens=len(prompt_tokens),
-                completion_tokens=len(tokens) - len(prompt_tokens),
-                total_tokens=len(tokens),
-                finish_reason=finish_reason
+                usage={
+                    "prompt_tokens": len(prompt_tokens),
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": len(prompt_tokens) + completion_tokens
+                }
             )
-            
-            # Stop if we reached the end
-            if finish_reason:
-                break
         
         # Log the final response for streaming generation
-        logger.debug(f"Streaming generation completed: {len(tokens) - len(prompt_tokens)} tokens generated")
-        log_response("mlx", current_text)
+        logger.debug(f"Streaming generation completed")
                 
     def _process_files(self, prompt: str, files: List[Union[str, Path]]) -> str:
         """Process input files and append to prompt as needed."""
@@ -403,20 +482,43 @@ class MLXProvider(AbstractLLMInterface):
         for file_path in file_paths:
             try:
                 logger.debug(f"Processing file: {file_path}")
-                media_input = MediaFactory.from_source(file_path)
                 
-                if media_input.media_type == "image":
-                    logger.debug(f"Detected image file: {file_path}")
-                    has_images = True
-                    # Actual image processing will be implemented in a future task
-                    # Simply flagging for now to check model compatibility
-                elif media_input.media_type == "text":
-                    logger.debug(f"Processing text file: {file_path}")
-                    # Append text content to prompt with clear formatting
-                    processed_prompt += f"\n\n### Content from file '{file_path.name}':\n{media_input.content}\n###\n"
-                    logger.debug(f"Added {len(media_input.content)} chars of text content from {file_path.name}")
-                else:
-                    logger.warning(f"Unsupported media type: {media_input.media_type} for file {file_path}")
+                # Handle common text file extensions directly
+                text_extensions = ['.txt', '.md', '.py', '.js', '.ts', '.html', '.css', '.json', '.yaml', '.yml', '.csv', '.ini', '.cfg', '.conf', '.sh', '.bash']
+                if file_path.suffix.lower() in text_extensions:
+                    # Read the file content directly
+                    text_content = file_path.read_text(errors='replace')
+                    processed_prompt += f"\n\n### Content from file '{file_path.name}':\n{text_content}\n###\n"
+                    logger.debug(f"Added {len(text_content)} chars of text content from {file_path.name}")
+                    continue
+                
+                # For other files, try to use MediaFactory
+                try:
+                    media_input = MediaFactory.from_source(file_path)
+                    
+                    if media_input.media_type == "image":
+                        logger.debug(f"Detected image file: {file_path}")
+                        has_images = True
+                        # Actual image processing will be implemented in a future task
+                        # Simply flagging for now to check model compatibility
+                    elif media_input.media_type == "text":
+                        logger.debug(f"Processing text file: {file_path}")
+                        # Append text content to prompt with clear formatting
+                        text_content = media_input.get_content()
+                        processed_prompt += f"\n\n### Content from file '{file_path.name}':\n{text_content}\n###\n"
+                        logger.debug(f"Added {len(text_content)} chars of text content from {file_path.name}")
+                    else:
+                        logger.warning(f"Unsupported media type: {media_input.media_type} for file {file_path}")
+                except Exception as e:
+                    logger.warning(f"MediaFactory failed to process file {file_path}: {e}")
+                    # Try to read as text as a fallback
+                    try:
+                        text_content = file_path.read_text(errors='replace')
+                        processed_prompt += f"\n\n### Content from file '{file_path.name}':\n{text_content}\n###\n"
+                        logger.debug(f"Added {len(text_content)} chars of text content from {file_path.name} (fallback)")
+                    except Exception as read_error:
+                        logger.error(f"Failed to read file as text: {read_error}")
+                        raise FileProcessingError(f"Failed to process file {file_path}: {str(read_error)}", provider="mlx", file_path=str(file_path))
             except Exception as e:
                 logger.error(f"Error processing file {file_path}: {e}")
                 raise FileProcessingError(f"Failed to process file {file_path}: {str(e)}", provider="mlx", file_path=str(file_path))
@@ -499,4 +601,5 @@ class MLXProvider(AbstractLLMInterface):
 
     def _is_vision_capable(self) -> bool:
         """Check if the current model supports vision capabilities."""
+        logger.debug(f"Checking if model is vision capable, _is_vision_model = {self._is_vision_model}")
         return self._is_vision_model 

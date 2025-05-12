@@ -24,7 +24,7 @@ Version: 0.5.3
 
 ## Features
 
-- 🔄 **Unified API**: Consistent interface for OpenAI, Anthropic, Ollama, and Hugging Face models
+- 🔄 **Unified API**: Consistent interface for OpenAI, Anthropic, Ollama, Hugging Face, and MLX models
 - 🔌 **Provider Agnostic**: Switch between providers with minimal code changes
 - 🎛️ **Configurable**: Flexible configuration at initialization or per-request
 - 📝 **System Prompts**: Standardized handling of system prompts across providers
@@ -36,6 +36,7 @@ Version: 0.5.3
 - 💬 **Session Management**: Maintain conversation context when switching between providers
 - 🛠️ **Tool Calling**: Unified interface for function/tool calling capabilities across providers
 - 🛑 **Unified Error Handling**: Consistent error handling across all providers
+- 🍎 **Apple Silicon Optimization**: Support for MLX models on Apple Silicon devices
 
 ## Documentation
 
@@ -130,12 +131,13 @@ pip install "abstractllm[openai]"       # OpenAI API
 pip install "abstractllm[anthropic]"    # Anthropic/Claude API
 pip install "abstractllm[huggingface]"  # HuggingFace models (includes torch)
 pip install "abstractllm[ollama]"       # Ollama API
+pip install "abstractllm[mlx]"          # MLX support for Apple Silicon
 pip install "abstractllm[tools]"        # Tool calling functionality
 
 # Multiple providers
 pip install "abstractllm[openai,anthropic]"
 
-# All dependencies
+# All dependencies (excluding MLX which is platform-specific)
 pip install "abstractllm[all]"
 ```
 
@@ -147,9 +149,18 @@ Each provider requires specific dependencies to function:
 - **Anthropic**: Requires the `anthropic` package
 - **HuggingFace**: Requires `torch`, `transformers`, and `huggingface-hub` 
 - **Ollama**: Requires `requests` for sync and `aiohttp` for async operations
+- **MLX**: Requires `mlx` and `mlx-lm` (Apple Silicon only)
 - **Tool Calling**: Requires `docstring-parser`, `jsonschema`, and `pydantic`
 
 If you try to use a provider without its dependencies, you'll get a clear error message telling you which package to install.
+
+### Platform-Specific Support
+
+- **MLX Provider**: Only available on macOS with Apple Silicon (M1/M2/M3 chips)
+  ```bash
+  # Install MLX support on Apple Silicon
+  pip install "abstractllm[mlx]"
+  ```
 
 ### Recommended Installation
 
@@ -161,6 +172,9 @@ pip install "abstractllm[openai]"
 
 # For OpenAI and tool calling support
 pip install "abstractllm[openai,tools]"
+
+# For Apple Silicon users wanting local inference
+pip install "abstractllm[mlx]"
 
 # For all providers and tools (most comprehensive)
 pip install "abstractllm[all]"

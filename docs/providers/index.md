@@ -12,6 +12,7 @@ AbstractLLM currently supports these providers:
 | Anthropic | Cloud-based API for Claude models | Long contexts, multimodal, tool use | `pip install abstractllm[anthropic]` |
 | Ollama | Local API for open-source models | Self-hosted, privacy-focused, custom models | `pip install abstractllm[ollama]` |
 | HuggingFace | Local and cloud API for various models | Wide model selection, local deployment | `pip install abstractllm[huggingface]` |
+| MLX | Local inference optimized for Apple Silicon | Hardware acceleration, local privacy, no API keys | `pip install abstractllm[mlx]` |
 
 ## Provider Selection
 
@@ -21,6 +22,7 @@ Choosing the right provider depends on your specific requirements:
 - **Anthropic**: Excellent for complex reasoning tasks and long documents
 - **Ollama**: Ideal for privacy-focused applications or air-gapped environments
 - **HuggingFace**: Best for customization and flexibility with model selection
+- **MLX**: Optimal for Apple Silicon users wanting efficient local inference
 
 For more information about switching between providers, see the [Interchangeability Guide](../user-guide/interchangeability.md).
 
@@ -68,19 +70,31 @@ Key capabilities:
 - Integration with HuggingFace Hub
 - Custom model fine-tuning
 
+### [MLX Provider](mlx.md)
+
+The MLX provider leverages Apple's MLX framework for efficient inference on Apple Silicon devices. This provider offers optimized performance for Mac users with M1/M2/M3 chips.
+
+Key capabilities:
+- Hardware acceleration on Apple Silicon
+- Local inference with no data sharing
+- Integration with Hugging Face models optimized for MLX
+- No API keys required
+- In-memory model caching for fast switching
+
 ## Provider Capabilities Matrix
 
 The following table shows the capabilities supported by each provider:
 
-| Capability | OpenAI | Anthropic | Ollama | HuggingFace |
-|------------|--------|-----------|--------|------------|
-| Text Generation | ✅ | ✅ | ✅ | ✅ |
-| Streaming | ✅ | ✅ | ✅ | ✅ |
-| System Prompts | ✅ | ✅ | ✅ | ✅ |
-| Async | ✅ | ✅ | ✅ | ✅ |
-| Tool/Function Calling | ✅ | ✅ | ⚠️ Model-dependent | ❌ |
-| Vision | ✅ | ✅ | ⚠️ Model-dependent | ⚠️ Model-dependent |
-| JSON Mode | ✅ | ✅ | ❌ | ❌ |
+| Capability | OpenAI | Anthropic | Ollama | HuggingFace | MLX |
+|------------|--------|-----------|--------|------------|-----|
+| Text Generation | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Streaming | ✅ | ✅ | ✅ | ✅ | ✅ |
+| System Prompts | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Async | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Tool/Function Calling | ✅ | ✅ | ⚠️ Model-dependent | ❌ | ❌ |
+| Vision | ✅ | ✅ | ⚠️ Model-dependent | ⚠️ Model-dependent | ⚠️ Model-dependent |
+| JSON Mode | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Platform | All | All | All | All | macOS/Apple Silicon only |
 
 ## API Keys and Authentication
 
@@ -119,6 +133,12 @@ Each provider requires different authentication:
   llm = create_llm("huggingface", api_key="your-api-key")
   ```
 
+- **MLX**: No API key required (runs locally)
+  ```python
+  # Create MLX provider with a specific model
+  llm = create_llm("mlx", model="mlx-community/Nous-Hermes-2-Mistral-7B-DPO-4bit-MLX")
+  ```
+
 ## Common Configuration Parameters
 
 All providers support these common parameters:
@@ -143,6 +163,7 @@ When selecting a provider, consider the cost implications:
 - **Anthropic**: Pay-per-token pricing with input/output token differentiation
 - **Ollama**: Free (computation happens on your hardware)
 - **HuggingFace**: Free for local models, pay-per-call for Inference API
+- **MLX**: Free (computation happens on your Apple Silicon hardware)
 
 ## Availability and Reliability
 
@@ -151,6 +172,7 @@ Each provider has different availability characteristics:
 - **OpenAI & Anthropic**: Cloud-based with high reliability but subject to rate limits and potential service disruptions
 - **Ollama & HuggingFace (local)**: Fully controlled by you, not subject to external availability issues
 - **HuggingFace Inference API**: Cloud-based with varying availability based on service tier
+- **MLX**: Fully controlled by you, only available on Apple Silicon devices
 
 For mission-critical applications, consider implementing provider fallbacks as described in the [Interchangeability Guide](../user-guide/interchangeability.md).
 
