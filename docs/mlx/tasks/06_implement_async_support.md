@@ -3,6 +3,10 @@
 ## Description
 Implement asynchronous generation support for the MLX provider using Python's asyncio.
 
+## Status
+**Implemented:** Yes
+**Completion Date:** [Current Date]
+
 ## Requirements
 1. Implement the `generate_async()` method required by AbstractLLMInterface
 2. Support both streaming and non-streaming modes in async context
