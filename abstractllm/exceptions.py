@@ -149,8 +149,28 @@ class ModelLoadingError(AbstractLLMError):
     
     This is primarily used with local models like HuggingFace and Ollama
     when there are issues loading the model files.
+    
+    Args:
+        message: Description of the error
+        provider: The provider name that raised the error
+        model_name: Name of the model that failed to load
+        original_exception: The original exception that was caught
+        details: Additional details about the error
     """
-    pass
+    
+    def __init__(self, message: str, provider: Optional[str] = None,
+                 model_name: Optional[str] = None,
+                 original_exception: Optional[Exception] = None,
+                 details: Optional[Dict[str, Any]] = None):
+        self.model_name = model_name
+        
+        # Add model name to details if provided
+        if model_name and details is None:
+            details = {"model_name": model_name}
+        elif model_name:
+            details["model_name"] = model_name
+            
+        super().__init__(message, provider, original_exception, details)
 
 
 class ProviderConnectionError(AbstractLLMError):

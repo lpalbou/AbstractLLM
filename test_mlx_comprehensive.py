@@ -29,7 +29,7 @@ pytestmark = pytest.mark.skipif(
 
 # Use the specified model for all tests
 TEXT_MODEL = "mlx-community/Josiefied-Qwen3-8B-abliterated-v1-4bit"
-VISION_MODEL = "mlx-community/gemma-3-27b-it-qat-3bit"
+VISION_MODEL = "mlx-community/Qwen2.5-VL-7B-Instruct-4bit"
 
 class TestMLXProviderComprehensive:
     """Comprehensive tests for MLX provider functionality."""
@@ -331,7 +331,6 @@ class TestMLXProviderComprehensive:
         
         print(f"\nReported capabilities: {capabilities}")
         
-    @pytest.mark.skip(reason="Vision testing requires additional setup")
     def test_vision_capabilities(self, vision_llm, test_files):
         """Test vision capabilities with an image."""
         # Skip if PIL is not available

@@ -62,10 +62,25 @@ def register_mlx_provider() -> bool:
         logger.info(f"MLX provider not registered: mlx-lm package not available - {e}")
         return False
     
+    # Check for vision capabilities
+    try:
+        import mlx_vlm
+        logger.debug("MLX-VLM package is available for vision model support")
+        has_vision = True
+    except ImportError as e:
+        logger.info(f"MLX-VLM package not available (vision models will not work): {e}")
+        has_vision = False
+    
     # Register the provider
     try:
         register_provider("mlx", "abstractllm.providers.mlx_provider", "MLXProvider")
         logger.info("MLX provider successfully registered for Apple Silicon")
+        
+        # Register model factory module as well to ensure it's loaded
+        # This is not strictly necessary but makes the dependency clear
+        importlib.import_module("abstractllm.providers.mlx_model_factory")
+        if has_vision:
+            logger.info("MLX Vision support is available")
         return True
     except Exception as e:
         logger.error(f"Failed to register MLX provider through registry system: {e}")

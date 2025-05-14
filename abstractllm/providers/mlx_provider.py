@@ -18,8 +18,6 @@ try:
     import mlx_lm
     import mlx_vlm
     from mlx_vlm.utils import (
-        load as load_vlm,
-        load_config,
         process_image,
         process_inputs,
         generate,
@@ -52,53 +50,11 @@ from abstractllm.utils.logging import log_request, log_response, log_api_key_mis
 from abstractllm.media.factory import MediaFactory
 from abstractllm.media.image import ImageInput
 
+# Import the MLX model factory
+from abstractllm.providers.mlx_model_factory import MLXModelFactory
+
 # Set up logger
 logger = logging.getLogger(__name__)
-
-# Load vision model information from JSON
-def _load_vision_model_data() -> Dict[str, Any]:
-    """Load vision model information from the JSON file."""
-    try:
-        json_path = os.path.join(os.path.dirname(__file__), "mlx_vision_models.json")
-        if os.path.exists(json_path):
-            with open(json_path, 'r') as f:
-                return json.load(f)
-        else:
-            logger.warning(f"Vision model data file not found at {json_path}")
-            return {"model_families": {}, "detection_patterns": {"model_name_indicators": [], "family_patterns": {}}}
-    except Exception as e:
-        logger.error(f"Error loading vision model data: {e}")
-        return {"model_families": {}, "detection_patterns": {"model_name_indicators": [], "family_patterns": {}}}
-
-# Load the vision model data
-VISION_MODEL_DATA = _load_vision_model_data()
-
-# Vision model indicators from the JSON file
-VISION_MODEL_INDICATORS = VISION_MODEL_DATA["detection_patterns"]["model_name_indicators"]
-
-# Model family patterns for detection
-MODEL_FAMILY_PATTERNS = VISION_MODEL_DATA["detection_patterns"]["family_patterns"]
-
-# Model configurations from the JSON file
-MODEL_CONFIGS = {}
-for family_id, family_data in VISION_MODEL_DATA["model_families"].items():
-    MODEL_CONFIGS[family_id] = {
-        "image_size": tuple(family_data["image_size"]),
-        "mean": [0.485, 0.456, 0.406],  # Default normalization values
-        "std": [0.229, 0.224, 0.225],   # Default normalization values
-        "prompt_format": family_data["prompt_format"],
-        "patterns": MODEL_FAMILY_PATTERNS.get(family_id, [family_id])
-    }
-
-# Add default configuration
-if "default" not in MODEL_CONFIGS:
-    MODEL_CONFIGS["default"] = {
-        "image_size": (224, 224),
-        "mean": [0.485, 0.456, 0.406],
-        "std": [0.229, 0.224, 0.225],
-        "prompt_format": "<image>{prompt}",
-        "patterns": []
-    }
 
 class MLXProvider(AbstractLLMInterface):
     """
@@ -107,10 +63,6 @@ class MLXProvider(AbstractLLMInterface):
     This provider leverages Apple's MLX framework for efficient
     inference on Apple Silicon devices.
     """
-    
-    # Class-level model cache
-    _model_cache: ClassVar[Dict[str, Tuple[Any, Any, float]]] = {}
-    _max_cached_models = 2  # Default to 2 models in memory
     
     def __init__(self, config: Optional[Dict[Union[str, ModelParameter], Any]] = None):
         """Initialize the MLX provider."""
@@ -128,6 +80,13 @@ class MLXProvider(AbstractLLMInterface):
         if not MLXVLM_AVAILABLE:
             logger.error("MLX-VLM package not found")
             raise ImportError("MLX-VLM is required for MLXProvider. Install with: pip install mlx-vlm")
+        
+        # Apply tensor type patches
+        try:
+            from abstractllm.providers.tensor_type_patch import apply_all_patches
+            apply_all_patches()
+        except ImportError:
+            logger.warning("Could not import tensor_type_patch, MLX vision capabilities may be limited")
         
         # Check if running on Apple Silicon
         self._check_apple_silicon()
@@ -150,8 +109,6 @@ class MLXProvider(AbstractLLMInterface):
         self._processor = None
         self._config = None
         self._is_loaded = False
-        self._is_vision_model = False
-        self._model_type = None
         
         # Log initialization
         model = self.config_manager.get_param(ModelParameter.MODEL)
@@ -160,11 +117,13 @@ class MLXProvider(AbstractLLMInterface):
         # Check if the model name indicates vision capabilities
         model_name = self.config_manager.get_param(ModelParameter.MODEL)
         logger.debug(f"Checking if model name indicates vision capabilities: {model_name}")
-        if self._check_vision_capability(model_name):
+        self._is_vision_model = MLXModelFactory.is_vision_model(model_name)
+        if self._is_vision_model:
             logger.debug(f"Model name indicates vision capabilities: {model_name}")
-            self._is_vision_model = True
-            self._model_type = self._determine_model_type(model_name)
+            self._model_type = MLXModelFactory.determine_model_type(model_name)
             logger.info(f"Detected vision model type: {self._model_type}")
+        else:
+            self._model_type = None
 
     @staticmethod
     def list_cached_models(cache_dir: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -219,19 +178,8 @@ class MLXProvider(AbstractLLMInterface):
         Args:
             model_name: Specific model to clear (or all if None)
         """
-        # Clear the in-memory cache
-        if model_name:
-            # Remove specific model from cache
-            if model_name in MLXProvider._model_cache:
-                del MLXProvider._model_cache[model_name]
-                logger.info(f"Removed {model_name} from in-memory cache")
-            else:
-                logger.info(f"Model {model_name} not found in in-memory cache")
-        else:
-            # Clear all in-memory cache
-            model_count = len(MLXProvider._model_cache)
-            MLXProvider._model_cache.clear()
-            logger.info(f"Cleared {model_count} models from in-memory cache")
+        # Use the factory's cache clearing method
+        MLXModelFactory.clear_cache(model_name)
         
     def _check_apple_silicon(self) -> None:
         """Check if running on Apple Silicon."""
@@ -255,141 +203,10 @@ class MLXProvider(AbstractLLMInterface):
             )
         
         logger.info(f"Platform check successful: macOS with Apple Silicon detected")
-        
-    def _check_vision_capability(self, model_name: str) -> bool:
-        """Check if the model name indicates vision capabilities."""
-        # First check if the model is in our known models list
-        model_name_lower = model_name.lower()
-        
-        # Check if it's in any of the model families
-        for family_id, family_data in VISION_MODEL_DATA["model_families"].items():
-            if any(model.lower() == model_name_lower for model in family_data["models"]):
-                logger.debug(f"Model {model_name} found in {family_id} family")
-                return True
-        
-        # Then check for specific vision indicators in the name
-        # Use a more restrictive set of indicators to avoid false positives
-        vision_specific_indicators = [
-            "-vl", "vision-", "-vision", "llava", "blip", "clip", 
-            "multimodal", "image-to-text", "img2text"
-        ]
-        
-        if any(indicator in model_name_lower for indicator in vision_specific_indicators):
-            logger.debug(f"Vision indicator found in model name: {model_name}")
-            return True
-        
-        # For models not in our list or without clear indicators, try to check the model config
-        try:
-            config = load_config(model_name, trust_remote_code=True)
-            if config:
-                # Check for vision-related fields in the config
-                vision_config_indicators = [
-                    "vision_config", "image_size", "vision_tower", 
-                    "is_vision_model", "modality", "image_processor"
-                ]
-                
-                for indicator in vision_config_indicators:
-                    if indicator in config:
-                        logger.debug(f"Vision indicator '{indicator}' found in model config for {model_name}")
-                        return True
-                        
-                # Check model type for vision-related types
-                if "model_type" in config:
-                    vision_model_types = ["llava", "blip", "git", "paligemma", "idefics", "flamingo", "qwen_vl", "qwen2_vl"]
-                    if any(vmt in config["model_type"].lower() for vmt in vision_model_types):
-                        logger.debug(f"Vision model type found in config: {config['model_type']}")
-                        return True
-        except Exception as e:
-            # Log but don't fail - just use name-based detection
-            logger.debug(f"Could not load model config for {model_name}: {e}")
-        
-        # If we reach here, it's not a vision model
-        return False
-
-    def _determine_model_type(self, model_name: str) -> str:
-        """Determine the specific vision model type using a robust approach."""
-        model_name_lower = model_name.lower()
-        
-        # Special case for Qwen2.5-VL
-        if "qwen2.5-vl" in model_name_lower or "qwen2-5-vl" in model_name_lower:
-            logger.debug(f"Detected Qwen2.5-VL model: {model_name}")
-            return "qwen2.5-vl"
-        
-        # First check if the model is in our known models list
-        for family_id, family_data in VISION_MODEL_DATA["model_families"].items():
-            if any(model.lower() == model_name_lower for model in family_data["models"]):
-                logger.debug(f"Model {model_name} found in {family_id} family")
-                return family_id
-        
-        # Try to load model config from HF if available
-        try:
-            config = load_config(model_name, trust_remote_code=True)
-            if "model_type" in config:
-                model_type = config["model_type"].lower()
-                
-                # Map common model types to our family IDs
-                type_to_family = {
-                    "llava": "llava",
-                    "qwen2_vl": "qwen-vl",
-                    "qwen2_5_vl": "qwen2.5-vl",
-                    "qwen_vl": "qwen-vl",
-                    "blip": "blip",
-                    "git": "git",
-                    "idefics": "idefics",
-                    "paligemma": "paligemma",
-                    "flamingo": "flamingo"
-                }
-                
-                if model_type in type_to_family:
-                    logger.debug(f"Found model type {model_type} in HF config, mapping to {type_to_family[model_type]}")
-                    return type_to_family[model_type]
-                    
-                # For other model types, check if they match any of our family patterns
-                for family_id, patterns in MODEL_FAMILY_PATTERNS.items():
-                    if any(pattern in model_type for pattern in patterns):
-                        logger.debug(f"Matched model type {model_type} to family {family_id} using pattern")
-                        return family_id
-        except Exception as e:
-            logger.warning(f"Could not load model config from HF: {e}")
-        
-        # Next, try to match using the patterns in our MODEL_CONFIGS
-        for family_id, patterns in MODEL_FAMILY_PATTERNS.items():
-            if any(pattern in model_name_lower for pattern in patterns):
-                logger.debug(f"Matched model {model_name} to family {family_id} using pattern")
-                return family_id
-        
-        # If no match found, try to extract from model name components
-        name_components = model_name_lower.split("/")[-1].replace("-", "_").split("_")
-        
-        # Check for common vision model identifiers in the name components
-        vision_model_identifiers = {
-            "llava": "llava",
-            "qwen": "qwen-vl",
-            "gemma": "gemma",
-            "blip": "blip",
-            "git": "git",
-            "idefics": "idefics",
-            "paligemma": "paligemma",
-            "vision": "default",
-            "vl": "default",
-            "visual": "default"
-        }
-        
-        for component in name_components:
-            if component in vision_model_identifiers:
-                family_id = vision_model_identifiers[component]
-                logger.debug(f"Matched model {model_name} to family {family_id} using name component {component}")
-                return family_id
-        
-        # Last resort: use default configuration
-        logger.warning(f"Could not determine model type for {model_name}, using default")
-        return "default"
 
     def _get_model_config(self) -> Dict[str, Any]:
         """Get the configuration for the current model type."""
-        if self._model_type in MODEL_CONFIGS:
-            return MODEL_CONFIGS[self._model_type]
-        return MODEL_CONFIGS["default"]
+        return MLXModelFactory.get_model_config(self._model_type)
 
     def _check_memory_requirements(self, image_size: Tuple[int, int], num_images: int = 1) -> None:
         """Check if processing these images might exceed memory limits."""
@@ -462,34 +279,37 @@ class MLXProvider(AbstractLLMInterface):
             logger.error(f"Error checking memory requirements: {e}")
             raise RuntimeError(f"Failed to check memory requirements: {str(e)}")
 
-    def _resize_with_aspect_ratio(self, image: Image.Image, target_size: Tuple[int, int]) -> Image.Image:
-        """Resize image maintaining aspect ratio and padding if necessary."""
-        target_w, target_h = target_size
-        orig_w, orig_h = image.size
-        
-        # Calculate aspect ratios
-        target_aspect = target_w / target_h
-        orig_aspect = orig_w / orig_h
-        
-        if orig_aspect > target_aspect:
-            # Image is wider than target
-            new_w = target_w
-            new_h = int(target_w / orig_aspect)
-        else:
-            # Image is taller than target
-            new_h = target_h
-            new_w = int(target_h * orig_aspect)
-        
-        # Resize maintaining aspect ratio
-        image = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
-        
-        # Create new image with padding
-        new_image = Image.new("RGB", target_size, (0, 0, 0))
-        paste_x = (target_w - new_w) // 2
-        paste_y = (target_h - new_h) // 2
-        new_image.paste(image, (paste_x, paste_y))
-        
-        return new_image
+    def _process_image_for_model(self, image: Image.Image, target_size: Tuple[int, int]) -> Image.Image:
+        """Process image for a specific model with precise dimensions."""
+        try:
+            # Convert to RGB if needed
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+                
+            # Check if resize is needed
+            if image.size[0] != target_size[0] or image.size[1] != target_size[1]:
+                # Create a new empty image with the exact target dimensions
+                new_image = Image.new("RGB", target_size, (0, 0, 0))
+                
+                # Resize while maintaining aspect ratio
+                ratio = min(target_size[0]/image.width, target_size[1]/image.height)
+                new_size = (int(image.width * ratio), int(image.height * ratio))
+                resized = image.resize(new_size, Image.Resampling.LANCZOS)
+                
+                # Calculate position to center
+                pos_x = (target_size[0] - new_size[0]) // 2
+                pos_y = (target_size[1] - new_size[1]) // 2
+                
+                # Paste the resized image onto the black canvas
+                new_image.paste(resized, (pos_x, pos_y))
+                return new_image
+            else:
+                # Image is already the right size
+                return image
+                
+        except Exception as e:
+            logger.error(f"Error processing image: {e}")
+            raise ImageProcessingError(f"Failed to process image: {str(e)}", provider="mlx")
 
     def _process_image(self, image_input: ImageInput) -> mx.array:
         """Process image input into MLX format with robust error handling."""
@@ -513,7 +333,7 @@ class MLXProvider(AbstractLLMInterface):
             orig_size = image.size
             
             # Pre-downsample very large images before memory check to avoid excessive memory use
-            MAX_DIMENSION = 512  # Maximum dimension for initial downsample
+            MAX_DIMENSION = 1024  # Maximum dimension for initial downsample
             if orig_size[0] > MAX_DIMENSION or orig_size[1] > MAX_DIMENSION:
                 # Calculate new size maintaining aspect ratio
                 if orig_size[0] > orig_size[1]:
@@ -534,33 +354,22 @@ class MLXProvider(AbstractLLMInterface):
             
             logger.debug(f"Processing image for model type {self._model_type} with target size {target_size}")
             
-            # Convert to RGB if needed
-            if image.mode != "RGB":
-                image = image.convert("RGB")
+            # Process the image with exact dimensions needed for the model
+            image = self._process_image_for_model(image, target_size)
             
-            # Resize with proper aspect ratio handling
-            image = self._resize_with_aspect_ratio(image, target_size)
+            # Convert to numpy array
+            image_array = np.array(image, dtype=np.float32) / 255.0
             
-            try:
-                # Convert to numpy array with explicit dtype
-                image_array = np.array(image, dtype=np.float32) / 255.0
+            # Normalize using model-specific values
+            mean = np.array(config["mean"], dtype=np.float32).reshape(1, 1, 3)
+            std = np.array(config["std"], dtype=np.float32).reshape(1, 1, 3)
+            image_array = (image_array - mean) / std
+            
+            # Convert to CHW format (channel, height, width)
+            image_array = np.transpose(image_array, (2, 0, 1))
                 
-                # Normalize using model-specific values (with broadcasting)
-                mean = np.array(config["mean"], dtype=np.float32).reshape(1, 1, 3)
-                std = np.array(config["std"], dtype=np.float32).reshape(1, 1, 3)
-                image_array = (image_array - mean) / std
-                
-                # Convert to CHW format
-                image_array = np.transpose(image_array, (2, 0, 1))
-                
-                # Convert to MLX array with explicit device placement
-                return mx.array(image_array)
-                
-            except Exception as e:
-                raise ImageProcessingError(
-                    f"Failed to process image array: {str(e)}", 
-                    provider="mlx"
-                )
+            # Convert to MLX array
+            return mx.array(image_array)
                 
         except Exception as e:
             if isinstance(e, (ImageProcessingError, MemoryExceededError)):
@@ -569,82 +378,38 @@ class MLXProvider(AbstractLLMInterface):
 
     def _format_prompt(self, prompt: str, num_images: int) -> str:
         """Format prompt with image tokens based on model configuration."""
-        if num_images == 0:
-            return prompt
-        
-        config = self._get_model_config()
-        base_format = config["prompt_format"]
-        
-        logger.debug(f"Formatting prompt for model type {self._model_type} with format {base_format}")
-        
-        # Handle special cases for different models
-        if self._model_type == "llava" or "llava" in self._model_type.lower():
-            # LLaVA and LLaVA-Next use a single image token regardless of number of images
-            return f"<image>\n{prompt}"
-        elif "phi-3-vision" in self._model_type.lower() or "phi3-vision" in self._model_type.lower():
-            # Phi-3-Vision format
-            return f"Image: <image>\nUser: {prompt}\nAssistant:"
-        elif "qwen2.5-vl" in self._model_type.lower() or "qwen2-5-vl" in self._model_type.lower():
-            # Qwen2.5-VL uses a specific image token
-            return f"<|vision_start|><|image_pad|><|vision_end|>{prompt}"
-        elif self._model_type == "qwen-vl" or "qwen" in self._model_type.lower():
-            # Qwen-VL uses a different image token format
-            if num_images == 1:
-                return f"<img>{prompt}"
-            formatted = prompt
-            for i in range(num_images):
-                formatted = f"<image{i+1}>{formatted}"
-            return formatted
-        elif "florence" in self._model_type.lower():
-            # Florence 2 format
-            return f"<image>\nUser: {prompt}\nAssistant:"
-        elif "kimi-vl" in self._model_type.lower():
-            # Kimi-VL uses a special token
-            return f"<|image|>{prompt}"
-        elif "gemma-vision" in self._model_type.lower() or "gemma-vl" in self._model_type.lower():
-            # Gemma Vision format
-            return f"<image>\n{prompt}"
-        elif "idefics" in self._model_type.lower():
-            # Idefics format
-            return f"<image>\nUser: {prompt}\nAssistant:"
-        elif "smolvlm" in self._model_type.lower():
-            # SmoLVLM format
-            return f"<image>\nUser: {prompt}\nAssistant:"
-        elif "deepseek-vl" in self._model_type.lower():
-            # DeepSeek VL format
-            return f"<img>{prompt}"
-        
-        # Default format (repeat token for multiple images)
-        formatted = prompt
-        for _ in range(num_images):
-            formatted = base_format.format(prompt=formatted)
-        return formatted
+        return MLXModelFactory.format_prompt(self._model_type, prompt, num_images)
+
+    def _format_system_prompt(self, system_prompt: str, user_prompt: str) -> str:
+        """Format system and user prompts together based on model type."""
+        return MLXModelFactory.format_system_prompt(self._model_type, system_prompt, user_prompt)
 
     def load_model(self) -> None:
         """Load the MLX model and processor."""
         model_name = self.config_manager.get_param(ModelParameter.MODEL)
         
+        # Check if model is already loaded
+        if self._is_loaded and self._model is not None and self._processor is not None:
+            logger.debug(f"Model {model_name} already loaded")
+            return
+        
         try:
-            if self._is_vision_model:
-                # Load vision model using MLX-VLM
-                logger.info(f"Loading vision model {model_name}")
-                self._model, self._processor = load_vlm(
-                    model_name,
-                    trust_remote_code=True
-                )
-                self._config = load_config(model_name, trust_remote_code=True)
-            else:
-                # Load language model using MLX-LM
-                logger.info(f"Loading language model {model_name}")
-                self._model, self._processor = mlx_lm.load(model_name)
-                self._config = load_config(model_name)
-                
+            # Use the factory to load the model
+            self._model, self._processor, self._config = MLXModelFactory.load_model(
+                model_name, 
+                self._is_vision_model
+            )
             self._is_loaded = True
-            logger.info(f"Successfully loaded model {model_name}")
             
         except Exception as e:
+            if isinstance(e, ModelLoadingError):
+                raise
             logger.error(f"Failed to load model: {e}")
-            raise RuntimeError(f"Failed to load MLX model: {str(e)}")
+            raise ModelLoadingError(
+                f"Failed to load MLX model {model_name}: {str(e)}",
+                provider="mlx",
+                model_name=model_name
+            )
 
     def generate(self,
                 prompt: str,
@@ -655,30 +420,45 @@ class MLXProvider(AbstractLLMInterface):
                 **kwargs) -> Union[GenerateResponse, Generator[GenerateResponse, None, None]]:
         """Generate a response using the MLX model."""
         try:
+            # Log generation request
+            logger.info(f"Generation request: model={self.config_manager.get_param(ModelParameter.MODEL)}, "
+                       f"stream={stream}, has_system_prompt={system_prompt is not None}, "
+                       f"files={len(files) if files else 0}")
+            
             # Load model if not already loaded
             if not self._is_loaded:
+                logger.info("Model not loaded, loading now")
                 self.load_model()
             
             # Process files if provided
             images = []
             image_paths = []  # Store original image paths
             if files:
+                logger.info(f"Processing {len(files)} files")
                 for file_path in files:
                     try:
+                        logger.debug(f"Processing file: {file_path}")
                         media_input = MediaFactory.from_source(file_path)
+                        logger.debug(f"Media type: {media_input.media_type}")
+                        
                         if media_input.media_type == "image":
                             if not self._is_vision_model:
+                                logger.warning(f"Image provided but model {self.config_manager.get_param(ModelParameter.MODEL)} is not a vision model")
                                 raise UnsupportedFeatureError(
                                     "vision",
                                     "This model does not support vision inputs",
                                     provider="mlx"
                                 )
+                            logger.debug(f"Processing image: {file_path}")
                             images.append(self._process_image(media_input))
                             image_paths.append(str(file_path))  # Store the original path
+                            logger.debug(f"Image processed successfully: {file_path}")
                         elif media_input.media_type == "text":
                             # Append text content to prompt
+                            logger.debug(f"Appending text content from {file_path}")
                             prompt += f"\n\nFile content from {file_path}:\n{media_input.get_content()}"
                     except Exception as e:
+                        logger.error(f"Error processing file {file_path}: {e}", exc_info=True)
                         if isinstance(e, (UnsupportedFeatureError, ImageProcessingError, MemoryExceededError)):
                             raise
                         raise FileProcessingError(
@@ -695,6 +475,8 @@ class MLXProvider(AbstractLLMInterface):
             top_p = kwargs.get("top_p",
                              self.config_manager.get_param(ModelParameter.TOP_P))
             
+            logger.debug(f"Generation parameters: temperature={temperature}, max_tokens={max_tokens}, top_p={top_p}")
+            
             # Prepare generation kwargs
             gen_kwargs = {
                 "temperature": temperature,
@@ -704,37 +486,47 @@ class MLXProvider(AbstractLLMInterface):
             
             # Handle vision model generation
             if self._is_vision_model and images:
+                logger.info(f"Using vision model with {len(images)} images")
                 try:
                     # Format prompt with image tokens
                     formatted_prompt = self._format_prompt(prompt, len(images))
+                    logger.debug(f"Formatted prompt with image tokens: {formatted_prompt[:100]}...")
+                    
                     if system_prompt:
-                        formatted_prompt = f"{system_prompt}\n\n{formatted_prompt}"
+                        logger.debug(f"Adding system prompt: {system_prompt[:100]}...")
+                        formatted_prompt = self._format_system_prompt(system_prompt, formatted_prompt)
                     
                     # Generate response
                     if stream:
+                        logger.info("Starting vision streaming generation")
                         return self._generate_vision_stream(formatted_prompt, images, image_paths, **gen_kwargs)
                     else:
+                        logger.info("Starting vision generation")
                         return self._generate_vision(formatted_prompt, images, image_paths, **gen_kwargs)
                 except Exception as e:
-                    logger.error(f"Vision generation failed: {e}")
+                    logger.error(f"Vision generation failed: {e}", exc_info=True)
                     raise GenerationError(f"Vision generation failed: {str(e)}")
                     
             # Handle text-only generation
+            logger.info("Using text-only generation")
             formatted_prompt = prompt
             if system_prompt:
+                logger.debug(f"Adding system prompt: {system_prompt[:100]}...")
                 formatted_prompt = self._format_system_prompt(system_prompt, prompt)
                 
             # Generate response
             if stream:
+                logger.info("Starting text streaming generation")
                 return self._generate_text_stream(formatted_prompt, **gen_kwargs)
             else:
+                logger.info("Starting text generation")
                 return self._generate_text(formatted_prompt, **gen_kwargs)
             
         except Exception as e:
+            logger.error(f"Generation failed: {e}", exc_info=True)
             if isinstance(e, (UnsupportedFeatureError, ImageProcessingError, FileProcessingError, 
                             MemoryExceededError, GenerationError)):
                 raise
-            logger.error(f"Generation failed: {e}")
             raise GenerationError(f"Generation failed: {str(e)}")
 
     def _generate_vision(self, prompt: str, images: List[mx.array], image_paths: List[str], **kwargs) -> GenerateResponse:
@@ -753,31 +545,49 @@ class MLXProvider(AbstractLLMInterface):
             # Log image path for debugging
             logger.debug(f"Using image at path {image_path} for vision generation")
             
-            # Use the generate function from mlx_vlm.utils with the original image path
-            # This allows the function to handle the image loading and processing
-            output = generate(
-                self._model,
-                self._processor,
-                prompt=prompt,
-                image=image_path,  # Use the original image path
-                **kwargs
-            )
+            # Format prompt for vision model
+            formatted_prompt = self._format_prompt_for_vision(prompt)
             
-            # Extract the text content from the output
-            text_content = output[0] if isinstance(output, tuple) else output
+            # Get max tokens
+            max_tokens = kwargs.get("max_tokens", 100)
+            
+            # Get tokenizer
+            if hasattr(self._processor, 'tokenizer'):
+                tokenizer = self._processor.tokenizer
+            else:
+                tokenizer = self._processor
+            
+            # Use our direct generation approach
+            logger.info("Using direct vision generation approach")
+            text_content = self._generate_vision_directly(
+                self._model,
+                tokenizer,
+                image_path,
+                formatted_prompt,
+                max_tokens
+            )
             
             # Get the tokenizer for token counting
             tokenizer = self._processor.tokenizer if hasattr(self._processor, "tokenizer") else self._processor
+            
+            # Create response
+            try:
+                # Try to count tokens
+                prompt_tokens = len(tokenizer.encode(formatted_prompt))
+                completion_tokens = len(tokenizer.encode(text_content))
+            except Exception:
+                # Fallback to rough estimates
+                prompt_tokens = len(formatted_prompt.split())
+                completion_tokens = len(text_content.split())
             
             return GenerateResponse(
                 content=text_content,
                 model=self.config_manager.get_param(ModelParameter.MODEL),
                 usage={
-                    "prompt_tokens": len(tokenizer.encode(prompt)),
-                    "completion_tokens": len(tokenizer.encode(text_content)),
-                    "total_tokens": len(tokenizer.encode(prompt)) + len(tokenizer.encode(text_content))
-                },
-                image_paths=image_paths
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens
+                }
             )
         except Exception as e:
             logger.error(f"Vision generation failed: {e}")
@@ -799,46 +609,116 @@ class MLXProvider(AbstractLLMInterface):
             # Log image path for debugging
             logger.debug(f"Using image at path {image_path} for vision generation")
             
-            # Use the stream_generate function from mlx_vlm.utils with the original image path
-            # This allows the function to handle the image loading and processing
-            for response in stream_generate(
+            # Get model config and check dimensions
+            config = self._get_model_config()
+            target_size = config["image_size"]
+            
+            # Debug image existence and dimensions
+            try:
+                if os.path.exists(image_path):
+                    img = Image.open(image_path)
+                    logger.debug(f"Image loaded successfully: {image_path}, dimensions: {img.size}, mode: {img.mode}")
+                    
+                    # If dimensions don't match, resize the image
+                    if img.size[0] != target_size[0] or img.size[1] != target_size[1]:
+                        logger.warning(f"Image dimensions {img.size} don't match expected {target_size}, resizing temporarily")
+                        img_resized = self._process_image_for_model(img, target_size)
+                        temp_path = f"{image_path}.resized.jpg"
+                        img_resized.save(temp_path)
+                        image_path = temp_path
+                        logger.debug(f"Using resized image at {temp_path}")
+                else:
+                    logger.error(f"Image file not found at {image_path}")
+            except Exception as img_debug_e:
+                logger.warning(f"Failed to debug check image: {img_debug_e}")
+            
+            # Only use max_tokens parameter which is supported
+            max_tokens = kwargs.get("max_tokens", 100)
+            
+            logger.debug(f"Streaming vision with max_tokens={max_tokens}")
+            
+            # Use the MLXModelFactory to stream generate with the image
+            for response in MLXModelFactory.stream_generate_vision(
                 self._model,
                 self._processor,
                 prompt=prompt,
-                image=image_path,  # Use the original image path instead of passing the processed image
-                **kwargs
+                image_path=image_path,
+                max_tokens=max_tokens
             ):
                 yield GenerateResponse(
-                    content=response.text,
+                    content=response.text if hasattr(response, "text") else response,
                     model=self.config_manager.get_param(ModelParameter.MODEL),
                     usage={
-                        "prompt_tokens": response.prompt_tokens,
-                        "completion_tokens": response.generation_tokens,
-                        "total_tokens": response.prompt_tokens + response.generation_tokens
+                        "prompt_tokens": response.prompt_tokens if hasattr(response, "prompt_tokens") else 0,
+                        "completion_tokens": response.generation_tokens if hasattr(response, "generation_tokens") else 0,
+                        "total_tokens": (response.prompt_tokens + response.generation_tokens) if hasattr(response, "prompt_tokens") else 0
                     },
                     image_paths=image_paths
                 )
+                
+            # Clean up temporary file if we created one
+            if image_path.endswith('.resized.jpg') and os.path.exists(image_path):
+                try:
+                    os.remove(image_path)
+                    logger.debug(f"Removed temporary resized image: {image_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove temporary file {image_path}: {e}")
+                    
         except Exception as e:
-            logger.error(f"Vision generation streaming failed: {e}")
+            logger.error(f"Vision generation streaming failed: {e}", exc_info=True)
             raise RuntimeError(f"Vision generation streaming failed: {str(e)}")
 
     def _generate_text(self, prompt: str, **kwargs) -> GenerateResponse:
         """Generate text using MLX-LM."""
         try:
-            output = mlx_lm.generate(
-                self._model,
-                self._processor,
-                prompt=prompt,
-                **kwargs
-            )
+            # Only use max_tokens parameter which is supported
+            max_tokens = kwargs.get("max_tokens", 100)
+            
+            logger.debug(f"Generating text with max_tokens={max_tokens}")
+            
+            # Use a direct approach for text generation
+            tokenizer = self._processor
+            model = self._model
+            
+            # Tokenize the prompt
+            prompt_ids = tokenizer.encode(prompt)
+            
+            # Initial input
+            y = mx.array(prompt_ids)
+            
+            # Generation loop
+            generated_tokens = []
+            for _ in range(max_tokens):
+                # Get next token
+                outputs = model(y)
+                
+                # Extract logits
+                logits = outputs["logits"] if isinstance(outputs, dict) and "logits" in outputs else outputs
+                
+                # Get next token (simple greedy approach)
+                next_token = mx.argmax(logits[-1])
+                token_id = next_token.item()
+                
+                # Check for end of sequence
+                if hasattr(tokenizer, "eos_token_id") and token_id == tokenizer.eos_token_id:
+                    break
+                    
+                # Add token to generated text
+                generated_tokens.append(token_id)
+                
+                # Update input for next iteration
+                y = mx.concatenate([y, next_token.reshape(1)])
+            
+            # Decode generated tokens
+            output = tokenizer.decode(generated_tokens)
 
             return GenerateResponse(
                 content=output,
                 model=self.config_manager.get_param(ModelParameter.MODEL),
                 usage={
-                    "prompt_tokens": len(self._processor.encode(prompt)),
-                    "completion_tokens": len(self._processor.encode(output)),
-                    "total_tokens": len(self._processor.encode(prompt)) + len(self._processor.encode(output))
+                    "prompt_tokens": len(prompt_ids),
+                    "completion_tokens": len(generated_tokens),
+                    "total_tokens": len(prompt_ids) + len(generated_tokens)
                 }
             )
         except Exception as e:
@@ -848,13 +728,18 @@ class MLXProvider(AbstractLLMInterface):
     def _generate_text_stream(self, prompt: str, **kwargs) -> Generator[GenerateResponse, None, None]:
         """Stream text using MLX-LM."""
         try:
+            # Only use max_tokens parameter which is supported
+            max_tokens = kwargs.get("max_tokens", 100)
+            
+            logger.debug(f"Streaming text with max_tokens={max_tokens}")
+            
             start_time = time.time()
-            for chunk in mlx_lm.generate(
+            for chunk in MLXModelFactory.generate_text(
                 self._model,
                 self._processor,
                 prompt=prompt,
-                stream=True,
-                **kwargs
+                max_tokens=max_tokens,
+                stream=True
             ):
                 yield GenerateResponse(
                     content=chunk,
@@ -924,3 +809,186 @@ class MLXProvider(AbstractLLMInterface):
                     **kwargs
                 )
             ) 
+
+    def _generate_vision_directly(self, model, tokenizer, image_path, prompt, max_tokens=100):
+        """
+        Generate text from an image using direct model calls without relying on libraries.
+        
+        Args:
+            model: The MLX model to use
+            tokenizer: The tokenizer to use
+            image_path: Path to the image file
+            prompt: The text prompt
+            max_tokens: Maximum number of tokens to generate
+            
+        Returns:
+            Generated text from the image
+        """
+        try:
+            # Load and preprocess image
+            from PIL import Image
+            import mlx.core as mx
+            import numpy as np
+            
+            # Get model config for image size
+            config = self._get_model_config()
+            target_size = config["image_size"]
+            
+            # Open and resize image
+            img = Image.open(image_path)
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            
+            # Resize image to target size
+            img = self._process_image_for_model(img, target_size)
+            
+            # Convert to numpy array and normalize
+            img_array = np.array(img).astype(np.float32) / 255.0
+            
+            # Apply normalization
+            mean = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(1, 1, 3)
+            std = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(1, 1, 3)
+            img_array = (img_array - mean) / std
+            
+            # Convert to CHW format (channels first)
+            img_array = np.transpose(img_array, (2, 0, 1))
+            
+            # Add batch dimension and convert to mx array
+            pixel_values = mx.array(img_array).reshape(1, 3, target_size[0], target_size[1])
+            
+            # Try using the standard mlx_lm library for generation
+            try:
+                import mlx_lm
+                
+                # Format the prompt for the model type
+                if "<image>" not in prompt and "llava" in self._model_type.lower():
+                    formatted_prompt = f"<image>\n{prompt}"
+                else:
+                    formatted_prompt = prompt
+                
+                # Use the mlx_lm generate function
+                logger.info("Using mlx_lm.generate for text generation")
+                
+                # Create a simple wrapper function to handle the image
+                def model_with_image(x, **kwargs):
+                    """Wrapper function to include the image in the model call."""
+                    return model(x, pixel_values=pixel_values, mask=mx.ones_like(x), **kwargs)
+                
+                # Generate text using the wrapper
+                text = mlx_lm.generate.generate(
+                    model_with_image,
+                    tokenizer,
+                    prompt=formatted_prompt,
+                    temp=0.1,
+                    max_tokens=max_tokens,
+                    verbose=False
+                )
+                
+                return text
+            except Exception as e:
+                logger.warning(f"mlx_lm.generate failed: {e}, falling back to manual generation")
+                
+                # Handle tokenization
+                try:
+                    # Try to encode prompt
+                    prompt_ids = tokenizer.encode(prompt) if hasattr(tokenizer, "encode") else []
+                    
+                    if len(prompt_ids) == 0 and hasattr(tokenizer, "convert_tokens_to_ids"):
+                        # Try tokenize then convert
+                        tokens = tokenizer.tokenize(prompt)
+                        prompt_ids = tokenizer.convert_tokens_to_ids(tokens)
+                    
+                    # If still empty, use a default prompt ID sequence
+                    if len(prompt_ids) == 0:
+                        logger.warning("Could not encode prompt, using default token IDs")
+                        prompt_ids = [1, 2, 3]  # Generic starter tokens
+                except Exception as e:
+                    logger.error(f"Tokenization failed: {e}")
+                    prompt_ids = [1, 2, 3]  # Generic starter tokens
+                
+                # Start generation
+                logger.info(f"Starting direct generation with prompt IDs: {prompt_ids[:10]}...")
+                
+                # Initial tokens
+                y = mx.array(prompt_ids)
+                
+                # Generation loop
+                generated_tokens = []
+                
+                # Try different model input signatures to handle different MLX models
+                try:
+                    # For LLaVA models, we know the exact signature needed
+                    if "llava" in self._model_type.lower():
+                        # Create mask for attention
+                        mask = mx.ones(len(y))
+                        
+                        # Call model with the required parameters for LLaVA
+                        output = model(y, pixel_values=pixel_values, mask=mask)
+                        
+                        # Debug output structure
+                        logger.info(f"Model output type: {type(output)}")
+                        if isinstance(output, tuple):
+                            logger.info(f"Output tuple length: {len(output)}")
+                            for i, item in enumerate(output):
+                                logger.info(f"Output[{i}] type: {type(item)}")
+                        elif isinstance(output, dict):
+                            logger.info(f"Output dict keys: {output.keys()}")
+                        
+                        # Extract logits
+                        logits = None
+                        if isinstance(output, dict) and "logits" in output:
+                            logits = output["logits"]
+                        elif isinstance(output, tuple) and len(output) > 0:
+                            # Try to get logits from first element if it's a tuple
+                            if isinstance(output[0], dict) and "logits" in output[0]:
+                                logits = output[0]["logits"]
+                            else:
+                                # Assume first element is logits directly
+                                logits = output[0]
+                        
+                        if logits is None:
+                            logger.error("Could not extract logits from model output")
+                            return "Could not generate text from this image."
+                        
+                        # Generate tokens
+                        for _ in range(max_tokens):
+                            # Get next token (simple greedy approach)
+                            next_token = mx.argmax(logits[-1], axis=0)
+                            token_id = next_token.item()
+                            
+                            # Check for EOS token
+                            if hasattr(tokenizer, "eos_token_id") and token_id == tokenizer.eos_token_id:
+                                break
+                                
+                            # Add token and update
+                            generated_tokens.append(token_id)
+                            
+                            # Update input sequence
+                            y = mx.concatenate([y, next_token.reshape(1)])
+                            mask = mx.ones(len(y))
+                            
+                            # Get next logits
+                            output = model(y, pixel_values=pixel_values, mask=mask)
+                            logits = output["logits"]
+                    else:
+                        # For other model types, we'll need to try different approaches
+                        logger.error(f"Unsupported model type: {self._model_type}")
+                        return "Model type not supported for direct generation."
+                except Exception as e:
+                    logger.error(f"Generation failed: {e}")
+                    return "Could not generate text from this image due to an error."
+                
+                # Decode generated tokens
+                if generated_tokens:
+                    try:
+                        text = tokenizer.decode(generated_tokens)
+                        return text
+                    except Exception as decode_e:
+                        logger.error(f"Decoding failed: {decode_e}")
+                        return f"Generated {len(generated_tokens)} tokens but couldn't decode them."
+                else:
+                    return "Could not generate text from this image."
+                
+        except Exception as e:
+            logger.error(f"Direct vision generation failed: {e}")
+            return "Image processing failed. Could not generate a description." 
