@@ -322,6 +322,47 @@ class FileProcessingError(AbstractLLMError):
             self.details["file_type"] = file_type
 
 
+class ResourceExceededError(AbstractLLMError):
+    """
+    Base class for errors related to resource limits being exceeded.
+    """
+    pass
+
+
+class MemoryExceededError(ResourceExceededError):
+    """
+    Raised when an operation would exceed available memory.
+    
+    This can occur when:
+    - Processing large files or images
+    - Loading models that are too large for available memory
+    - Batch operations that would consume too much memory
+    
+    Args:
+        message: Description of the error
+        provider: The provider name that raised the error
+        original_exception: The original exception that was caught
+        details: Additional details about the error
+        required_memory: The amount of memory required (in bytes)
+        available_memory: The amount of memory available (in bytes)
+    """
+    
+    def __init__(self, message: str, provider: Optional[str] = None,
+                 original_exception: Optional[Exception] = None,
+                 details: Optional[Dict[str, Any]] = None,
+                 required_memory: Optional[int] = None,
+                 available_memory: Optional[int] = None):
+        super().__init__(message, provider, original_exception, details)
+        self.required_memory = required_memory
+        self.available_memory = available_memory
+        
+        # Add memory info to details
+        if required_memory is not None:
+            self.details["required_memory"] = required_memory
+        if available_memory is not None:
+            self.details["available_memory"] = available_memory
+
+
 # Mapping of common provider-specific error codes to AbstractLLM exceptions
 # This helps normalize error handling across providers
 PROVIDER_ERROR_MAPPING = {

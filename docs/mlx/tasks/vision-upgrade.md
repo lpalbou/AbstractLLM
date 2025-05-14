@@ -1,23 +1,24 @@
-# Task 7: Implement Vision and Media Handling
+# MLX Vision Capabilities Upgrade
 
-## Status
-**Implemented:** Yes
-**Completion Date:** Current date
+## Overview
 
-## Description
-Implement comprehensive vision and media handling capabilities in the MLX provider, with support for different vision model architectures and robust image processing.
+Based on deep analysis of MLX-VLM and our current implementation, this task outlines necessary improvements to make vision capabilities in our MLX provider more robust, accurate, and reliable.
 
-## Requirements
-1. Implement model-specific configurations for different vision architectures
-2. Add robust image processing with aspect ratio preservation
-3. Implement memory safety checks for image processing
-4. Support multiple image handling and proper prompt formatting
+## Key Improvements Needed
 
-## Implementation Details
+1. **Model-Specific Configurations**
+2. **Enhanced Image Processing**
+3. **Memory Safety and Error Handling**
+4. **Prompt Formatting Improvements**
 
-### 1. Model-Specific Configurations
+## Implementation Steps
+
+### 1. Add Model-Specific Configurations
+
+Create a new configuration system for vision models:
 
 ```python
+# Add at top of mlx_provider.py
 MODEL_CONFIGS = {
     "llava": {
         "image_size": (336, 336),
@@ -46,7 +47,37 @@ MODEL_CONFIGS = {
 }
 ```
 
-### 2. Image Processing Implementation
+### 2. Improve Model Type Detection
+
+Update the model type detection to be more robust:
+
+```python
+def _determine_model_type(self, model_name: str) -> str:
+    """Determine the specific vision model type and load its configuration."""
+    model_name_lower = model_name.lower()
+    
+    # Try to load model config from HF if available
+    try:
+        config = load_config(model_name, trust_remote_code=True)
+        if "model_type" in config:
+            model_type = config["model_type"]
+            if model_type in MODEL_CONFIGS:
+                return model_type
+    except Exception as e:
+        logger.warning(f"Could not load model config: {e}")
+    
+    # Fallback to name-based detection
+    for model_type in MODEL_CONFIGS:
+        if model_type in model_name_lower:
+            return model_type
+            
+    logger.warning(f"Unknown model type for {model_name}, using default configuration")
+    return "default"
+```
+
+### 3. Enhance Image Processing
+
+Implement robust image processing with proper aspect ratio handling:
 
 ```python
 def _process_image(self, image_input: ImageInput) -> mx.array:
@@ -73,9 +104,6 @@ def _process_image(self, image_input: ImageInput) -> mx.array:
             
         # Get model-specific configuration
         config = MODEL_CONFIGS[self._model_type]
-        
-        # Check memory requirements before processing
-        self._check_memory_requirements(config["image_size"], 1)
         
         # Resize with proper aspect ratio handling
         target_size = config["image_size"]
@@ -105,11 +133,7 @@ def _process_image(self, image_input: ImageInput) -> mx.array:
         if isinstance(e, ImageProcessingError):
             raise
         raise ImageProcessingError(f"Image processing failed: {str(e)}", provider="mlx")
-```
 
-### 3. Aspect Ratio Preservation
-
-```python
 def _resize_with_aspect_ratio(self, image: Image.Image, target_size: Tuple[int, int]) -> Image.Image:
     """Resize image maintaining aspect ratio and padding if necessary."""
     target_w, target_h = target_size
@@ -140,7 +164,9 @@ def _resize_with_aspect_ratio(self, image: Image.Image, target_size: Tuple[int, 
     return new_image
 ```
 
-### 4. Memory Safety
+### 4. Add Memory Safety Checks
+
+Implement memory requirement validation:
 
 ```python
 def _check_memory_requirements(self, image_size: Tuple[int, int], num_images: int) -> None:
@@ -176,7 +202,9 @@ def _check_memory_requirements(self, image_size: Tuple[int, int], num_images: in
         logger.warning(f"Could not check memory requirements: {e}")
 ```
 
-### 5. Prompt Formatting
+### 5. Improve Prompt Formatting
+
+Update prompt formatting to handle multiple images and model-specific formats:
 
 ```python
 def _format_prompt(self, prompt: str, num_images: int) -> str:
@@ -204,21 +232,68 @@ def _format_prompt(self, prompt: str, num_images: int) -> str:
     return formatted
 ```
 
-## References
-- See `docs/mlx/vision-upgrade.md` for detailed implementation plan
-- See `docs/mlx/deepsearch-mlx-vlm.md` for MLX-VLM insights
-- See `tests/test_mlx_vision.py` for vision testing implementation
+## Testing Requirements
 
-## Testing
-1. Test image processing with various input types and sizes
-2. Test aspect ratio preservation
-3. Test memory requirement checks
-4. Test prompt formatting for different models
-5. Test error handling for various failure cases
+1. **Unit Tests**
+   - Test image processing with various input types (PIL Image, file path, bytes)
+   - Test aspect ratio handling
+   - Test memory requirement checks
+   - Test prompt formatting for different models
+   - Test error handling
+
+2. **Integration Tests**
+   - Test with actual MLX vision models
+   - Test with multiple images
+   - Test memory limits
+   - Test error cases
+
+3. **Model-Specific Tests**
+   - Test each supported model type
+   - Verify correct image sizes
+   - Verify prompt formatting
+
+## Documentation Updates Needed
+
+1. Update MLX provider documentation with:
+   - Supported vision models and their configurations
+   - Image processing details
+   - Memory requirements and limitations
+   - Error handling and troubleshooting
+
+2. Add examples for:
+   - Basic vision model usage
+   - Handling multiple images
+   - Error handling
+   - Memory management
 
 ## Success Criteria
-1. Images are properly processed according to model requirements
-2. Aspect ratios are preserved with appropriate padding
-3. Memory errors are caught and handled gracefully
-4. Prompts are correctly formatted for each model type
-5. All vision-related tests pass 
+
+1. All vision models in `mlx-community` work correctly with appropriate image sizes
+2. Memory errors are caught and handled gracefully
+3. Image aspect ratios are preserved appropriately
+4. All tests pass
+5. Documentation is complete and accurate
+
+## Dependencies
+
+1. MLX-VLM library
+2. PIL/Pillow for image processing
+3. NumPy for array operations
+4. psutil for memory checks
+
+## Timeline
+
+1. Implementation: 2-3 days
+2. Testing: 1-2 days
+3. Documentation: 1 day
+4. Review and refinement: 1 day
+
+Total estimated time: 5-7 days
+
+## Notes
+
+- This implementation favors robustness and reliability over speed
+- Memory safety is a primary concern
+- Error handling is comprehensive
+- Model-specific configurations ensure accurate processing
+- The implementation is designed to be maintainable and extensible 

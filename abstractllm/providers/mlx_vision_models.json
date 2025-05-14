@@ -1,0 +1,202 @@
+{
+  "model_families": {
+    "llava": {
+      "name": "LLaVA",
+      "description": "Large Language and Vision Assistant",
+      "image_size": [336, 336],
+      "prompt_format": "<image>\n{prompt}",
+      "models": [
+        "mlx-community/llava-v1.6-mistral-7b-mlx",
+        "mlx-community/llava-v1.6-34b-mlx",
+        "mlx-community/llava-v1.5-7b-mlx",
+        "mlx-community/llava-v1.5-13b-mlx"
+      ]
+    },
+    "qwen-vl": {
+      "name": "Qwen Vision Language",
+      "description": "Qwen's multimodal vision-language models",
+      "image_size": [448, 448],
+      "prompt_format": "<img>{prompt}",
+      "models": [
+        "mlx-community/qwen-vl-chat-mlx",
+        "mlx-community/qwen2-vl-7b-4bit",
+        "mlx-community/qwen2.5-vl-7b-4bit",
+        "mlx-community/Qwen2.5-VL-32B-Instruct-6bit",
+        "mlx-community/Qwen2.5-VL-32B-Instruct-4bit",
+        "mlx-community/Qwen2.5-VL-7B-Instruct-4bit",
+        "mlx-community/Qwen2.5-VL-7B-Instruct-8bit",
+        "mlx-community/Qwen2.5-VL-7B-Instruct-6bit",
+        "mlx-community/Qwen2.5-VL-32B-Instruct-8bit",
+        "mlx-community/Qwen2-VL-2B-Instruct-4bit"
+      ]
+    },
+    "gemma-it": {
+      "name": "Gemma IT",
+      "description": "Gemma models with image-text capabilities",
+      "image_size": [224, 224],
+      "prompt_format": "<image>{prompt}",
+      "models": [
+        "mlx-community/gemma-3-4b-it-4bit",
+        "mlx-community/gemma-3-27b-it-qat-bf16",
+        "mlx-community/gemma-3-27b-it-qat-8bit",
+        "mlx-community/gemma-3-27b-it-qat-6bit",
+        "mlx-community/gemma-3-27b-it-qat-4bit",
+        "mlx-community/gemma-3-27b-it-qat-3bit",
+        "mlx-community/gemma-3-12b-it-qat-bf16",
+        "mlx-community/gemma-3-12b-it-qat-8bit",
+        "mlx-community/gemma-3-12b-it-qat-6bit",
+        "mlx-community/gemma-3-12b-it-qat-4bit",
+        "mlx-community/gemma-3-12b-it-qat-3bit",
+        "mlx-community/gemma-3-4b-it-qat-bf16",
+        "mlx-community/gemma-3-4b-it-qat-8bit",
+        "mlx-community/gemma-3-4b-it-qat-6bit",
+        "mlx-community/gemma-3-4b-it-qat-4bit",
+        "mlx-community/gemma-3-4b-it-qat-3bit",
+        "mlx-community/gemma-3-4b-it-8bit",
+        "mlx-community/gemma-3-4b-it-bf16",
+        "mlx-community/gemma-3-12b-it-4bit",
+        "mlx-community/gemma-3-12b-it-6bit",
+        "mlx-community/gemma-3-12b-it-bf16",
+        "mlx-community/gemma-3-27b-it-4bit",
+        "mlx-community/gemma-3-27b-it-6bit",
+        "mlx-community/gemma-3-27b-it-8bit",
+        "mlx-community/gemma-3-27b-it-bf16"
+      ]
+    },
+    "gemma-vision": {
+      "name": "Gemma Vision",
+      "description": "Gemma models with vision capabilities",
+      "image_size": [224, 224],
+      "prompt_format": "<image>{prompt}",
+      "models": [
+        "mlx-community/gemma-vision-7b-4bit"
+      ]
+    },
+    "llama-scout": {
+      "name": "Llama Scout",
+      "description": "Llama models with vision capabilities",
+      "image_size": [336, 336],
+      "prompt_format": "<image>\n{prompt}",
+      "models": [
+        "mlx-community/Llama-4-Scout-17B-16E-Instruct-4bit",
+        "mlx-community/Llama-4-Scout-17B-16E-Instruct-6bit",
+        "mlx-community/Llama-4-Scout-17B-16E-Instruct-8bit",
+        "mlx-community/Llama-4-Scout-17B-8E-Instruct-4bit"
+      ]
+    },
+    "kimi-vl": {
+      "name": "Kimi-VL",
+      "description": "Kimi Vision Language models",
+      "image_size": [448, 448],
+      "prompt_format": "<|image|>{prompt}",
+      "models": [
+        "mlx-community/Kimi-VL-A3B-Thinking-4bit",
+        "mlx-community/Kimi-VL-A3B-Thinking-6bit",
+        "mlx-community/Kimi-VL-A3B-Thinking-8bit",
+        "mlx-community/kimi-vl-7b-4bit"
+      ]
+    },
+    "deepseek-vl": {
+      "name": "DeepSeek-VL",
+      "description": "DeepSeek Vision Language models",
+      "image_size": [448, 448],
+      "prompt_format": "<img>{prompt}",
+      "models": [
+        "mlx-community/deepseek-vl2-1.3b-chat-4bit",
+        "mlx-community/deepseek-vl2-1.3b-chat-8bit",
+        "mlx-community/deepseek-vl2-1.3b-chat-6bit",
+        "mlx-community/deepseek-vl-7b-chat-4bit"
+      ]
+    },
+    "paligemma": {
+      "name": "PaliGemma",
+      "description": "PaliGemma vision language models",
+      "image_size": [224, 224],
+      "prompt_format": "<image>{prompt}",
+      "models": [
+        "mlx-community/paligemma-2-3b-4bit",
+        "mlx-community/paligemma-2-3b-8bit",
+        "mlx-community/paligemma-2-3b-6bit",
+        "mlx-community/paligemma-3b-4bit"
+      ]
+    },
+    "idefics": {
+      "name": "Idefics",
+      "description": "Idefics vision language models",
+      "image_size": [224, 224],
+      "prompt_format": "<image>{prompt}",
+      "models": [
+        "mlx-community/idefics3-8b-4bit",
+        "mlx-community/idefics3-8b-6bit",
+        "mlx-community/idefics3-8b-8bit",
+        "mlx-community/idefics2-8b-16k-instruct-4bit"
+      ]
+    },
+    "smolvlm": {
+      "name": "SmolVLM",
+      "description": "Small and efficient vision language models",
+      "image_size": [224, 224],
+      "prompt_format": "<image>{prompt}",
+      "models": [
+        "mlx-community/SmolVLM-1.5-8B-4bit",
+        "mlx-community/SmolVLM-1.5-8B-8bit",
+        "mlx-community/SmolVLM-1.5-8B-6bit",
+        "mlx-community/smolvlm-1.7b-4bit"
+      ]
+    },
+    "florence": {
+      "name": "Florence",
+      "description": "Florence vision language models",
+      "image_size": [224, 224],
+      "prompt_format": "<image>{prompt}",
+      "models": [
+        "mlx-community/Florence-2-8B-4bit",
+        "mlx-community/Florence-2-8B-6bit",
+        "mlx-community/Florence-2-8B-8bit",
+        "mlx-community/florence-2-7b-4bit"
+      ]
+    },
+    "phi3-vision": {
+      "name": "Phi-3 Vision",
+      "description": "Microsoft Phi-3 vision models",
+      "image_size": [224, 224],
+      "prompt_format": "Image: <image>\nUser: {prompt}\nAssistant:",
+      "models": [
+        "mlx-community/phi-3-vision-128k-instruct"
+      ]
+    },
+    "pixtral": {
+      "name": "Pixtral",
+      "description": "Pixtral vision language models",
+      "image_size": [336, 336],
+      "prompt_format": "<image>\n{prompt}",
+      "models": [
+        "mlx-community/pixtral-4bit"
+      ]
+    }
+  },
+  "detection_patterns": {
+    "model_name_indicators": [
+      "vl", "vision", "visual", "multimodal", "image",
+      "llava", "qwen-vl", "kimi-vl", "gemma-vision",
+      "it", "scout", "deepseek-vl", "paligemma",
+      "idefics", "smolvlm", "florence", "phi3-vision",
+      "pixtral"
+    ],
+    "family_patterns": {
+      "llava": ["llava"],
+      "qwen-vl": ["qwen-vl", "qwen2-vl", "qwen2.5-vl"],
+      "gemma-it": ["gemma-3", "it"],
+      "gemma-vision": ["gemma-vision"],
+      "llama-scout": ["llama-4-scout", "scout"],
+      "kimi-vl": ["kimi-vl", "kimi"],
+      "deepseek-vl": ["deepseek-vl", "deepseek-vl2"],
+      "paligemma": ["paligemma"],
+      "idefics": ["idefics"],
+      "smolvlm": ["smolvlm"],
+      "florence": ["florence"],
+      "phi3-vision": ["phi-3-vision", "phi3-vision"],
+      "pixtral": ["pixtral"]
+    }
+  }
+} 

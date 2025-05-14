@@ -45,6 +45,9 @@ class GenerateResponse:
     # Field for tool calls
     tool_calls: Optional["ToolCallRequest"] = None
     
+    # Field for image paths used in vision models
+    image_paths: Optional[List[str]] = None
+    
     def has_tool_calls(self) -> bool:
         """Check if the response contains tool calls."""
         if self.tool_calls is None:

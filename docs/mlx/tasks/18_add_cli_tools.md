@@ -8,6 +8,11 @@ Implement command-line interface (CLI) tools for managing the MLX provider, incl
 2. Implement commands to convert PyTorch models to MLX format
 3. Create commands to get system information for MLX compatibility
 4. Add CLI commands to run inference with MLX models
+5. Add vision model support to CLI
+6. Support image file inputs
+7. Add memory and performance monitoring
+8. Support streaming output
+9. Add error handling and reporting
 
 ## Implementation Details
 

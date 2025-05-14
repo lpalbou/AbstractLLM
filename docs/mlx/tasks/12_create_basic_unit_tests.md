@@ -1,180 +1,298 @@
 # Task 12: Create Basic Unit Tests
 
 ## Description
-Create a basic set of unit tests for the MLX provider to verify its functionality using pytest.
+Create comprehensive unit tests for the MLX provider, including vision capabilities testing.
 
 ## Requirements
-1. Create a test file in the appropriate test directory
-2. Include tests for initialization, model loading, and generation
-3. Add platform-specific skipping for non-Apple Silicon platforms
-4. Test key functionality like streaming and system prompts
+1. Create test file in the appropriate test directory
+2. Test model loading, generation, and vision capabilities
+3. Test image processing and memory safety
+4. Test error handling and edge cases
 
 ## Implementation Details
 
-Create a test file at `tests/providers/test_mlx_provider.py`:
+Create a test file at `tests/test_mlx_vision.py`:
 
 ```python
-"""
-Tests for the MLX provider.
+#!/usr/bin/env python3
+"""Test module for MLX vision capabilities."""
 
-These tests will only run on Apple Silicon hardware.
-"""
-
-import pytest
-import platform
-from pathlib import Path
 import os
+import pytest
+import numpy as np
+from pathlib import Path
+from typing import List, Dict, Any
+from PIL import Image
 
-# Skip all tests if not on macOS with Apple Silicon
-is_macos = platform.system().lower() == "darwin"
-is_arm = platform.processor() == "arm" 
-pytestmark = pytest.mark.skipif(
-    not (is_macos and is_arm),
-    reason="MLX tests require macOS with Apple Silicon"
-)
+from abstractllm.providers.mlx_provider import MLXProvider, MODEL_CONFIGS
+from abstractllm.media.factory import MediaFactory
+from abstractllm.enums import ModelParameter, ModelCapability
+from abstractllm.exceptions import UnsupportedFeatureError, ImageProcessingError
 
-# Try to import MLX, skip if not available
-try:
-    import mlx.core
-    import mlx_lm
-except ImportError:
-    pytestmark = pytest.mark.skip(reason="MLX dependencies not available")
+# Test image paths
+TEST_IMAGES = [
+    "tests/examples/mountain_path.jpg",
+    "tests/examples/space_cat.jpg",
+    "tests/examples/urban_sunset.jpg",
+    "tests/examples/whale.jpg"
+]
 
-from abstractllm import create_llm, ModelParameter
-
+# Test prompts for each image
+IMAGE_PROMPTS = {
+    "mountain_path.jpg": "Describe this mountain path in detail.",
+    "space_cat.jpg": "What's unusual about this cat image?",
+    "urban_sunset.jpg": "Describe this urban scene and its lighting.",
+    "whale.jpg": "Describe this marine scene in detail."
+}
 
 @pytest.fixture
 def mlx_provider():
-    """Fixture to create a basic MLX provider instance for testing."""
-    provider = create_llm("mlx", **{
-        ModelParameter.MODEL: "mlx-community/phi-2",  # Small model for quick testing
-        ModelParameter.MAX_TOKENS: 100  # Small limit for tests
-    })
-    return provider
+    """Create MLX provider with vision model."""
+    config = {
+        ModelParameter.MODEL: "mlx-community/Qwen2.5-VL-32B-Instruct-6bit",  # Using latest Qwen model
+        ModelParameter.TEMPERATURE: 0.7,
+        ModelParameter.MAX_TOKENS: 1024,
+        "quantize": True
+    }
+    return MLXProvider(config)
 
+@pytest.fixture
+def test_images() -> List[Path]:
+    """Get test image paths."""
+    return [Path(img_path) for img_path in TEST_IMAGES]
 
-def test_mlx_provider_initialization(mlx_provider):
-    """Test MLX provider initialization."""
-    # Check initialization
-    assert mlx_provider is not None
+def test_model_config_detection(mlx_provider):
+    """Test that model type is correctly detected and configured."""
+    assert mlx_provider._model_type == "qwen-vl"
+    assert mlx_provider._is_vision_model is True
     
-    # Check capabilities
-    capabilities = mlx_provider.get_capabilities()
-    assert capabilities is not None
-    assert "streaming" in capabilities or ModelParameter.STREAMING in capabilities
+    # Verify config values
+    config = MODEL_CONFIGS[mlx_provider._model_type]
+    assert config["image_size"] == (448, 448)  # Qwen-VL specific size
+    assert config["prompt_format"] == "<img>{prompt}"
 
-
-def test_mlx_model_loading(mlx_provider):
-    """Test model loading."""
-    # Force model loading if not already loaded
-    if hasattr(mlx_provider, 'load_model'):
-        mlx_provider.load_model()
-    
-    # Model should be loaded now
-    assert hasattr(mlx_provider, '_model')
+def test_vision_model_loading(mlx_provider):
+    """Test that vision model loads correctly."""
+    assert mlx_provider._is_vision_model is True
+    mlx_provider.load_model()
+    assert mlx_provider._is_loaded is True
+    assert mlx_provider._processor is not None
     assert mlx_provider._model is not None
+    assert mlx_provider._config is not None
+
+def test_vision_capabilities(mlx_provider):
+    """Test vision capability reporting."""
+    capabilities = mlx_provider.get_capabilities()
+    assert capabilities[ModelCapability.VISION] is True
+    assert capabilities[ModelCapability.STREAMING] is True
+    assert capabilities[ModelCapability.SYSTEM_PROMPT] is True
+
+def test_image_preprocessing(mlx_provider, test_images):
+    """Test image preprocessing functionality."""
+    for img_path in test_images:
+        # Create image input
+        image_input = MediaFactory.from_source(str(img_path))
+        
+        # Process image
+        processed = mlx_provider._process_image(image_input)
+        
+        # Check processed image properties
+        assert processed.shape == (3, 448, 448)  # CHW format for Qwen-VL
+        assert processed.dtype == "float32"
+        
+        # Test aspect ratio preservation
+        original_image = Image.open(img_path)
+        orig_aspect = original_image.width / original_image.height
+        
+        # Convert processed back to PIL for aspect check
+        processed_np = processed.numpy()
+        processed_np = np.transpose(processed_np, (1, 2, 0))  # CHW to HWC
+        non_zero_mask = np.any(processed_np != 0, axis=2)
+        non_zero_coords = np.nonzero(non_zero_mask)
+        
+        if len(non_zero_coords[0]) > 0 and len(non_zero_coords[1]) > 0:
+            height = non_zero_coords[0].max() - non_zero_coords[0].min()
+            width = non_zero_coords[1].max() - non_zero_coords[1].min()
+            processed_aspect = width / height
+            assert abs(orig_aspect - processed_aspect) < 0.1  # Allow small difference due to padding
+
+def test_memory_requirements(mlx_provider):
+    """Test memory requirement checking."""
+    # Test with normal image size
+    mlx_provider._check_memory_requirements((448, 448), 1)
     
-    assert hasattr(mlx_provider, '_tokenizer')
-    assert mlx_provider._tokenizer is not None
+    # Test with extremely large image (should raise error)
+    with pytest.raises(MemoryError):
+        mlx_provider._check_memory_requirements((100000, 100000), 1)
 
-
-def test_mlx_text_generation(mlx_provider):
-    """Test basic text generation."""
-    # Generate text
-    response = mlx_provider.generate("Hello, world!")
+def test_prompt_formatting(mlx_provider):
+    """Test prompt formatting with images."""
+    # Single image
+    formatted = mlx_provider._format_prompt("Describe this.", 1)
+    assert formatted == "<img>Describe this."
     
-    # Check response
-    assert response is not None
-    assert response.text is not None
-    assert len(response.text) > 0
-    assert response.model is not None
-    assert response.prompt_tokens > 0
-    assert response.completion_tokens > 0
-    assert response.total_tokens > 0
+    # Multiple images (Qwen-VL supports numbered images)
+    formatted = mlx_provider._format_prompt("Compare these.", 2)
+    assert "<image1>" in formatted
+    assert "<image2>" in formatted
 
+def test_single_image_generation(mlx_provider, test_images):
+    """Test vision model generation with a single image."""
+    for img_path in test_images:
+        prompt = IMAGE_PROMPTS[img_path.name]
+        
+        # Generate response
+        response = mlx_provider.generate(
+            prompt=prompt,
+            files=[str(img_path)]
+        )
+        
+        # Verify response
+        assert isinstance(response.content, str)
+        assert len(response.content) > 0
+        assert response.usage["prompt_tokens"] > 0
+        assert response.usage["completion_tokens"] > 0
+        assert response.model == "mlx-community/Qwen2.5-VL-32B-Instruct-6bit"
 
-def test_mlx_system_prompt(mlx_provider):
-    """Test generation with system prompt."""
-    # Generate with system prompt
-    system_prompt = "You are a helpful assistant."
-    response = mlx_provider.generate("Hello!", system_prompt=system_prompt)
+def test_streaming_image_generation(mlx_provider, test_images):
+    """Test streaming generation with images."""
+    for img_path in test_images:
+        prompt = IMAGE_PROMPTS[img_path.name]
+        
+        # Stream response
+        chunks = []
+        for chunk in mlx_provider.generate(
+            prompt=prompt,
+            files=[str(img_path)],
+            stream=True
+        ):
+            assert isinstance(chunk.content, str)
+            assert "time" in chunk.usage  # Check streaming-specific metrics
+            chunks.append(chunk.content)
+        
+        # Verify complete response
+        complete_response = "".join(chunks)
+        assert len(complete_response) > 0
+
+def test_system_prompt_with_image(mlx_provider, test_images):
+    """Test vision generation with system prompt."""
+    system_prompt = "You are a professional photographer and art critic."
+    img_path = test_images[0]
     
-    # Check response
-    assert response is not None
-    assert response.text is not None
-    assert len(response.text) > 0
-
-
-def test_mlx_streaming(mlx_provider):
-    """Test streaming generation."""
-    # Generate with streaming
-    chunks = list(mlx_provider.generate("Tell me a short story.", stream=True))
-    
-    # Check chunks
-    assert len(chunks) > 0
-    
-    # Check final chunk
-    final_chunk = chunks[-1]
-    assert final_chunk.text is not None
-    assert len(final_chunk.text) > 0
-
-
-@pytest.mark.parametrize(
-    "model_name", 
-    ["mlx-community/phi-2", "mlx-community/mistral-7b-v0.1"]
-)
-def test_different_models(model_name):
-    """Test different models can be loaded."""
-    llm = create_llm("mlx", **{
-        ModelParameter.MODEL: model_name,
-        ModelParameter.MAX_TOKENS: 50
-    })
-    
-    # Verify model name is set correctly
-    assert llm.config_manager.get_param(ModelParameter.MODEL) == model_name
-
-
-def test_error_on_tool_use(mlx_provider):
-    """Test error handling when using unsupported features."""
-    from abstractllm.exceptions import UnsupportedFeatureError
-    
-    # Tools are not supported, should raise an error
-    with pytest.raises(UnsupportedFeatureError):
-        mlx_provider.generate("What's the weather?", tools=[
-            {"type": "function", "function": {"name": "get_weather"}}
-        ])
-
-
-def test_text_file_handling(mlx_provider, tmp_path):
-    """Test text file handling capability."""
-    # Create a temporary text file
-    test_file = tmp_path / "test.txt"
-    test_file.write_text("This is test content for MLX processing.")
-    
-    # Generate with file input
     response = mlx_provider.generate(
-        "What's in the file?", 
-        files=[test_file]
+        prompt=IMAGE_PROMPTS[img_path.name],
+        system_prompt=system_prompt,
+        files=[str(img_path)]
     )
     
-    # Check response
-    assert response is not None
-    assert response.text is not None
-    assert len(response.text) > 0
+    assert isinstance(response.content, str)
+    assert len(response.content) > 0
+    # Response should reflect the system prompt's role
+    assert any(word in response.content.lower() for word in ["composition", "lighting", "perspective", "artistic"])
+
+def test_non_vision_model_rejection():
+    """Test that non-vision models reject image inputs."""
+    config = {
+        ModelParameter.MODEL: "mlx-community/Nous-Hermes-2-Mistral-7B-DPO-4bit-MLX",  # Non-vision model
+    }
+    provider = MLXProvider(config)
+    
+    with pytest.raises(UnsupportedFeatureError) as exc_info:
+        provider.generate(
+            prompt="What's in this image?",
+            files=[TEST_IMAGES[0]]
+        )
+    assert "vision" in str(exc_info.value)
+    assert "does not support vision inputs" in str(exc_info.value)
+
+def test_multiple_images_handling(mlx_provider):
+    """Test handling multiple images in one request."""
+    image_paths = TEST_IMAGES[:2]
+    prompt = "Compare these two images in detail."
+    
+    response = mlx_provider.generate(
+        prompt=prompt,
+        files=image_paths
+    )
+    
+    assert isinstance(response.content, str)
+    assert len(response.content) > 0
+    # Response should mention aspects of both images
+    assert any(word in response.content.lower() for word in ["first", "second", "both", "compare", "while"])
+
+def test_error_handling(mlx_provider):
+    """Test comprehensive error handling."""
+    # Test invalid image path
+    with pytest.raises(FileProcessingError):
+        mlx_provider.generate(
+            prompt="What's in this image?",
+            files=["nonexistent.jpg"]
+        )
+    
+    # Test invalid image data
+    with pytest.raises(ImageProcessingError):
+        mlx_provider.generate(
+            prompt="What's in this image?",
+            files=["tests/test_mlx_vision.py"]  # Using this test file as invalid image
+        )
+    
+    # Test memory error (mock large image)
+    large_image = Image.new('RGB', (100000, 100000))
+    with pytest.raises(MemoryError):
+        mlx_provider._process_image(MediaFactory.from_source(large_image))
+
+def test_async_generation(mlx_provider, test_images):
+    """Test async generation with images."""
+    import asyncio
+    
+    async def test_async():
+        img_path = test_images[0]
+        prompt = IMAGE_PROMPTS[img_path.name]
+        
+        # Test non-streaming async
+        response = await mlx_provider.generate_async(
+            prompt=prompt,
+            files=[str(img_path)]
+        )
+        assert isinstance(response.content, str)
+        assert len(response.content) > 0
+        
+        # Test streaming async
+        chunks = []
+        async for chunk in await mlx_provider.generate_async(
+            prompt=prompt,
+            files=[str(img_path)],
+            stream=True
+        ):
+            assert isinstance(chunk.content, str)
+            assert "time" in chunk.usage
+            chunks.append(chunk.content)
+        
+        complete_response = "".join(chunks)
+        assert len(complete_response) > 0
+    
+    asyncio.run(test_async())
 ```
 
 ## References
-- See pytest documentation: https://docs.pytest.org/
-- Reference the MLX Provider Implementation Guide: `docs/mlx/mlx_provider_implementation.md`
-- See `docs/mlx/mlx_usage_examples.md` for usage patterns to test
+- See `docs/mlx/vision-upgrade.md` for vision implementation details
+- See `docs/mlx/deepsearch-mlx-vlm.md` for MLX-VLM insights
+- See `tests/examples/` for test images
 
 ## Testing
 Run the tests with pytest:
 
 ```bash
 # Run all tests
-pytest -xvs tests/providers/test_mlx_provider.py
+pytest -xvs tests/test_mlx_vision.py
 
 # Run specific test
-pytest -xvs tests/providers/test_mlx_provider.py::test_mlx_text_generation
-``` 
+pytest -xvs tests/test_mlx_vision.py::test_image_preprocessing
+```
+
+## Success Criteria
+1. All tests pass on Apple Silicon hardware
+2. Image processing tests verify aspect ratio preservation
+3. Memory safety checks are properly tested
+4. Error handling tests cover all failure modes
+5. Vision capabilities are properly verified 

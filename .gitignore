@@ -103,3 +103,5 @@ investigate/
 .cursor/
 .cursor/**/*
 *.mdc
+
+.venv-abstractllm
