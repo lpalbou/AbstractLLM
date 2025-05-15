@@ -1,0 +1,10 @@
+[
+  {
+    "model": "paligemma",
+    "model_path": "mlx-community/paligemma-3b-mix-448-8bit",
+    "prompt": "Describe this image in detail.",
+    "response": "In this image there are two cats sleeping on the sofa. There are two remotes on the sofa.",
+    "total_time": 4.236225128173828,
+    "generation_time": 4.236076831817627
+  }
+]

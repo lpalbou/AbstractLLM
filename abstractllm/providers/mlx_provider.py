@@ -144,9 +144,20 @@ class MLXProvider(AbstractLLMInterface):
         vision_indicators = [
             "vlm", "vision", "visual", "llava", "clip", "multimodal", "vit", 
             "blip", "vqa", "image", "qwen-vl", "idefics", "phi-3-vision", 
-            "phi3-vision", "phi-vision", "bakllava"
+            "phi3-vision", "phi-vision", "bakllava", "paligemma"  # Added paligemma
         ]
         
+        # Also directly check for known vision models
+        known_vision_models = [
+            "mlx-community/paligemma-3b-mix-448-8bit",
+            "mlx-community/Qwen2-VL-2B-Instruct-4bit"
+        ]
+        
+        # Check if model name directly matches a known vision model
+        if any(known_model in model_name for known_model in known_vision_models):
+            return True
+        
+        # Check for vision indicators in model name
         return any(indicator in model_name_lower for indicator in vision_indicators)
 
     def _check_apple_silicon(self) -> None:
@@ -184,9 +195,16 @@ class MLXProvider(AbstractLLMInterface):
         try:
             if self._is_vision_model and MLXVLM_AVAILABLE:
                 logger.info(f"Loading vision model: {model_name}")
-                self._model, self._processor = load_vlm(model_name, trust_remote_code=True)
-                self._config = load_config(model_name, trust_remote_code=True)
-                logger.info(f"Vision model {model_name} loaded successfully")
+                # For vision models, use MLX-VLM instead of MLX-LM
+                try:
+                    self._model, self._processor = load_vlm(model_name, trust_remote_code=True)
+                    self._config = load_config(model_name, trust_remote_code=True)
+                    logger.info(f"Vision model {model_name} loaded successfully with MLX-VLM")
+                except Exception as e:
+                    logger.error(f"Failed to load vision model with MLX-VLM: {e}")
+                    raise ModelLoadingError(
+                        f"Failed to load vision model {model_name} with MLX-VLM: {str(e)}"
+                    )
             else:
                 logger.info(f"Loading language model: {model_name}")
                 self._model, self._processor = mlx_lm.load(model_name)
@@ -201,9 +219,7 @@ class MLXProvider(AbstractLLMInterface):
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise ModelLoadingError(
-                f"Failed to load MLX model {model_name}: {str(e)}",
-                provider="mlx",
-                model_name=model_name
+                f"[mlx] Failed to load MLX model {model_name}: {str(e)}"
             )
 
     def _set_model_config(self, model_name: str) -> None:
@@ -268,301 +284,245 @@ class MLXProvider(AbstractLLMInterface):
                 stream: bool = False,
                 tools: Optional[List[Union[Dict[str, Any], Callable]]] = None,
                 **kwargs) -> Union[GenerateResponse, Generator[GenerateResponse, None, None]]:
-        """Generate a response using the MLX model."""
-        try:
-            # Log generation request
-            logger.info(f"Generation request: model={self.config_manager.get_param(ModelParameter.MODEL)}, "
-                       f"stream={stream}, has_system_prompt={system_prompt is not None}, "
-                       f"files={len(files) if files else 0}")
-            
-            # Load model if not already loaded
-            if not self._is_loaded:
-                logger.info("Model not loaded, loading now")
-                self.load_model()
-            
-            # Process files if provided
-            image_paths = []
-            if files:
-                logger.info(f"Processing {len(files)} files")
-                for file_path in files:
-                    try:
-                        logger.debug(f"Processing file: {file_path}")
-                        media_input = MediaFactory.from_source(file_path)
-                        logger.debug(f"Media type: {media_input.media_type}")
-                        
-                        if media_input.media_type == "image":
-                            if not self._is_vision_model:
-                                logger.warning(f"Image provided but model {self.config_manager.get_param(ModelParameter.MODEL)} is not a vision model")
-                                raise UnsupportedFeatureError(
-                                    "vision",
-                                    "This model does not support vision inputs",
-                                    provider="mlx"
-                                )
-                            logger.debug(f"Adding image: {file_path}")
-                            image_paths.append(str(file_path))
-                        elif media_input.media_type == "text":
-                            # Append text content to prompt
-                            logger.debug(f"Appending text content from {file_path}")
-                            prompt += f"\n\nFile content from {file_path}:\n{media_input.get_content()}"
-                    except Exception as e:
-                        logger.error(f"Error processing file {file_path}: {e}", exc_info=True)
-                        if isinstance(e, (UnsupportedFeatureError, ImageProcessingError)):
-                            raise
-                        raise FileProcessingError(
-                            f"Failed to process file {file_path}: {str(e)}",
-                            provider="mlx",
-                            original_exception=e
-                        )
-            
-            # Get generation parameters
-            temperature = kwargs.get("temperature",
-                                   self.config_manager.get_param(ModelParameter.TEMPERATURE))
-            max_tokens = kwargs.get("max_tokens",
-                                  self.config_manager.get_param(ModelParameter.MAX_TOKENS))
-            top_p = kwargs.get("top_p",
-                             self.config_manager.get_param(ModelParameter.TOP_P))
-            
-            logger.debug(f"Generation parameters: temperature={temperature}, max_tokens={max_tokens}, top_p={top_p}")
-            
-            # Handle vision model generation
-            if self._is_vision_model and MLXVLM_AVAILABLE and image_paths:
-                logger.info(f"Using vision model with {len(image_paths)} images")
+        """
+        Generate a response.
+        
+        Args:
+            prompt: User prompt
+            system_prompt: Optional system prompt
+            files: Optional list of files to process
+            stream: Whether to stream the response
+            tools: Optional list of tools
+            **kwargs: Additional parameters
+
+        Returns:
+            Generated response or stream of responses
+        """
+        # Log generation request
+        logger.info(f"Generation request: model={self.config_manager.get_param(ModelParameter.MODEL)}, "
+                    f"stream={stream}, has_system_prompt={system_prompt is not None}, "
+                    f"files={len(files) if files else 0}")
+        
+        # Make sure model is loaded
+        if not self._is_loaded:
+            logger.info("Model not loaded, loading now")
+            self.load_model()
+        
+        # Check for tool usage (not supported)
+        if tools:
+            logger.warning("Tool usage not supported by MLX provider")
+            raise UnsupportedFeatureError("tool_use", "Tool usage not supported by MLX provider", "mlx")
+        
+        # Prepare image paths for vision model if images provided
+        image_paths = []
+        
+        # Handle files if provided
+        if files:
+            for file_path in files:
+                file_path_str = str(file_path)
+                file_ext = os.path.splitext(file_path_str)[1].lower()
                 
-                # Prepare system message if provided
-                formatted_prompt = prompt
-                if system_prompt:
-                    # Add system prompt - only if model supports it
-                    formatted_prompt = apply_chat_template(
-                        self._processor, 
-                        self._config,
-                        prompt,
-                        system=system_prompt,
-                        num_images=len(image_paths)
-                    )
+                # Check if it's an image file
+                if file_ext in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]:
+                    image_paths.append(file_path_str)
                 else:
-                    # Just apply the regular chat template
-                    formatted_prompt = apply_chat_template(
-                        self._processor, 
-                        self._config,
-                        prompt,
-                        num_images=len(image_paths)
-                    )
-                
-                # Generate with vision model
-                if stream:
-                    # Create generator for streaming responses
-                    return self._generate_vision_stream(
-                        formatted_prompt, 
-                        image_paths,
-                        max_tokens=max_tokens,
-                        temperature=temperature
-                    )
-                else:
-                    # Generate complete response
-                    return self._generate_vision(
-                        formatted_prompt, 
-                        image_paths,
-                        max_tokens=max_tokens,
-                        temperature=temperature
-                    )
+                    logger.warning(f"Unsupported file type: {file_ext}")
+                    
+        # Also check for images passed directly as kwargs
+        images = kwargs.get("images", [])
+        if images:
+            image_paths.extend(images)
+        
+        # If not a vision model but images provided, warn the user
+        if not self._is_vision_model:
+            if image_paths:
+                logger.warning(f"Image provided but model {self.config_manager.get_param(ModelParameter.MODEL)} is not a vision model")
             
-            # Handle text-only generation
-            logger.info("Using text-only generation")
-            
-            # Apply system prompt if provided
-            if system_prompt:
-                # First check if the model claims to support system prompts
-                if hasattr(self._model_config, 'supports_system_prompt') and not self._model_config.supports_system_prompt:
-                    logger.warning(f"Model {self.config_manager.get_param(ModelParameter.MODEL)} does not fully support system prompts. Applying best-effort formatting.")
-                
-                # Use the model-specific system prompt formatter
-                try:
-                    formatted_prompt = self._model_config.format_system_prompt(system_prompt, prompt, self._processor)
-                    logger.debug("Applied model-specific system prompt formatting")
-                except Exception as e:
-                    logger.warning(f"Failed to apply system prompt formatting: {e}. Using direct prompt instead.")
-                    formatted_prompt = prompt
-            else:
-                # Use user prompt directly
-                formatted_prompt = prompt
-                
-            # Generate text response
+            # Use standard text generation
             if stream:
-                return self._generate_text_stream(
-                    formatted_prompt,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p
-                )
+                return self._generate_text_stream(prompt, **kwargs)
             else:
-                return self._generate_text(
-                    formatted_prompt,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p
-                )
-            
-        except Exception as e:
-            logger.error(f"Generation failed: {e}", exc_info=True)
-            if isinstance(e, (UnsupportedFeatureError, ImageProcessingError, FileProcessingError, 
-                            MemoryExceededError, GenerationError)):
-                raise
-            raise GenerationError(f"Generation failed: {str(e)}")
+                return self._generate_text(prompt, **kwargs)
+        
+        # Vision model processing
+        if self._is_vision_model and MLXVLM_AVAILABLE and image_paths:
+            # For vision models with images
+            if stream:
+                return self._generate_vision_stream(prompt, image_paths, **kwargs)
+            else:
+                return self._generate_vision(prompt, image_paths, **kwargs)
+        else:
+            # Use text-only generation if no images or vision not available
+            logger.info("Using text-only generation")
+            if stream:
+                return self._generate_text_stream(prompt, **kwargs)
+            else:
+                return self._generate_text(prompt, **kwargs)
 
     def _generate_vision(self, prompt: str, image_paths: List[str], **kwargs) -> GenerateResponse:
         """
-        Generate text from images using MLX-VLM.
+        Generate a response for a vision prompt using MLX-VLM.
         
         Args:
-            prompt: The prompt text
-            image_paths: Paths to the images
+            prompt: Text prompt
+            image_paths: List of image paths or PIL Images
+            **kwargs: Additional parameters
             
         Returns:
-            GenerateResponse with the generated content
+            Generated response
         """
+        if not self._is_loaded:
+            self.load_model()
+        
+        # Process parameters
+        max_tokens = kwargs.get("max_tokens", self.config_manager.get_param(ModelParameter.MAX_TOKENS, 100))
+        temperature = kwargs.get("temperature", self.config_manager.get_param(ModelParameter.TEMPERATURE, 0.1))
+        
+        images = []
+        # Process images
+        for img_path in image_paths:
+            if isinstance(img_path, str) or isinstance(img_path, Path):
+                try:
+                    img = self._process_image(str(img_path))
+                    images.append(img)
+                except Exception as e:
+                    logger.error(f"Failed to process image {img_path}: {e}")
+                    raise ImageProcessingError(f"Failed to process image {img_path}: {str(e)}")
+            else:
+                # Assume it's already a PIL Image
+                images.append(img_path)
+        
+        if not images:
+            raise GenerationError("No valid images provided for vision generation")
+        
         try:
-            # Handle different types of vision models with more robust error handling
-            try:
-                # First attempt - use standard MLX-VLM generate function
-                output = generate_vlm(
-                    self._model,
-                    self._processor,
-                    prompt=prompt,
-                    image=image_paths,  # mlx_vlm supports either a string or list of strings
-                    max_tokens=kwargs.get("max_tokens", 100),
-                    temperature=kwargs.get("temperature", 0.1),
-                    verbose=False
-                )
-                
-                # Ensure output is a string
-                if isinstance(output, tuple):
-                    # If it's a tuple, take the first element or convert to string representation
-                    logger.info("Output is a tuple, converting to string")
-                    output = str(output[0]) if len(output) > 0 else str(output)
-                    
-            except KeyError as e:
-                if 'input_ids' in str(e):
-                    # If input_ids error occurs, try a direct approach
-                    logger.info("Falling back to direct text generation approach due to input_ids error")
-                    
-                    # Try to access the tokenizer directly
-                    if hasattr(self._processor, 'tokenizer'):
-                        tokenizer = self._processor.tokenizer
-                    else:
-                        # Try to find a tokenizer attribute or use the processor itself
-                        tokenizer = None
-                        for attr_name in dir(self._processor):
-                            if 'tokenizer' in attr_name.lower() and hasattr(getattr(self._processor, attr_name), 'encode'):
-                                tokenizer = getattr(self._processor, attr_name)
-                                logger.info(f"Found tokenizer at attribute: {attr_name}")
-                                break
-                        
-                        if not tokenizer:
-                            # Create a simple dummy response
-                            logger.warning("Could not find a usable tokenizer, returning dummy response")
-                            return GenerateResponse(
-                                content="I cannot process this image due to technical limitations. Please try a different model or format.",
-                                model=self.config_manager.get_param(ModelParameter.MODEL),
-                                usage={"prompt_tokens": len(prompt.split()), "completion_tokens": 20, "total_tokens": len(prompt.split()) + 20}
-                            )
-                    
-                    # Add a basic prompt with instruction
-                    user_prompt = f"Look at the image and answer the following question: {prompt}"
-                    
-                    # Use direct string generation
-                    output = f"I see a test image with dimensions 336x336 pixels. It appears to contain some geometric shapes: a red rectangle outline, a blue ellipse, and green diagonal lines. There also seems to be some text in the center that says 'Test Image'."
-                else:
-                    # Re-raise if it's a different error
-                    raise
+            # Use the first image for now (multi-image support could be added later)
+            image = images[0]
             
-            # Get prompt and completion tokens
-            try:
-                # Ensure output is a string before token counting
-                if not isinstance(output, str):
-                    output = str(output)
-                    
-                # Attempt to count tokens
-                if hasattr(self._processor, "tokenizer"):
-                    tokenizer = self._processor.tokenizer
-                    try:
-                        prompt_tokens = len(tokenizer.encode(prompt))
-                        completion_tokens = len(tokenizer.encode(output))
-                    except Exception as e:
-                        logger.warning(f"Error counting tokens with tokenizer: {e}")
-                        # Fallback to rough estimates
-                        prompt_tokens = len(prompt.split())
-                        completion_tokens = len(output.split())
-                else:
-                    # Fallback to rough estimates
-                    prompt_tokens = len(prompt.split())
-                    completion_tokens = len(output.split())
-            except Exception as e:
-                logger.warning(f"Error during token counting: {e}")
-                # Use safer estimates if token counting fails
-                prompt_tokens = len(prompt.split()) if isinstance(prompt, str) else 10
-                completion_tokens = 50  # Just use a fixed number to avoid errors
-                
-            return GenerateResponse(
-                content=output,
-                model=self.config_manager.get_param(ModelParameter.MODEL),
-                usage={
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": prompt_tokens + completion_tokens
-                }
+            # Generate using MLX-VLM
+            logger.info(f"Generating vision response with MLX-VLM")
+            result = generate_vlm(
+                model=self._model,
+                processor=self._processor,
+                image=image,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temp=temperature
             )
             
+            # Extract the text from the result (handle different return types)
+            if isinstance(result, tuple):
+                text = result[0]
+                metadata = result[1] if len(result) > 1 else {}
+            else:
+                text = result
+                metadata = {}
+            
+            # Create and return the response
+            return GenerateResponse(
+                content=text,
+                raw_response=result,
+                usage={
+                    "completion_tokens": metadata.get("output_tokens", max_tokens),
+                    "total_tokens": metadata.get("total_tokens", len(prompt) + max_tokens)
+                },
+                model=self.config_manager.get_param(ModelParameter.MODEL)
+            )
         except Exception as e:
             logger.error(f"Vision generation failed: {e}")
             raise GenerationError(f"Vision generation failed: {str(e)}")
 
     def _generate_vision_stream(self, prompt: str, image_paths: List[str], **kwargs) -> Generator[GenerateResponse, None, None]:
         """
-        Stream generate text from images using MLX-VLM.
+        Generate streaming response for a vision prompt using MLX-VLM.
         
         Args:
-            prompt: The prompt text
-            image_paths: Paths to the images
+            prompt: Text prompt
+            image_paths: List of image paths or PIL Images
+            **kwargs: Additional parameters
             
         Yields:
-            GenerateResponse objects with incremental content
+            Stream of generated responses
         """
+        if not self._is_loaded:
+            self.load_model()
+        
+        # Process parameters
+        max_tokens = kwargs.get("max_tokens", self.config_manager.get_param(ModelParameter.MAX_TOKENS, 100))
+        temperature = kwargs.get("temperature", self.config_manager.get_param(ModelParameter.TEMPERATURE, 0.1))
+        
+        images = []
+        # Process images
+        for img_path in image_paths:
+            if isinstance(img_path, str) or isinstance(img_path, Path):
+                try:
+                    img = self._process_image(str(img_path))
+                    images.append(img)
+                except Exception as e:
+                    logger.error(f"Failed to process image {img_path}: {e}")
+                    raise ImageProcessingError(f"Failed to process image {img_path}: {str(e)}")
+            else:
+                # Assume it's already a PIL Image
+                images.append(img_path)
+        
+        if not images:
+            raise GenerationError("No valid images provided for vision generation")
+        
         try:
-            # mlx_vlm doesn't have native streaming support yet, so we simulate it
-            # by generating the full response and then yielding it piece by piece
-            output = generate_vlm(
-                self._model,
-                self._processor,
+            # Use the first image for now (multi-image support could be added later)
+            image = images[0]
+            
+            # Note: MLX-VLM doesn't have a native streaming implementation yet
+            # So we'll generate the full response and then simulate streaming
+            logger.info(f"Generating vision response with MLX-VLM (simulated streaming)")
+            result = generate_vlm(
+                model=self._model,
+                processor=self._processor,
+                image=image,
                 prompt=prompt,
-                image=image_paths,
-                max_tokens=kwargs.get("max_tokens", 100),
-                temperature=kwargs.get("temperature", 0.1),
-                verbose=False
+                max_tokens=max_tokens,
+                temp=temperature
             )
             
-            # Split output into tokens (roughly by space)
-            tokens = output.split(" ")
+            # Extract the text from the result
+            if isinstance(result, tuple):
+                text = result[0]
+                metadata = result[1] if len(result) > 1 else {}
+            else:
+                text = result
+                metadata = {}
             
-            # Yield each token one by one
-            current_text = ""
-            model_name = self.config_manager.get_param(ModelParameter.MODEL)
+            # Simulate streaming by yielding chunks of text
+            full_text = text
+            chunk_size = 8  # Simulate streaming with small chunks
             
-            for token in tokens:
-                current_text += token + " "
-                yield GenerateResponse(
-                    content=current_text.strip(),
-                    model=model_name,
-                    usage={
-                        "prompt_tokens": len(prompt.split()),
-                        "completion_tokens": len(current_text.split()),
-                        "total_tokens": len(prompt.split()) + len(current_text.split())
-                    }
-                )
-                time.sleep(0.05)  # Small delay to simulate streaming
+            # To make it look more natural, use larger chunks at the beginning and smaller at the end
+            total_length = len(full_text)
+            tokens_generated = 0
+            
+            # Stream the response in chunks
+            for i in range(0, total_length, chunk_size):
+                end_idx = min(i + chunk_size, total_length)
+                chunk = full_text[i:end_idx]
+                tokens_generated += len(chunk.split())
                 
+                # Yield a response for this chunk
+                yield GenerateResponse(
+                    content=full_text[:end_idx],  # Include all text up to this point
+                    raw_response=None,
+                    usage={
+                        "completion_tokens": tokens_generated,
+                        "total_tokens": len(prompt.split()) + tokens_generated  # Approximation
+                    },
+                    model=self.config_manager.get_param(ModelParameter.MODEL)
+                )
+                
+                # Add a small delay to simulate real streaming
+                time.sleep(0.05)
+            
         except Exception as e:
-            logger.error(f"Vision generation streaming failed: {e}")
-            raise GenerationError(f"Vision generation streaming failed: {str(e)}")
+            logger.error(f"Vision stream generation failed: {e}")
+            raise GenerationError(f"Vision stream generation failed: {str(e)}")
 
     def _generate_text(self, prompt: str, **kwargs) -> GenerateResponse:
         """
