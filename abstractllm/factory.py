@@ -15,11 +15,15 @@ from abstractllm.providers.registry import get_provider_class, get_available_pro
 logger = logging.getLogger("abstractllm.factory")
 
 # Provider mapping (kept for backward compatibility)
+# Note: All of these providers should also be registered via the registry system
+# in registry.py's initialize_registry function. This mapping is kept for 
+# backward compatibility and fallback purposes only.
 _PROVIDERS = {
     "openai": "abstractllm.providers.openai.OpenAIProvider",
     "anthropic": "abstractllm.providers.anthropic.AnthropicProvider",
     "ollama": "abstractllm.providers.ollama.OllamaProvider",
     "huggingface": "abstractllm.providers.huggingface.HuggingFaceProvider",
+    "mlx": "abstractllm.providers.mlx_provider.MLXProvider",
 }
 
 # Providers that always require API keys

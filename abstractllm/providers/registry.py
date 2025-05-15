@@ -24,6 +24,22 @@ def register_provider(name: str, module_path: str, class_name: str) -> None:
     }
     logger.debug(f"Registered provider: {name}")
 
+def initialize_registry() -> None:
+    """
+    Initialize the provider registry with built-in providers.
+    This is called automatically when the registry module is imported.
+    """
+    # Register built-in providers that don't require additional dependencies
+    register_provider("openai", "abstractllm.providers.openai", "OpenAIProvider")
+    register_provider("anthropic", "abstractllm.providers.anthropic", "AnthropicProvider")
+    register_provider("ollama", "abstractllm.providers.ollama", "OllamaProvider")
+    register_provider("huggingface", "abstractllm.providers.huggingface", "HuggingFaceProvider")
+    
+    # Try to register MLX if the system supports it
+    register_mlx_provider()
+    
+    logger.debug(f"Provider registry initialized with providers: {list(_PROVIDER_REGISTRY.keys())}")
+
 def register_mlx_provider() -> bool:
     """
     Register the MLX provider if available.
@@ -76,9 +92,7 @@ def register_mlx_provider() -> bool:
         register_provider("mlx", "abstractllm.providers.mlx_provider", "MLXProvider")
         logger.info("MLX provider successfully registered for Apple Silicon")
         
-        # Register model factory module as well to ensure it's loaded
-        # This is not strictly necessary but makes the dependency clear
-        importlib.import_module("abstractllm.providers.mlx_model_factory")
+        # No need to import the factory module since we've simplified the provider
         if has_vision:
             logger.info("MLX Vision support is available")
         return True
@@ -133,4 +147,7 @@ def get_available_providers() -> Dict[str, Dict[str, Any]]:
     Returns:
         Dictionary of provider names to their registry entries
     """
-    return _PROVIDER_REGISTRY.copy() 
+    return _PROVIDER_REGISTRY.copy()
+
+# Initialize the registry when the module is imported
+initialize_registry() 

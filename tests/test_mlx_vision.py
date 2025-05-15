@@ -19,59 +19,49 @@ from abstractllm.exceptions import (
 from abstractllm import create_llm
 from abstractllm.media import MediaFactory
 from abstractllm.enums import ModelParameter
-from abstractllm.providers.mlx_provider import MLXProvider, _load_vision_model_data
+from abstractllm.providers.mlx_provider import MLXProvider
 import psutil
 from typing import List, Dict, Any
 from abstractllm.media.image import ImageInput
 
-# Load the vision model data for testing
-VISION_MODEL_DATA = _load_vision_model_data()
-
 # Comprehensive list of MLX vision models for testing
-MLX_VISION_MODELS = []
-for family_id, family_data in VISION_MODEL_DATA["model_families"].items():
-    MLX_VISION_MODELS.extend(family_data["models"])
-
-# If no models were loaded from JSON, use a fallback list
-if not MLX_VISION_MODELS:
-    MLX_VISION_MODELS = [
-        # LLaVA models
-        "mlx-community/llava-v1.6-mistral-7b-mlx",
-        "mlx-community/llava-v1.6-34b-mlx",
-        "mlx-community/llava-v1.5-7b-mlx",
-        "mlx-community/llava-v1.5-13b-mlx",
-        
-        # Qwen-VL models
-        "mlx-community/qwen-vl-chat-mlx",
-        "mlx-community/qwen2-vl-7b-4bit",
-        "mlx-community/qwen2.5-vl-7b-4bit",
-        
-        # Gemma models
-        "mlx-community/gemma-3-4b-it-4bit",
-        "mlx-community/gemma-vision-7b-4bit",
-        
-        # LLaMA Scout models
-        "mlx-community/Llama-4-Scout-17B-16E-Instruct-4bit",
-        "mlx-community/Llama-4-Scout-17B-8E-Instruct-4bit",
-        
-        # Idefics models
-        "mlx-community/idefics2-8b-16k-instruct-4bit",
-        
-        # PaliGemma models
-        "mlx-community/paligemma-3b-4bit",
-        
-        # DeepSeek VL models
-        "mlx-community/deepseek-vl-7b-chat-4bit",
-        
-        # Florence models
-        "mlx-community/florence-2-7b-4bit",
-        
-        # SmoLVLM models
-        "mlx-community/smolvlm-1.7b-4bit",
-        
-        # Kimi VL models
-        "mlx-community/kimi-vl-7b-4bit"
-    ]
+MLX_VISION_MODELS = [
+    # LLaVA models
+    "mlx-community/llava-v1.6-mistral-7b-mlx",
+    "mlx-community/llava-v1.6-34b-mlx",
+    "mlx-community/llava-v1.5-7b-mlx",
+    "mlx-community/llava-v1.5-13b-mlx",
+    
+    # Qwen-VL models
+    "mlx-community/qwen-vl-chat-mlx",
+    "mlx-community/qwen2-vl-7b-4bit",
+    "mlx-community/qwen2.5-vl-7b-4bit",
+    
+    # Gemma models
+    "mlx-community/gemma-3-4b-it-4bit",
+    "mlx-community/gemma-vision-7b-4bit",
+    
+    # Idefics models
+    "mlx-community/idefics3-8b-4bit",
+    
+    # PaliGemma models
+    "mlx-community/paligemma-3b-4bit",
+    
+    # DeepSeek VL models
+    "mlx-community/deepseek-vl-7b-chat-4bit",
+    
+    # Florence models
+    "mlx-community/florence-2-7b-4bit",
+    
+    # SmoLVLM models
+    "mlx-community/smolvlm-1.7b-4bit",
+    
+    # Phi-3 Vision models
+    "mlx-community/phi-3-vision-128k-instruct",
+    
+    # Pixtral models
+    "mlx-community/pixtral-4bit"
+]
 
 # Test image paths - use actual files that exist
 TEST_IMAGE_PATHS = [

@@ -11,8 +11,7 @@ from PIL import Image
 # Configure logging with DEBUG level
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
 logger = logging.getLogger("test_mlx_vision")
-# Enable debug logging for model factory and provider
-logging.getLogger("abstractllm.providers.mlx_model_factory").setLevel(logging.DEBUG)
+# Enable debug logging for provider
 logging.getLogger("abstractllm.providers.mlx_provider").setLevel(logging.DEBUG)
 
 # Import AbstractLLM

@@ -21,10 +21,8 @@ __all__ = [
 # "OpenAIProvider",
 # "AnthropicProvider", 
 # "OllamaProvider",
-# "HuggingFaceProvider", 
+# "HuggingFaceProvider",
+# "MLXProvider"
 
-# Register MLX provider if available
-from abstractllm.providers.registry import register_mlx_provider
-
-# Try to register the MLX provider
-register_mlx_provider() 
+# Note: All providers including MLX are now handled through the factory's
+# lazy loading mechanism. No special registration is needed here. 

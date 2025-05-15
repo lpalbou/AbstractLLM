@@ -5,9 +5,8 @@ Uses the simplest approach to tool calling with an interactive REPL.
 
 # Requirements
 - AbstractLLM: pip install abstractllm
-- MLX: pip install mlx mlx-lm
+- MLX: pip install mlx mlx-lm (for Apple Silicon only)
 - Tool support: pip install abstractllm[tools]
-- Apple Silicon Mac (M1/M2/M3 series) for MLX
 """
 
 import os
@@ -23,50 +22,8 @@ logging.basicConfig(level=logging.INFO,
 # Import abstractllm
 from abstractllm import create_llm
 from abstractllm.session import Session
-from abstractllm.providers.registry import register_provider, get_available_providers
 from abstractllm.factory import get_llm_providers
 from abstractllm.enums import ModelParameter
-
-# Register MLX provider
-def register_mlx_provider():
-    """Register the MLX provider if available."""
-    try:
-        # Check if MLX dependencies are available
-        import mlx.core
-        import mlx_lm
-        
-        # Check if running on Apple Silicon
-        import platform
-        is_macos = platform.system().lower() == "darwin" 
-        is_arm = platform.processor() == "arm"
-        if not (is_macos and is_arm):
-            print("MLX requires Apple Silicon. Current platform doesn't support MLX.")
-            return False
-        
-        # Direct import approach
-        try:
-            from abstractllm.providers.mlx_provider import MLXProvider
-            
-            # Register the provider directly
-            register_provider("mlx", "abstractllm.providers.mlx_provider", "MLXProvider")
-            print("MLX provider registered successfully.")
-
-            # Add MLX to the factory's _PROVIDERS dictionary directly
-            import abstractllm.factory
-            if "mlx" not in abstractllm.factory._PROVIDERS:
-                abstractllm.factory._PROVIDERS["mlx"] = "abstractllm.providers.mlx_provider.MLXProvider"
-                print("Added MLX to factory providers list.")
-
-            return True
-        except ImportError as e:
-            print(f"Could not import MLXProvider: {e}")
-            return False
-    except ImportError as e:
-        print(f"Failed to register MLX provider: {e}")
-        return False
-    except Exception as e:
-        print(f"Error registering MLX provider: {e}")
-        return False
 
 def read_file(file_path: str) -> str:
     """Read the contents of a file."""
@@ -78,20 +35,15 @@ def read_file(file_path: str) -> str:
 
 def create_provider():
     """Create an LLM provider based on available options."""
-    # Register MLX provider if not already registered
-    mlx_available = register_mlx_provider()
-    
     # List available providers
     providers_list = get_llm_providers()
-    registry = get_available_providers()
-    print(f"Factory providers: {', '.join(providers_list)}")
-    print(f"Registry providers: {', '.join(registry.keys())}")
+    print(f"Available providers: {', '.join(providers_list)}")
     
     providers_to_try = []
     
-    # Add MLX to the list if available
-    if mlx_available and "mlx" in providers_list:
-        # Use the Josiefied-Qwen3-8B model from MLX community
+    # Add MLX to the list if available in providers
+    if "mlx" in providers_list:
+        # Try MLX provider with a compatible model
         providers_to_try.append(("mlx", {
             ModelParameter.MODEL: "mlx-community/Josiefied-Qwen3-8B-abliterated-v1-6bit"
         }))

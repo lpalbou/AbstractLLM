@@ -27,7 +27,6 @@ try:
     from abstractllm import create_llm
     from abstractllm.enums import ModelParameter
     from abstractllm.providers.mlx_provider import MLXProvider
-    from abstractllm.providers.mlx_model_factory import MLXModelFactory
 except ImportError:
     print("Failed to import AbstractLLM. Make sure it's installed.")
     sys.exit(1)
@@ -119,8 +118,9 @@ class MLXRepl(cmd.Cmd):
         self.model_name = arg.strip()
         self.llm = None
         
-        # Clear any caches
-        MLXModelFactory.clear_cache()
+        # Clear LLM instance to force reloading with new model
+        if hasattr(MLXProvider, 'clear_model_cache'):
+            MLXProvider.clear_model_cache()
         
         # Update the model type
         provider = MLXProvider({"model": self.model_name})
@@ -261,8 +261,18 @@ class MLXRepl(cmd.Cmd):
             provider = MLXProvider({"model": self.model_name})
             self._model_type = provider._model_type if provider._is_vision_model else None
         
-        # Use the MLXModelFactory to get the config
-        return MLXModelFactory.get_model_config(self._model_type or "default")
+        # Use the MLXProvider's configuration directly
+        provider = MLXProvider({"model": self.model_name})
+        if hasattr(provider, "_get_model_config"):
+            return provider._get_model_config()
+        else:
+            # Fallback default configuration
+            return {
+                "image_size": (336, 336),  # Default for most vision models
+                "prompt_format": "<image>\n{prompt}",
+                "mean": [0.5, 0.5, 0.5],
+                "std": [0.5, 0.5, 0.5]
+            }
     
     def do_create_test_image(self, arg):
         """Create a test image with appropriate dimensions for the current model."""
@@ -473,7 +483,11 @@ class MLXRepl(cmd.Cmd):
         print(f"Model type: {model_type}")
         
         if is_vision_model:
-            config = MLXModelFactory.get_model_config(model_type)
+            # Get model config directly from provider
+            config = provider._get_model_config() if hasattr(provider, "_get_model_config") else {
+                "image_size": (336, 336),  # Default size
+                "prompt_format": "<image>\n{prompt}"
+            }
             print(f"Target image size: {config['image_size']}")
             print(f"Prompt format: {config['prompt_format']}")
 
