@@ -156,6 +156,34 @@ class PhiConfig(MLXModelConfig):
     bos_tokens = ["<s>"]
 
 
+class PaliGemmaConfig(MLXModelConfig):
+    """Configuration for PaliGemma vision models."""
+    
+    name = "paligemma"
+    eos_tokens = ["</s>"]
+    bos_tokens = ["<s>"]
+    supports_vision = True
+    
+    @classmethod
+    def format_system_prompt(cls, system_prompt: str, user_prompt: str, processor) -> str:
+        """Format system and user prompts for PaliGemma."""
+        # PaliGemma expects image tokens at the beginning
+        if "<image>" not in user_prompt:
+            user_prompt = "<image> " + user_prompt
+            
+        if system_prompt:
+            return f"System: {system_prompt}\n\nUser: {user_prompt}"
+        return user_prompt
+    
+    @classmethod
+    def apply_to_tokenizer(cls, tokenizer):
+        """Apply PaliGemma-specific configuration to tokenizer."""
+        # PaliGemmaProcessor doesn't support add_eos_token
+        # We've already added a dummy method in MLXProvider
+        # Just skip this without error
+        pass
+
+
 class CodeModelConfig(MLXModelConfig):
     """Configuration for code generation models (SQLCoder, etc.)."""
     
@@ -196,6 +224,9 @@ class ModelConfigFactory:
         
         # Phi family
         "phi": PhiConfig,
+        
+        # Vision models
+        "paligemma": PaliGemmaConfig,
         
         # Code models
         "sqlcoder": CodeModelConfig,

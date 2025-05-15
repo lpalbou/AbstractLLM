@@ -30,7 +30,6 @@ from abstractllm.exceptions import (
 from abstractllm.providers.mlx_model_configs import ModelConfigFactory, MLXModelConfig
 from abstractllm.media.factory import MediaFactory
 from abstractllm.providers.tensor_type_patch import apply_all_patches as apply_tensor_patches
-from abstractllm.providers.mlx_vision_patch import apply_patches as apply_vision_patches
 
 # Set up logging
 logger = logging.getLogger("abstractllm.providers.mlx_provider")
@@ -92,8 +91,6 @@ class MLXProvider(AbstractLLMInterface):
         
         # Apply tensor type and vision patches
         apply_tensor_patches()
-        if MLXVLM_AVAILABLE:
-            apply_vision_patches()
         
         # Check if running on Apple Silicon
         self._check_apple_silicon()
@@ -213,6 +210,17 @@ class MLXProvider(AbstractLLMInterface):
             
             self._is_loaded = True
             
+            # Fix processor if needed (immediately after loading)
+            if self._processor is not None:
+                if hasattr(self._processor, 'patch_size') and self._processor.patch_size is None:
+                    self._processor.patch_size = 14
+                    logger.info("Fixed missing patch_size in processor after loading")
+                
+                if hasattr(self._processor, 'image_processor'):
+                    if hasattr(self._processor.image_processor, 'patch_size') and self._processor.image_processor.patch_size is None:
+                        self._processor.image_processor.patch_size = 14
+                        logger.info("Fixed missing patch_size in image_processor after loading")
+            
             # Set up model config
             self._set_model_config(model_name)
             
@@ -235,46 +243,149 @@ class MLXProvider(AbstractLLMInterface):
         # Apply the configuration to the tokenizer
         if self._processor is not None:
             try:
+                # Check if the processor is a PaliGemmaProcessor or similar that doesn't have add_eos_token
+                has_add_eos_token = hasattr(self._processor, 'add_eos_token')
+                
+                # If this is a PaliGemma processor, create a dummy add_eos_token that does nothing
+                # This avoids the warning when the model config tries to add EOS token
+                if not has_add_eos_token and 'paligemma' in model_name.lower():
+                    def dummy_add_eos_token(token):
+                        logger.debug(f"Ignored request to add EOS token for PaliGemma processor: {token}")
+                        return
+                    
+                    # Add the dummy method to suppress warnings
+                    self._processor.add_eos_token = dummy_add_eos_token
+                    logger.debug("Added dummy add_eos_token method to PaliGemma processor")
+                
+                # Apply the model-specific configuration
                 self._model_config.apply_to_tokenizer(self._processor)
                 logger.info(f"Successfully applied model-specific configuration for {model_name}")
             except Exception as e:
                 logger.warning(f"Failed to fully apply model configuration: {e}. Some features may not work correctly.")
 
-    def _process_image(self, image_path: str) -> Image.Image:
+    def _process_image(self, image_input: Union[str, Path, Any]) -> Image.Image:
         """
         Process an image for vision models.
         
+        This method handles both file paths and PIL Image objects, performs
+        automatic resizing if needed, and ensures all processing happens in
+        memory without creating temporary files.
+        
         Args:
-            image_path: Path to the image file
+            image_input: Path to image file, PIL Image, or image-like object
             
         Returns:
-            Processed PIL image
+            Processed PIL image ready for model input
         """
         try:
-            # Load image using PIL
-            img = Image.open(image_path)
+            # Import PIL.Image at the beginning to avoid reference issues
+            from PIL import Image
+            
+            # Handle different input types
+            if isinstance(image_input, str) or isinstance(image_input, Path):
+                # It's a file path
+                img = Image.open(str(image_input))
+            elif hasattr(image_input, 'mode') and hasattr(image_input, 'size'):
+                # It's already a PIL Image
+                img = image_input
+            else:
+                # Try to handle other image-like objects (numpy arrays, etc.)
+                try:
+                    import numpy as np
+                    if isinstance(image_input, np.ndarray):
+                        img = Image.fromarray(image_input)
+                    else:
+                        raise ImageProcessingError(f"Unsupported image type: {type(image_input)}", provider="mlx")
+                except ImportError:
+                    raise ImageProcessingError("NumPy required for array-based image processing", provider="mlx")
             
             # Convert to RGB if needed
             if img.mode != "RGB":
                 img = img.convert("RGB")
             
-            # Additional check to handle missing patch_size in processor
+            # Auto-resize if needed - most vision models expect specific dimensions
+            if self._processor is not None and hasattr(self._processor, 'image_processor'):
+                # Get target size from processor if available
+                target_size = None
+                
+                # PaliGemma and some other models use different ways to specify size
+                if hasattr(self._processor.image_processor, 'size'):
+                    processor_size = self._processor.image_processor.size
+                    # Handle dict case (e.g., {"height": 448, "width": 448})
+                    if isinstance(processor_size, dict) and "height" in processor_size and "width" in processor_size:
+                        target_size = (processor_size["width"], processor_size["height"])
+                    # Handle tuple/list case
+                    elif isinstance(processor_size, (tuple, list)) and len(processor_size) == 2:
+                        target_size = processor_size
+                    # Handle int case
+                    elif isinstance(processor_size, int):
+                        target_size = (processor_size, processor_size)
+                    else:
+                        logger.warning(f"Unrecognized size format: {processor_size}. Skipping resize.")
+                
+                # Some processors use crop_size instead
+                elif hasattr(self._processor.image_processor, 'crop_size'):
+                    processor_size = self._processor.image_processor.crop_size
+                    if isinstance(processor_size, (tuple, list)) and len(processor_size) == 2:
+                        target_size = processor_size
+                    elif isinstance(processor_size, int):
+                        target_size = (processor_size, processor_size)
+                
+                # If we found a target size, resize the image
+                if target_size:
+                    # Only resize if current size doesn't match
+                    if img.size != target_size:
+                        logger.debug(f"Resizing image from {img.size} to {target_size}")
+                        img = img.resize(target_size, Image.LANCZOS)
+            
+            # Fix processor if needed
             if self._processor is not None:
                 # Fix patch_size if missing
                 if hasattr(self._processor, 'patch_size') and self._processor.patch_size is None:
-                    logger.info("Fixing missing patch_size in processor")
-                    self._processor.patch_size = 14  # Standard patch size for most vision models
+                    self._processor.patch_size = 14  # Standard patch size for CLIP-like models
+                    logger.info("Fixed missing patch_size in processor")
                 
                 # Also check image_processor if it exists
                 if hasattr(self._processor, 'image_processor'):
                     if hasattr(self._processor.image_processor, 'patch_size') and self._processor.image_processor.patch_size is None:
-                        logger.info("Fixing missing patch_size in image_processor")
                         self._processor.image_processor.patch_size = 14
+                        logger.info("Fixed missing patch_size in image_processor")
+                
+                # Make sure we can handle PIL image objects directly
+                if hasattr(self._processor, 'process_images'):
+                    original_process_images = self._processor.process_images
+                    
+                    def patched_process_images(images, **kwargs):
+                        """Ensures image processing can handle PIL images directly."""
+                        try:
+                            return original_process_images(images, **kwargs)
+                        except Exception as e:
+                            logger.warning(f"Error in original process_images: {e}. Trying alternate approach.")
+                            # Try to convert the image to RGB if it's not already
+                            try:
+                                if isinstance(images, list):
+                                    processed_images = []
+                                    for img in images:
+                                        if hasattr(img, 'convert'):
+                                            img = img.convert('RGB')
+                                        processed_images.append(img)
+                                    return original_process_images(processed_images, **kwargs)
+                                elif hasattr(images, 'convert'):
+                                    images = images.convert('RGB')
+                                    return original_process_images(images, **kwargs)
+                            except Exception as inner_e:
+                                logger.error(f"Failed to process image in alternate way: {inner_e}")
+                                raise
+                    
+                    # Apply the fix to process_images
+                    if hasattr(self._processor, 'process_images'):
+                        self._processor.process_images = patched_process_images
+                        logger.info("Fixed processor.process_images to handle PIL images directly")
             
             return img
             
         except Exception as e:
-            logger.error(f"Failed to process image {image_path}: {e}")
+            logger.error(f"Failed to process image {image_input}: {e}")
             raise ImageProcessingError(f"Failed to process image: {str(e)}", provider="mlx")
 
     def generate(self,
@@ -365,7 +476,7 @@ class MLXProvider(AbstractLLMInterface):
         
         Args:
             prompt: Text prompt
-            image_paths: List of image paths or PIL Images
+            image_paths: List of image paths, PIL Images, or image-like objects
             **kwargs: Additional parameters
             
         Returns:
@@ -381,16 +492,14 @@ class MLXProvider(AbstractLLMInterface):
         images = []
         # Process images
         for img_path in image_paths:
-            if isinstance(img_path, str) or isinstance(img_path, Path):
-                try:
-                    img = self._process_image(str(img_path))
-                    images.append(img)
-                except Exception as e:
-                    logger.error(f"Failed to process image {img_path}: {e}")
-                    raise ImageProcessingError(f"Failed to process image {img_path}: {str(e)}")
-            else:
-                # Assume it's already a PIL Image
-                images.append(img_path)
+            try:
+                # Process the image using our enhanced _process_image method
+                # This handles both file paths and PIL Images
+                img = self._process_image(img_path)
+                images.append(img)
+            except Exception as e:
+                logger.error(f"Failed to process image {img_path}: {e}")
+                raise ImageProcessingError(f"Failed to process image: {str(e)}")
         
         if not images:
             raise GenerationError("No valid images provided for vision generation")
@@ -398,6 +507,13 @@ class MLXProvider(AbstractLLMInterface):
         try:
             # Use the first image for now (multi-image support could be added later)
             image = images[0]
+            
+            # Add image token to prompt if not already present
+            # This prevents the warning from PaliGemmaProcessor
+            if "<image>" not in prompt:
+                # For most MLX vision models, image token goes at the beginning
+                prompt = "<image> " + prompt
+                logger.debug(f"Added <image> token to prompt: {prompt}")
             
             # Generate using MLX-VLM
             logger.info(f"Generating vision response with MLX-VLM")
@@ -436,9 +552,13 @@ class MLXProvider(AbstractLLMInterface):
         """
         Generate streaming response for a vision prompt using MLX-VLM.
         
+        Note: True token-by-token streaming is not available in MLX-VLM yet.
+        This method generates the full response first and then simulates streaming
+        by chunking the response and yielding with small delays.
+        
         Args:
             prompt: Text prompt
-            image_paths: List of image paths or PIL Images
+            image_paths: List of image paths, PIL Images, or image-like objects
             **kwargs: Additional parameters
             
         Yields:
@@ -454,16 +574,14 @@ class MLXProvider(AbstractLLMInterface):
         images = []
         # Process images
         for img_path in image_paths:
-            if isinstance(img_path, str) or isinstance(img_path, Path):
-                try:
-                    img = self._process_image(str(img_path))
-                    images.append(img)
-                except Exception as e:
-                    logger.error(f"Failed to process image {img_path}: {e}")
-                    raise ImageProcessingError(f"Failed to process image {img_path}: {str(e)}")
-            else:
-                # Assume it's already a PIL Image
-                images.append(img_path)
+            try:
+                # Process the image using our enhanced _process_image method
+                # This handles both file paths and PIL Images
+                img = self._process_image(img_path)
+                images.append(img)
+            except Exception as e:
+                logger.error(f"Failed to process image {img_path}: {e}")
+                raise ImageProcessingError(f"Failed to process image: {str(e)}")
         
         if not images:
             raise GenerationError("No valid images provided for vision generation")
@@ -472,8 +590,15 @@ class MLXProvider(AbstractLLMInterface):
             # Use the first image for now (multi-image support could be added later)
             image = images[0]
             
-            # Note: MLX-VLM doesn't have a native streaming implementation yet
-            # So we'll generate the full response and then simulate streaming
+            # Add image token to prompt if not already present
+            # This prevents the warning from PaliGemmaProcessor
+            if "<image>" not in prompt:
+                # For most MLX vision models, image token goes at the beginning
+                prompt = "<image> " + prompt
+                logger.debug(f"Added <image> token to prompt: {prompt}")
+            
+            # MLX-VLM doesn't have a native streaming implementation yet
+            # So we generate the full response first and then simulate streaming
             logger.info(f"Generating vision response with MLX-VLM (simulated streaming)")
             result = generate_vlm(
                 model=self._model,
