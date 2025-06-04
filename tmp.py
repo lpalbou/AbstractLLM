@@ -54,49 +54,11 @@ class VerboseSession(Session):
         
         return result
 
-def read_file(file_path: str, should_read_entire_file: bool = True, start_line_one_indexed: int = 1, end_line_one_indexed_inclusive: int = None) -> str:
-    """
-    Read the contents of a file.
-    
-    Args:
-        file_path: Path to the file to read
-        should_read_entire_file: Whether to read the entire file (default: True)
-        start_line_one_indexed: Starting line number (1-indexed, default: 1)
-        end_line_one_indexed_inclusive: Ending line number (1-indexed, inclusive, default: None for end of file)
-    
-    Returns:
-        File contents or error message
-    """
+def read_file(file_path: str) -> str:
+    """Read the contents of a file."""
     try:
         with open(file_path, 'r') as f:
-            if should_read_entire_file:
-                return f.read()
-            else:
-                # Read specific line range
-                lines = f.readlines()
-                
-                # Convert to 0-indexed for Python
-                start_idx = max(0, start_line_one_indexed - 1)
-                
-                if end_line_one_indexed_inclusive is None:
-                    end_idx = len(lines)
-                else:
-                    end_idx = min(len(lines), end_line_one_indexed_inclusive)
-                
-                # Extract the requested lines
-                selected_lines = lines[start_idx:end_idx]
-                
-                # Add line numbers for clarity
-                result_lines = []
-                for i, line in enumerate(selected_lines, start=start_line_one_indexed):
-                    result_lines.append(f"{i:4d}: {line.rstrip()}")
-                
-                return "\n".join(result_lines)
-                
-    except FileNotFoundError:
-        return f"Error: File not found: {file_path}"
-    except PermissionError:
-        return f"Error: Permission denied reading file: {file_path}"
+            return f.read()
     except Exception as e:
         return f"Error reading file: {str(e)}"
 
@@ -195,7 +157,8 @@ def main():
     # Create session with the provider and tool function
     # Use our enhanced VerboseSession for better tool logging
     session = VerboseSession(
-        system_prompt="You are a helpful assistant that can execute tools (such as read_file) to gain further information and help resolve the user prompt. When you execute a tool, you gain additional insights that help you better understand the context and decide what to do next before answering the user prompt.",
+        system_prompt="You are a helpful assistant that can read files when needed. "
+                     "If you need to see a file's contents, use the read_file tool.",
         provider=provider,
         tools=[read_file]  # Function is automatically registered
     )

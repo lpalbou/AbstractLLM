@@ -1,0 +1,200 @@
+{
+  "mlx_results": [
+    {
+      "provider": "mlx",
+      "success": false,
+      "response_time": 1.1423380374908447,
+      "error": "Text generation failed: MLXModelConfig.get_generation_params() got multiple values for argument 'temperature'",
+      "tool_calls_made": [],
+      "content_preview": null
+    },
+    {
+      "provider": "mlx",
+      "success": false,
+      "response_time": 4.264730930328369,
+      "error": "Text generation failed: MLXModelConfig.get_generation_params() got multiple values for argument 'temperature'",
+      "tool_calls_made": [],
+      "content_preview": null
+    },
+    {
+      "provider": "mlx",
+      "success": false,
+      "response_time": 2.610645055770874,
+      "error": "Text generation failed: MLXModelConfig.get_generation_params() got multiple values for argument 'temperature'",
+      "tool_calls_made": [],
+      "content_preview": null
+    },
+    {
+      "provider": "mlx",
+      "success": false,
+      "response_time": 0.9767379760742188,
+      "error": "Text generation failed: MLXModelConfig.get_generation_params() got multiple values for argument 'temperature'",
+      "tool_calls_made": [],
+      "content_preview": null
+    },
+    {
+      "provider": "mlx",
+      "success": false,
+      "response_time": 0.9269671440124512,
+      "error": "Text generation failed: MLXModelConfig.get_generation_params() got multiple values for argument 'temperature'",
+      "tool_calls_made": [],
+      "content_preview": null
+    }
+  ],
+  "ollama_results": [
+    {
+      "provider": "ollama",
+      "success": true,
+      "response_time": 35.10789895057678,
+      "response_type": "ToolCallRequest",
+      "has_content": true,
+      "content_preview": "",
+      "tool_calls_made": [
+        "calculate_math",
+        "calculate_math",
+        "calculate_math",
+        "calculate_math",
+        "calculate_math"
+      ],
+      "error": null
+    },
+    {
+      "provider": "ollama",
+      "success": true,
+      "response_time": 19.9757239818573,
+      "response_type": "ToolCallRequest",
+      "has_content": true,
+      "content_preview": "",
+      "tool_calls_made": [
+        "read_file",
+        "read_file",
+        "read_file",
+        "read_file",
+        "read_file"
+      ],
+      "error": null
+    },
+    {
+      "provider": "ollama",
+      "success": true,
+      "response_time": 10.108015060424805,
+      "response_type": "ToolCallRequest",
+      "has_content": true,
+      "content_preview": "",
+      "tool_calls_made": [
+        "get_current_time",
+        "get_current_time",
+        "get_current_time",
+        "get_current_time",
+        "get_current_time"
+      ],
+      "error": null
+    },
+    {
+      "provider": "ollama",
+      "success": true,
+      "response_time": 24.948132753372192,
+      "response_type": "ToolCallRequest",
+      "has_content": true,
+      "content_preview": "",
+      "tool_calls_made": [
+        "read_file",
+        "calculate_math",
+        "get_current_time",
+        "read_file",
+        "calculate_math",
+        "get_current_time",
+        "read_file",
+        "calculate_math",
+        "get_current_time",
+        "read_file",
+        "calculate_math",
+        "get_current_time",
+        "read_file",
+        "calculate_math",
+        "get_current_time"
+      ],
+      "error": null
+    },
+    {
+      "provider": "ollama",
+      "success": true,
+      "response_time": 2.9079532623291016,
+      "response_type": "str",
+      "has_content": false,
+      "content_preview": "<think>\nOkay, the user asked me to just say hello and introduce myself. Let me check the tools provided to see if I need to use any of them.\n\nLooking at the tools: there's read_file, calculate_math, a...",
+      "tool_calls_made": [],
+      "error": null
+    }
+  ],
+  "comparisons": [
+    {
+      "test_case": "Simple Tool Call",
+      "both_successful": false,
+      "response_time_diff": 33.96556091308594,
+      "tool_calls_match": false,
+      "content_length_diff": 0,
+      "issues": [
+        "MLX failed: Text generation failed: MLXModelConfig.get_generation_params() got multiple values for argument 'temperature'",
+        "Tool calls differ: MLX=[], Ollama=['calculate_math', 'calculate_math', 'calculate_math', 'calculate_math', 'calculate_math']",
+        "MLX didn't use expected tool: calculate_math"
+      ]
+    },
+    {
+      "test_case": "File Reading",
+      "both_successful": false,
+      "response_time_diff": 15.71099305152893,
+      "tool_calls_match": false,
+      "content_length_diff": 0,
+      "issues": [
+        "MLX failed: Text generation failed: MLXModelConfig.get_generation_params() got multiple values for argument 'temperature'",
+        "Tool calls differ: MLX=[], Ollama=['read_file', 'read_file', 'read_file', 'read_file', 'read_file']",
+        "MLX didn't use expected tool: read_file"
+      ]
+    },
+    {
+      "test_case": "Current Time",
+      "both_successful": false,
+      "response_time_diff": 7.497370004653931,
+      "tool_calls_match": false,
+      "content_length_diff": 0,
+      "issues": [
+        "MLX failed: Text generation failed: MLXModelConfig.get_generation_params() got multiple values for argument 'temperature'",
+        "Tool calls differ: MLX=[], Ollama=['get_current_time', 'get_current_time', 'get_current_time', 'get_current_time', 'get_current_time']",
+        "MLX didn't use expected tool: get_current_time"
+      ]
+    },
+    {
+      "test_case": "Multi-step Task",
+      "both_successful": false,
+      "response_time_diff": 23.971394777297974,
+      "tool_calls_match": false,
+      "content_length_diff": 0,
+      "issues": [
+        "MLX failed: Text generation failed: MLXModelConfig.get_generation_params() got multiple values for argument 'temperature'",
+        "Tool calls differ: MLX=[], Ollama=['read_file', 'calculate_math', 'get_current_time', 'read_file', 'calculate_math', 'get_current_time', 'read_file', 'calculate_math', 'get_current_time', 'read_file', 'calculate_math', 'get_current_time', 'read_file', 'calculate_math', 'get_current_time']",
+        "MLX didn't use expected tool: read_file",
+        "MLX didn't use expected tool: calculate_math",
+        "MLX didn't use expected tool: get_current_time",
+        "Unexpected tool usage when none was expected"
+      ]
+    },
+    {
+      "test_case": "No Tool Needed",
+      "both_successful": false,
+      "response_time_diff": 1.9809861183166504,
+      "tool_calls_match": true,
+      "content_length_diff": 0,
+      "issues": [
+        "MLX failed: Text generation failed: MLXModelConfig.get_generation_params() got multiple values for argument 'temperature'"
+      ]
+    }
+  ],
+  "summary": {
+    "total_tests": 5,
+    "successful_tests": 0,
+    "identical_behavior": 0,
+    "tool_calling_issues": 4,
+    "performance_issues": 3
+  }
+}

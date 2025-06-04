@@ -284,6 +284,12 @@ class OllamaProvider(AbstractLLMInterface):
         # Add system prompt if provided
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
+        elif processed_tools:
+            # If tools are provided but no system prompt, add a tool-encouraging system prompt
+            messages.append({
+                "role": "system", 
+                "content": "You are a helpful assistant. When you need to access information or perform operations, use the available tools."
+            })
             
         # Prepare user message content
         images = []

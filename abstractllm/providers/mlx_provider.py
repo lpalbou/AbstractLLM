@@ -11,6 +11,10 @@ from pathlib import Path
 import os
 import base64
 from typing import Dict, List, Any, Optional, Generator, Union, Callable, AsyncGenerator, Tuple
+import copy
+import io
+import numpy as np
+import re
 
 # Import the interface class
 from abstractllm.interface import (
@@ -30,6 +34,7 @@ from abstractllm.exceptions import (
 from abstractllm.providers.mlx_model_configs import ModelConfigFactory, MLXModelConfig
 from abstractllm.media.factory import MediaFactory
 from abstractllm.providers.tensor_type_patch import apply_all_patches as apply_tensor_patches
+from abstractllm.tools.types import ToolCallRequest, ToolCall
 
 # Set up logging
 logger = logging.getLogger("abstractllm.providers.mlx_provider")
@@ -43,6 +48,7 @@ try:
     # Import MLX core libraries
     import mlx.core as mx
     import mlx_lm
+    from mlx_lm import load as load_model, generate as generate_text, stream_generate
     MLX_AVAILABLE = True
     MLXLM_AVAILABLE = True
     
@@ -140,22 +146,48 @@ class MLXProvider(AbstractLLMInterface):
         # Look for vision indicators in model name
         vision_indicators = [
             "vlm", "vision", "visual", "llava", "clip", "multimodal", "vit", 
-            "blip", "vqa", "image", "qwen-vl", "idefics", "phi-3-vision", 
-            "phi3-vision", "phi-vision", "bakllava", "paligemma"  # Added paligemma
+            "blip", "vqa", "image", "qwen-vl", "qwen2-vl", "qwen2.5-vl", "qwen2-5-vl", "idefics", "phi-vision",
+            "phi3-vision", "llava", "fuyu", "clip", "florence", "paligemma", "gemini-vision",
+            "pixtral", "molmo"
         ]
+        
+        # Check for vision indicators in the model name
+        has_vision_indicator = any(indicator in model_name_lower for indicator in vision_indicators)
         
         # Also directly check for known vision models
         known_vision_models = [
             "mlx-community/paligemma-3b-mix-448-8bit",
-            "mlx-community/Qwen2-VL-2B-Instruct-4bit"
+            "mlx-community/Qwen2-VL-2B-Instruct-4bit",
+            "mlx-community/Qwen2-VL-7B-Instruct-4bit",
+            "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
+            "mlx-community/Qwen2.5-VL-7B-Instruct-4bit",
+            "mlx-community/Qwen2.5-VL-32B-Instruct-4bit",
+            "mlx-community/Qwen2.5-VL-72B-Instruct-4bit",
+            "mlx-community/qwen-vl-chat",
+            "Qwen/Qwen-VL-Chat",
+            "Qwen/Qwen2-VL-2B-Instruct",
+            "Qwen/Qwen2-VL-7B-Instruct",
+            "Qwen/Qwen2.5-VL-3B-Instruct",
+            "Qwen/Qwen2.5-VL-7B-Instruct",
+            "Qwen/Qwen2.5-VL-32B-Instruct",
+            "Qwen/Qwen2.5-VL-72B-Instruct"
         ]
         
-        # Check if model name directly matches a known vision model
-        if any(known_model in model_name for known_model in known_vision_models):
-            return True
+        # Check if model name is in known vision models list
+        is_known_vision_model = any(known_model in model_name for known_model in known_vision_models)
         
-        # Check for vision indicators in model name
-        return any(indicator in model_name_lower for indicator in vision_indicators)
+        # Additionally check if the model name directly contains Qwen2.5-VL
+        contains_qwen25_vl = "qwen2.5-vl" in model_name_lower or "qwen2-5-vl" in model_name_lower
+        
+        # Return True if any of the checks pass
+        is_vision_model = has_vision_indicator or is_known_vision_model or contains_qwen25_vl
+        
+        if is_vision_model:
+            logger.info(f"Model {model_name} identified as a vision model")
+        else:
+            logger.info(f"Model {model_name} does not appear to be a vision model")
+            
+        return is_vision_model
 
     def _check_apple_silicon(self) -> None:
         """Check if running on Apple Silicon."""
@@ -195,198 +227,209 @@ class MLXProvider(AbstractLLMInterface):
                 # For vision models, use MLX-VLM instead of MLX-LM
                 try:
                     self._model, self._processor = load_vlm(model_name, trust_remote_code=True)
-                    self._config = load_config(model_name, trust_remote_code=True)
-                    logger.info(f"Vision model {model_name} loaded successfully with MLX-VLM")
+                    self._config = ModelConfigFactory.create_config(model_name)
                 except Exception as e:
-                    logger.error(f"Failed to load vision model with MLX-VLM: {e}")
-                    raise ModelLoadingError(
-                        f"Failed to load vision model {model_name} with MLX-VLM: {str(e)}"
-                    )
+                    # Fallback for older versions without load_vlm or using renamed function
+                    logger.warning(f"Error using standard load_vlm: {e}. Trying alternate loading method...")
+                    try:
+                        # Import function from mlx_vlm directly
+                        from mlx_vlm import load
+                        self._model, self._processor = load(model_name, trust_remote_code=True)
+                        logger.info("Successfully loaded model with alternate method")
+                        self._config = ModelConfigFactory.create_config(model_name)
+                    except ImportError:
+                        logger.error("Could not import mlx_vlm. Please install it with 'pip install mlx-vlm'")
+                        raise
+                    except Exception as e2:
+                        logger.error(f"Failed to load vision model with alternate method: {e2}")
+                        raise
             else:
-                logger.info(f"Loading language model: {model_name}")
-                self._model, self._processor = mlx_lm.load(model_name)
-                self._config = {}  # Language models don't need special config
-                logger.info(f"Language model {model_name} loaded successfully")
-            
-            self._is_loaded = True
-            
-            # Fix processor if needed (immediately after loading)
-            if self._processor is not None:
-                if hasattr(self._processor, 'patch_size') and self._processor.patch_size is None:
-                    self._processor.patch_size = 14
-                    logger.info("Fixed missing patch_size in processor after loading")
+                # For text-only models, use MLX-LM
+                logger.info(f"Loading text model: {model_name}")
                 
-                if hasattr(self._processor, 'image_processor'):
-                    if hasattr(self._processor.image_processor, 'patch_size') and self._processor.image_processor.patch_size is None:
-                        self._processor.image_processor.patch_size = 14
-                        logger.info("Fixed missing patch_size in image_processor after loading")
+                # Load model with simplest possible call
+                # MLX-LM load function only requires the model path
+                self._model, self._processor = load_model(model_name)
+                
+                # Get model config from factory
+                self._config = ModelConfigFactory.create_config(model_name)
+                
+            # Set flags to indicate model is loaded
+            self._is_loaded = True
+            self._model_id = model_name
+            logger.info(f"Successfully loaded model: {model_name}")
             
-            # Set up model config
-            self._set_model_config(model_name)
+            # Check if model supports chat completion
+            self._supports_chat = self._check_chat_support()
             
         except Exception as e:
-            logger.error(f"Failed to load model: {e}")
-            raise ModelLoadingError(
-                f"[mlx] Failed to load MLX model {model_name}: {str(e)}"
-            )
-
-    def _set_model_config(self, model_name: str) -> None:
+            logger.error(f"Failed to load model {model_name}: {e}")
+            raise ModelLoadingError(f"Failed to load model {model_name}: {str(e)}")
+            
+    def _check_chat_support(self) -> bool:
         """
-        Set up the model-specific configuration.
+        Check if the model supports chat completion.
         
-        Args:
-            model_name: The name of the model
+        Returns:
+            True if the model supports chat completion, False otherwise.
         """
-        # Get the appropriate configuration for this model
-        self._model_config = ModelConfigFactory.get_for_model(model_name)
+        if self._config is None:
+            self._config = ModelConfigFactory.create_config(self.config_manager.get_param(ModelParameter.MODEL))
+            
+        # If model has a chat template or specific chat format, it supports chat
+        chat_indicators = [
+            "chat",
+            "instruct",
+            "conversation"
+        ]
         
-        # Apply the configuration to the tokenizer
-        if self._processor is not None:
-            try:
-                # Check if the processor is a PaliGemmaProcessor or similar that doesn't have add_eos_token
-                has_add_eos_token = hasattr(self._processor, 'add_eos_token')
+        model_name = self.config_manager.get_param(ModelParameter.MODEL).lower()
+        
+        # Check for chat indicators in model name
+        for indicator in chat_indicators:
+            if indicator in model_name:
+                logger.debug(f"Model {model_name} supports chat based on name")
+                return True
                 
-                # If this is a PaliGemma processor, create a dummy add_eos_token that does nothing
-                # This avoids the warning when the model config tries to add EOS token
-                if not has_add_eos_token and 'paligemma' in model_name.lower():
-                    def dummy_add_eos_token(token):
-                        logger.debug(f"Ignored request to add EOS token for PaliGemma processor: {token}")
-                        return
-                    
-                    # Add the dummy method to suppress warnings
-                    self._processor.add_eos_token = dummy_add_eos_token
-                    logger.debug("Added dummy add_eos_token method to PaliGemma processor")
-                
-                # Apply the model-specific configuration
-                self._model_config.apply_to_tokenizer(self._processor)
-                logger.info(f"Successfully applied model-specific configuration for {model_name}")
-            except Exception as e:
-                logger.warning(f"Failed to fully apply model configuration: {e}. Some features may not work correctly.")
+        # Check if processor has chat template
+        has_chat_template = (
+            hasattr(self._processor, "apply_chat_template") or
+            hasattr(self._processor, "tokenizer") and hasattr(self._processor.tokenizer, "apply_chat_template")
+        )
+        
+        if has_chat_template:
+            logger.debug(f"Model {model_name} supports chat based on chat template")
+            return True
+            
+        # Check if config has format_chat_prompt method
+        if hasattr(self._config, "format_system_prompt"):
+            logger.debug(f"Model {model_name} supports chat based on config")
+            return True
+            
+        logger.debug(f"Model {model_name} does not appear to support chat")
+        return False
 
     def _process_image(self, image_input: Union[str, Path, Any]) -> Image.Image:
         """
-        Process an image for vision models.
-        
-        This method handles both file paths and PIL Image objects, performs
-        automatic resizing if needed, and ensures all processing happens in
-        memory without creating temporary files.
+        Process an image from various input types.
         
         Args:
-            image_input: Path to image file, PIL Image, or image-like object
+            image_input: Path to an image, PIL Image object, or a numpy array
             
         Returns:
-            Processed PIL image ready for model input
+            Processed PIL Image
         """
         try:
-            # Import PIL.Image at the beginning to avoid reference issues
             from PIL import Image
+            import numpy as np
             
-            # Handle different input types
-            if isinstance(image_input, str) or isinstance(image_input, Path):
-                # It's a file path
-                img = Image.open(str(image_input))
-            elif hasattr(image_input, 'mode') and hasattr(image_input, 'size'):
-                # It's already a PIL Image
-                img = image_input
+            # Case 1: image_input is a string path
+            if isinstance(image_input, (str, Path)):
+                # Handle data URLs
+                if isinstance(image_input, str) and image_input.startswith("data:image"):
+                    header, encoded = image_input.split(",", 1)
+                    image_data = base64.b64decode(encoded)
+                    image = Image.open(io.BytesIO(image_data))
+                    logger.debug(f"Loaded image from data URL, format: {image.format}, size: {image.size}")
+                else:
+                    # Handle direct file paths
+                    try:
+                        image = Image.open(image_input)
+                        logger.debug(f"Loaded image from path: {image_input}, format: {image.format}, size: {image.size}")
+                    except FileNotFoundError:
+                        logger.error(f"Image file not found: {image_input}")
+                        raise
+                    except Exception as e:
+                        logger.error(f"Error opening image from path {image_input}: {e}")
+                        raise
+                        
+            # Case 2: image_input is already a PIL Image
+            elif isinstance(image_input, Image.Image):
+                image = image_input
+                logger.debug(f"Using provided PIL Image, format: {getattr(image, 'format', 'N/A')}, size: {image.size}")
+                
+            # Case 3: image_input is a numpy array
+            elif hasattr(image_input, "shape") and hasattr(image_input, "dtype"):
+                # Convert numpy array to PIL Image
+                if hasattr(image_input, "squeeze"):
+                    # Handle PyTorch and TF tensors
+                    try:
+                        if "torch" in str(type(image_input)):
+                            # Convert PyTorch tensor to numpy
+                            import torch
+                            if hasattr(image_input, "detach"):
+                                image_input = image_input.detach().cpu().numpy()
+                            else:
+                                image_input = image_input.cpu().numpy()
+                        image_input = image_input.squeeze()
+                    except Exception as e:
+                        logger.warning(f"Error squeezing tensor: {e}, continuing with original")
+                
+                # Create PIL image from numpy array
+                if len(image_input.shape) == 3 and image_input.shape[0] in (1, 3, 4):
+                    # Handle CHW format (convert to HWC)
+                    image_input = np.transpose(image_input, (1, 2, 0))
+                
+                # Convert to 8-bit for PIL
+                if image_input.dtype != np.uint8 and np.issubdtype(image_input.dtype, np.floating):
+                    image_input = (image_input * 255).astype(np.uint8)
+                
+                image = Image.fromarray(image_input)
+                logger.debug(f"Converted array to PIL Image, size: {image.size}")
+                
             else:
-                # Try to handle other image-like objects (numpy arrays, etc.)
-                try:
-                    import numpy as np
-                    if isinstance(image_input, np.ndarray):
-                        img = Image.fromarray(image_input)
-                    else:
-                        raise ImageProcessingError(f"Unsupported image type: {type(image_input)}", provider="mlx")
-                except ImportError:
-                    raise ImageProcessingError("NumPy required for array-based image processing", provider="mlx")
-            
-            # Convert to RGB if needed
-            if img.mode != "RGB":
-                img = img.convert("RGB")
+                raise ValueError(f"Unsupported image type: {type(image_input)}")
             
             # Auto-resize if needed - most vision models expect specific dimensions
             if self._processor is not None and hasattr(self._processor, 'image_processor'):
                 # Get target size from processor if available
                 target_size = None
                 
+                # Check if we have a model config that specifies preferred image size
+                if self._config and hasattr(self._config, 'get_image_size'):
+                    try:
+                        model_name = self.config_manager.get_param(ModelParameter.MODEL)
+                        target_size = self._config.get_image_size(self._processor, model_name)
+                        logger.debug(f"Using model-specific target size from config: {target_size}")
+                    except Exception as e:
+                        logger.debug(f"Could not get model-specific target size: {e}")
+                
                 # PaliGemma and some other models use different ways to specify size
-                if hasattr(self._processor.image_processor, 'size'):
+                if target_size is None and hasattr(self._processor.image_processor, 'size'):
                     processor_size = self._processor.image_processor.size
                     # Handle dict case (e.g., {"height": 448, "width": 448})
                     if isinstance(processor_size, dict) and "height" in processor_size and "width" in processor_size:
                         target_size = (processor_size["width"], processor_size["height"])
-                    # Handle tuple/list case
-                    elif isinstance(processor_size, (tuple, list)) and len(processor_size) == 2:
-                        target_size = processor_size
-                    # Handle int case
+                    # Handle int case (e.g., 448)
                     elif isinstance(processor_size, int):
                         target_size = (processor_size, processor_size)
-                    else:
-                        logger.warning(f"Unrecognized size format: {processor_size}. Skipping resize.")
+                    logger.debug(f"Using processor-defined target size: {target_size}")
                 
-                # Some processors use crop_size instead
-                elif hasattr(self._processor.image_processor, 'crop_size'):
-                    processor_size = self._processor.image_processor.crop_size
-                    if isinstance(processor_size, (tuple, list)) and len(processor_size) == 2:
-                        target_size = processor_size
-                    elif isinstance(processor_size, int):
-                        target_size = (processor_size, processor_size)
-                
-                # If we found a target size, resize the image
+                # If we determined a target size, resize the image
                 if target_size:
-                    # Only resize if current size doesn't match
-                    if img.size != target_size:
-                        logger.debug(f"Resizing image from {img.size} to {target_size}")
-                        img = img.resize(target_size, Image.LANCZOS)
-            
-            # Fix processor if needed
-            if self._processor is not None:
-                # Fix patch_size if missing
-                if hasattr(self._processor, 'patch_size') and self._processor.patch_size is None:
-                    self._processor.patch_size = 14  # Standard patch size for CLIP-like models
-                    logger.info("Fixed missing patch_size in processor")
-                
-                # Also check image_processor if it exists
-                if hasattr(self._processor, 'image_processor'):
-                    if hasattr(self._processor.image_processor, 'patch_size') and self._processor.image_processor.patch_size is None:
-                        self._processor.image_processor.patch_size = 14
-                        logger.info("Fixed missing patch_size in image_processor")
-                
-                # Make sure we can handle PIL image objects directly
-                if hasattr(self._processor, 'process_images'):
-                    original_process_images = self._processor.process_images
+                    # Only resize if the current size is very different
+                    current_w, current_h = image.size
+                    target_w, target_h = target_size
                     
-                    def patched_process_images(images, **kwargs):
-                        """Ensures image processing can handle PIL images directly."""
-                        try:
-                            return original_process_images(images, **kwargs)
-                        except Exception as e:
-                            logger.warning(f"Error in original process_images: {e}. Trying alternate approach.")
-                            # Try to convert the image to RGB if it's not already
-                            try:
-                                if isinstance(images, list):
-                                    processed_images = []
-                                    for img in images:
-                                        if hasattr(img, 'convert'):
-                                            img = img.convert('RGB')
-                                        processed_images.append(img)
-                                    return original_process_images(processed_images, **kwargs)
-                                elif hasattr(images, 'convert'):
-                                    images = images.convert('RGB')
-                                    return original_process_images(images, **kwargs)
-                            except Exception as inner_e:
-                                logger.error(f"Failed to process image in alternate way: {inner_e}")
-                                raise
+                    # Check if resizing is needed (if dimensions differ by more than 20%)
+                    resize_needed = (abs(current_w - target_w) / target_w > 0.2 or 
+                                    abs(current_h - target_h) / target_h > 0.2)
                     
-                    # Apply the fix to process_images
-                    if hasattr(self._processor, 'process_images'):
-                        self._processor.process_images = patched_process_images
-                        logger.info("Fixed processor.process_images to handle PIL images directly")
+                    if resize_needed:
+                        logger.info(f"Resizing image from {image.size} to {target_size}")
+                        # Use LANCZOS for high-quality downsampling
+                        image = image.resize(target_size, Image.LANCZOS)
             
-            return img
+            # Ensure the image is in RGB mode (MLX models typically expect RGB)
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+                logger.debug(f"Converted image to RGB mode")
+            
+            return image
             
         except Exception as e:
-            logger.error(f"Failed to process image {image_input}: {e}")
-            raise ImageProcessingError(f"Failed to process image: {str(e)}", provider="mlx")
+            logger.error(f"Error processing image: {e}")
+            raise
 
     def generate(self,
                 prompt: str,
@@ -394,81 +437,48 @@ class MLXProvider(AbstractLLMInterface):
                 files: Optional[List[Union[str, Path]]] = None,
                 stream: bool = False,
                 tools: Optional[List[Union[Dict[str, Any], Callable]]] = None,
+                messages: Optional[List[Dict[str, Any]]] = None,
                 **kwargs) -> Union[GenerateResponse, Generator[GenerateResponse, None, None]]:
-        """
-        Generate a response.
+        """Generate a response using the MLX model with native tool calling support."""
         
-        Args:
-            prompt: User prompt
-            system_prompt: Optional system prompt
-            files: Optional list of files to process
-            stream: Whether to stream the response
-            tools: Optional list of tools
-            **kwargs: Additional parameters
-
-        Returns:
-            Generated response or stream of responses
-        """
-        # Log generation request
         logger.info(f"Generation request: model={self.config_manager.get_param(ModelParameter.MODEL)}, "
-                    f"stream={stream}, has_system_prompt={system_prompt is not None}, "
-                    f"files={len(files) if files else 0}")
+                   f"stream={stream}, has_system_prompt={system_prompt is not None}, files={len(files) if files else 0}")
         
-        # Make sure model is loaded
-        if not self._is_loaded:
-            logger.info("Model not loaded, loading now")
-            self.load_model()
-        
-        # Check for tool usage (not supported)
-        if tools:
-            logger.warning("Tool usage not supported by MLX provider")
-            raise UnsupportedFeatureError("tool_use", "Tool usage not supported by MLX provider", "mlx")
-        
-        # Prepare image paths for vision model if images provided
-        image_paths = []
-        
-        # Handle files if provided
-        if files:
-            for file_path in files:
-                file_path_str = str(file_path)
-                file_ext = os.path.splitext(file_path_str)[1].lower()
+        try:
+            # Check for vision model usage
+            if files and self._is_vision_model:
+                if tools:
+                    raise GenerationError("Vision models do not currently support tool calling")
                 
-                # Check if it's an image file
-                if file_ext in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]:
-                    image_paths.append(file_path_str)
+                # Process image files
+                image_paths = []
+                for file in files:
+                    if isinstance(file, (str, Path)):
+                        image_paths.append(str(file))
+                    else:
+                        # Assume it's already an image
+                        temp_path = f"/tmp/temp_image_{int(time.time())}.jpg"
+                        if hasattr(file, 'save'):
+                            file.save(temp_path)
+                            image_paths.append(temp_path)
+                        else:
+                            raise ValueError(f"Unsupported file type: {type(file)}")
+                
+                # Use vision generation
+                if stream:
+                    return self._generate_vision_stream(prompt, image_paths, **kwargs)
                 else:
-                    logger.warning(f"Unsupported file type: {file_ext}")
-                    
-        # Also check for images passed directly as kwargs
-        images = kwargs.get("images", [])
-        if images:
-            image_paths.extend(images)
-        
-        # If not a vision model but images provided, warn the user
-        if not self._is_vision_model:
-            if image_paths:
-                logger.warning(f"Image provided but model {self.config_manager.get_param(ModelParameter.MODEL)} is not a vision model")
+                    return self._generate_vision(prompt, image_paths, **kwargs)
             
-            # Use standard text generation
+            # Use standard text generation with proper tool calling
             if stream:
-                return self._generate_text_stream(prompt, **kwargs)
+                return self._generate_text_stream(prompt, system_prompt=system_prompt, tools=tools, messages=messages, **kwargs)
             else:
-                return self._generate_text(prompt, **kwargs)
-        
-        # Vision model processing
-        if self._is_vision_model and MLXVLM_AVAILABLE and image_paths:
-            # For vision models with images
-            if stream:
-                return self._generate_vision_stream(prompt, image_paths, **kwargs)
-            else:
-                return self._generate_vision(prompt, image_paths, **kwargs)
-        else:
-            # Use text-only generation if no images or vision not available
-            logger.info("Using text-only generation")
-            if stream:
-                return self._generate_text_stream(prompt, **kwargs)
-            else:
-                return self._generate_text(prompt, **kwargs)
+                return self._generate_text(prompt, system_prompt=system_prompt, tools=tools, messages=messages, **kwargs)
+                
+        except Exception as e:
+            logger.error(f"Generation failed: {e}")
+            raise
 
     def _generate_vision(self, prompt: str, image_paths: List[str], **kwargs) -> GenerateResponse:
         """
@@ -485,68 +495,166 @@ class MLXProvider(AbstractLLMInterface):
         if not self._is_loaded:
             self.load_model()
         
-        # Process parameters
-        max_tokens = kwargs.get("max_tokens", self.config_manager.get_param(ModelParameter.MAX_TOKENS, 100))
-        temperature = kwargs.get("temperature", self.config_manager.get_param(ModelParameter.TEMPERATURE, 0.1))
+        # Get parameters from config with kwargs override (do NOT modify config)
+        max_tokens = kwargs.get("max_tokens", self.config_manager.get_param(ModelParameter.MAX_TOKENS))
+        temperature = kwargs.get("temperature", self.config_manager.get_param(ModelParameter.TEMPERATURE))
         
         images = []
         # Process images
-        for img_path in image_paths:
-            try:
-                # Process the image using our enhanced _process_image method
-                # This handles both file paths and PIL Images
-                img = self._process_image(img_path)
-                images.append(img)
-            except Exception as e:
-                logger.error(f"Failed to process image {img_path}: {e}")
-                raise ImageProcessingError(f"Failed to process image: {str(e)}")
+        for image_path in image_paths:
+            if isinstance(image_path, str):
+                logger.debug(f"Loading image from path: {image_path}")
+                image = self._process_image(image_path)
+            else:
+                logger.debug("Processing image-like object")
+                image = self._process_image(image_path)
+            
+            if image is not None:
+                images.append(image)
         
         if not images:
-            raise GenerationError("No valid images provided for vision generation")
+            return GenerateResponse(text="Error: No valid images found")
+        
+        processor_kwargs = {}
+        stream = kwargs.get("stream", False)
         
         try:
-            # Use the first image for now (multi-image support could be added later)
-            image = images[0]
+            logger.info("Generating vision response with MLX-VLM")
             
-            # Add image token to prompt if not already present
-            # This prevents the warning from PaliGemmaProcessor
-            if "<image>" not in prompt:
-                # For most MLX vision models, image token goes at the beginning
-                prompt = "<image> " + prompt
-                logger.debug(f"Added <image> token to prompt: {prompt}")
+            # Determine if we should use conversation format
+            use_conversation = "qwen" in self._model_id.lower() and "<|im_start|>" in prompt
             
-            # Generate using MLX-VLM
-            logger.info(f"Generating vision response with MLX-VLM")
-            result = generate_vlm(
-                model=self._model,
-                processor=self._processor,
-                image=image,
-                prompt=prompt,
-                max_tokens=max_tokens,
-                temp=temperature
-            )
+            if use_conversation:
+                processor_kwargs["add_generation_prompt"] = True
+                # For Qwen models that use conversation format, we need to use chat template
+                try:
+                    # For Qwen models, try to use their chat template
+                    prompt = self._processor.apply_chat_template(
+                        [{"role": "user", "content": prompt}], 
+                        tokenize=False,
+                        add_generation_prompt=True
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to apply chat template: {e}")
             
-            # Extract the text from the result (handle different return types)
-            if isinstance(result, tuple):
-                text = result[0]
-                metadata = result[1] if len(result) > 1 else {}
-            else:
-                text = result
-                metadata = {}
+            # Set up generation parameters - generate_vlm expects specific parameter names
+            generate_kwargs = {
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "verbose": False
+            }
             
-            # Create and return the response
+            # Add any other valid generation parameters from kwargs
+            # Remove parameters that generate_vlm doesn't expect
+            for key, value in kwargs.items():
+                if key not in ["max_tokens", "temperature", "stream", "images"]:
+                    generate_kwargs[key] = value
+            
+            # Try multiple approaches to handle potential broadcasting errors
+            try:
+                # First approach - standard generation
+                # generate_vlm expects: model, processor, prompt, image (single), **kwargs
+                # Returns: (text, usage_stats)
+                result = generate_vlm(
+                    self._model,
+                    self._processor,
+                    prompt,
+                    image=images[0] if images else None,  # Use first image only
+                    **generate_kwargs
+                )
+                
+                # Handle return value - generate_vlm returns (text, usage_stats)
+                if isinstance(result, tuple) and len(result) == 2:
+                    output, usage_stats = result
+                else:
+                    # Fallback for older versions that might return just text
+                    output = result
+                    usage_stats = {}
+                    
+            except RuntimeError as e:
+                if "broadcast_shapes" in str(e):
+                    logger.warning(f"Broadcast error in standard generation: {e}. Trying alternative approach...")
+                    
+                    # Try with single image processing to avoid broadcasting issues
+                    try:
+                        # Special handling for Qwen models that have broadcasting issues
+                        if len(images) == 1:
+                            # Try with different tensor format
+                            try:
+                                # Use generate_vlm with corrected parameters
+                                result = generate_vlm(
+                                    self._model,
+                                    self._processor,
+                                    prompt,
+                                    image=images[0],
+                                    **generate_kwargs
+                                )
+                                
+                                # Handle return value
+                                if isinstance(result, tuple) and len(result) == 2:
+                                    output, usage_stats = result
+                                else:
+                                    output = result
+                                    usage_stats = {}
+                                    
+                            except Exception as inner_e:
+                                logger.warning(f"Alternative approach failed: {inner_e}. Trying one more approach...")
+                                
+                                # Try another approach with format conversion
+                                try:
+                                    # Create a temporary processor with image processor settings that work
+                                    temp_processor = copy.deepcopy(self._processor)
+                                    if hasattr(temp_processor, "image_processor"):
+                                        # Adjust image processor settings
+                                        temp_processor.image_processor.size = {"height": 336, "width": 336}
+                                    
+                                    # Use the temporary processor
+                                    result = generate_vlm(
+                                        self._model,
+                                        temp_processor,
+                                        prompt,
+                                        image=images[0],
+                                        **generate_kwargs
+                                    )
+                                    
+                                    # Handle return value
+                                    if isinstance(result, tuple) and len(result) == 2:
+                                        output, usage_stats = result
+                                    else:
+                                        output = result
+                                        usage_stats = {}
+                                        
+                                except Exception as e3:
+                                    logger.error(f"All approaches failed for vision generation: {e3}")
+                                    return GenerateResponse(text=f"Error generating vision response: {e3}")
+                        else:
+                            # For multiple images, try a different approach or return an error
+                            return GenerateResponse(text=f"Error: Multiple image processing with this model is not supported yet: {e}")
+                    except Exception as inner_e:
+                        logger.error(f"Alternative approach also failed: {inner_e}")
+                        return GenerateResponse(text=f"Error generating vision response: {inner_e}")
+                else:
+                    # Re-raise if it's not a broadcasting error
+                    logger.error(f"Error generating vision response: {e}")
+                    return GenerateResponse(text=f"Error generating vision response: {e}")
+                        
+            # Return the output as a GenerateResponse with proper usage stats
             return GenerateResponse(
-                content=text,
-                raw_response=result,
+                content=output,
+                model=self.config_manager.get_param(ModelParameter.MODEL),
                 usage={
-                    "completion_tokens": metadata.get("output_tokens", max_tokens),
-                    "total_tokens": metadata.get("total_tokens", len(prompt) + max_tokens)
-                },
-                model=self.config_manager.get_param(ModelParameter.MODEL)
+                    "prompt_tokens": usage_stats.get("input_tokens", 0),
+                    "completion_tokens": usage_stats.get("output_tokens", 0),
+                    "total_tokens": usage_stats.get("total_tokens", 0),
+                    "prompt_tps": usage_stats.get("prompt_tps", 0.0),
+                    "generation_tps": usage_stats.get("generation_tps", 0.0),
+                    "peak_memory": usage_stats.get("peak_memory", 0.0)
+                }
             )
+        
         except Exception as e:
-            logger.error(f"Vision generation failed: {e}")
-            raise GenerationError(f"Vision generation failed: {str(e)}")
+            logger.error(f"Error generating vision response: {e}")
+            return GenerateResponse(text=f"Error generating vision response: {e}")
 
     def _generate_vision_stream(self, prompt: str, image_paths: List[str], **kwargs) -> Generator[GenerateResponse, None, None]:
         """
@@ -567,9 +675,9 @@ class MLXProvider(AbstractLLMInterface):
         if not self._is_loaded:
             self.load_model()
         
-        # Process parameters
-        max_tokens = kwargs.get("max_tokens", self.config_manager.get_param(ModelParameter.MAX_TOKENS, 100))
-        temperature = kwargs.get("temperature", self.config_manager.get_param(ModelParameter.TEMPERATURE, 0.1))
+        # Get parameters from config with kwargs override (do NOT modify config)
+        max_tokens = kwargs.get("max_tokens", self.config_manager.get_param(ModelParameter.MAX_TOKENS))
+        temperature = kwargs.get("temperature", self.config_manager.get_param(ModelParameter.TEMPERATURE))
         
         images = []
         # Process images
@@ -601,21 +709,28 @@ class MLXProvider(AbstractLLMInterface):
             # So we generate the full response first and then simulate streaming
             logger.info(f"Generating vision response with MLX-VLM (simulated streaming)")
             result = generate_vlm(
-                model=self._model,
-                processor=self._processor,
+                self._model,
+                self._processor,
+                prompt,
                 image=image,
-                prompt=prompt,
                 max_tokens=max_tokens,
-                temp=temperature
+                temperature=temperature
             )
             
-            # Extract the text from the result
-            if isinstance(result, tuple):
-                text = result[0]
-                metadata = result[1] if len(result) > 1 else {}
+            # Handle return value - generate_vlm returns (text, usage_stats)
+            if isinstance(result, tuple) and len(result) == 2:
+                text, usage_stats = result
             else:
+                # Fallback for older versions that might return just text
                 text = result
-                metadata = {}
+                usage_stats = {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                    "prompt_tps": 0.0,
+                    "generation_tps": 0.0,
+                    "peak_memory": 0.0
+                }
             
             # Simulate streaming by yielding chunks of text
             full_text = text
@@ -634,12 +749,15 @@ class MLXProvider(AbstractLLMInterface):
                 # Yield a response for this chunk
                 yield GenerateResponse(
                     content=full_text[:end_idx],  # Include all text up to this point
-                    raw_response=None,
+                    model=self.config_manager.get_param(ModelParameter.MODEL),
                     usage={
-                        "completion_tokens": tokens_generated,
-                        "total_tokens": len(prompt.split()) + tokens_generated  # Approximation
-                    },
-                    model=self.config_manager.get_param(ModelParameter.MODEL)
+                        "prompt_tokens": usage_stats.get("input_tokens", 0),
+                        "completion_tokens": int(tokens_generated * usage_stats.get("output_tokens", 0) / len(full_text.split())),
+                        "total_tokens": usage_stats.get("input_tokens", 0) + int(tokens_generated * usage_stats.get("output_tokens", 0) / len(full_text.split())),
+                        "prompt_tps": usage_stats.get("prompt_tps", 0.0),
+                        "generation_tps": usage_stats.get("generation_tps", 0.0),
+                        "peak_memory": usage_stats.get("peak_memory", 0.0)
+                    }
                 )
                 
                 # Add a small delay to simulate real streaming
@@ -649,68 +767,181 @@ class MLXProvider(AbstractLLMInterface):
             logger.error(f"Vision stream generation failed: {e}")
             raise GenerationError(f"Vision stream generation failed: {str(e)}")
 
-    def _generate_text(self, prompt: str, **kwargs) -> GenerateResponse:
-        """
-        Generate text using MLX-LM.
+    def _generate_text(self, prompt: str, system_prompt: Optional[str] = None, tools: Optional[List[Any]] = None, messages: Optional[List[Dict[str, Any]]] = None, **kwargs) -> GenerateResponse:
+        """Generate text using MLX with native tool calling support."""
         
-        Args:
-            prompt: The prompt text
-            
-        Returns:
-            GenerateResponse with the generated content
-        """
+        # Make sure model is loaded
+        if not self._is_loaded:
+            logger.info("Model not loaded, loading now")
+            self.load_model()
+        
+        # Get parameters from config with kwargs override (do NOT modify config)
+        max_tokens = kwargs.get("max_tokens", self.config_manager.get_param(ModelParameter.MAX_TOKENS))
+        temperature = kwargs.get("temperature", self.config_manager.get_param(ModelParameter.TEMPERATURE))
+        top_p = kwargs.get("top_p", self.config_manager.get_param(ModelParameter.TOP_P, 0.95))
+        
         try:
-            # Get generation parameters
-            temperature = kwargs.pop("temperature", 
-                                    self.config_manager.get_param(ModelParameter.TEMPERATURE))
+            start_time = time.time()
             
-            # Ensure temperature is valid (not None)
-            if temperature is None:
-                temperature = 0.7  # Default temperature
-                logger.info(f"Temperature was None, using default: {temperature}")
+            # Get model-specific generation parameters
+            if self._model_config is None:
+                self._model_config = ModelConfigFactory.create_config(
+                    self.config_manager.get_param(ModelParameter.MODEL)
+                )
             
-            max_tokens = kwargs.pop("max_tokens", 100)
+            # Create a copy of kwargs without temperature to avoid conflict
+            config_kwargs = kwargs.copy()
+            config_kwargs.pop("temperature", None)  # Remove temperature to avoid duplicate argument
+            generation_params = self._model_config.get_generation_params(temperature, **config_kwargs)
             
-            # Get generation parameters from the model config
-            try:
-                generation_params = self._model_config.get_generation_params(temperature)
-            except Exception as e:
-                logger.warning(f"Error getting model-specific generation parameters: {e}. Using defaults.")
-                generation_params = {}
-                # Ensure we at least have a valid sampler
-                try:
-                    # Use the mlx_lm that was imported at the module level
-                    sampler = mlx_lm.sample_utils.make_sampler(temp=float(max(0.01, temperature)))
-                    generation_params["sampler"] = sampler
-                except Exception as sampler_error:
-                    logger.warning(f"Could not create sampler: {sampler_error}")
-                    # If we can't create a sampler, we'll let mlx_lm use its defaults
+            # Prepare messages for MLX chat template
+            if messages is not None:
+                # Use provided messages (includes conversation history and tool results)
+                chat_messages = messages.copy()
+            else:
+                # Construct messages from prompt and system_prompt
+                chat_messages = []
+                if system_prompt:
+                    chat_messages.append({"role": "system", "content": system_prompt})
+                chat_messages.append({"role": "user", "content": prompt})
             
-            # Use mlx_lm's generate function with model-specific parameters
+            # Convert AbstractLLM tools to MLX format
+            mlx_tools = None
+            if tools:
+                mlx_tools = []
+                for tool in tools:
+                    if hasattr(tool, 'to_dict'):
+                        # ToolDefinition object from Session
+                        tool_dict = tool.to_dict()
+                        mlx_tool = {
+                            "type": "function",
+                            "function": {
+                                "name": tool_dict.get("name"),
+                                "description": tool_dict.get("description", ""),
+                                "parameters": tool_dict.get("input_schema", {})
+                            }
+                        }
+                        mlx_tools.append(mlx_tool)
+                    elif callable(tool):
+                        # Convert function to MLX tool format
+                        mlx_tool = {
+                            "type": "function", 
+                            "function": {
+                                "name": tool.__name__,
+                                "description": tool.__doc__ or "",
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {},
+                                    "required": []
+                                }
+                            }
+                        }
+                        mlx_tools.append(mlx_tool)
+                        
+                logger.info(f"Converted {len(tools)} tools to MLX format")
+            
+            # Apply chat template with tools
+            if mlx_tools:
+                # For MLX, use simplified approach without native tool calling
+                # Just add tool descriptions to the system prompt
+                tool_descriptions = []
+                for tool in mlx_tools:
+                    func_info = tool["function"]
+                    # Get parameter names from the schema
+                    params = func_info.get("parameters", {}).get("properties", {})
+                    param_names = list(params.keys())
+                    param_desc = ", ".join(param_names) if param_names else "no parameters"
+                    tool_descriptions.append(f"- {func_info['name']}({param_desc}): {func_info['description']}")
+                
+                tool_system_prompt = f"""You have access to the following tools:
+{chr(10).join(tool_descriptions)}
+
+To use a tool, respond with: <tool_call>{{"name": "tool_name", "arguments": {{"param_name": "value"}}}}</tool_call>
+Use the exact parameter names shown above.
+
+Examples:
+- To read a file: <tool_call>{{"name": "read_file", "arguments": {{"file_path": "filename.txt"}}}}</tool_call>
+- To calculate: <tool_call>{{"name": "calculate_math", "arguments": {{"expression": "2 + 2"}}}}</tool_call>"""
+                
+                # Add tool instructions to system prompt
+                if system_prompt:
+                    enhanced_system_prompt = f"{system_prompt}\n\n{tool_system_prompt}"
+                else:
+                    enhanced_system_prompt = tool_system_prompt
+                
+                # Update messages with enhanced system prompt
+                if messages is not None:
+                    # When using conversation history, preserve it but enhance system prompt
+                    formatted_messages = []
+                    for msg in chat_messages:
+                        if msg["role"] == "system":
+                            # Replace system prompt with enhanced version
+                            formatted_messages.append({"role": "system", "content": enhanced_system_prompt})
+                        elif msg["role"] == "tool":
+                            # Convert tool messages to assistant messages with clear formatting
+                            tool_name = msg.get("name", "unknown_tool")
+                            tool_output = msg.get("content", "")
+                            formatted_messages.append({
+                                "role": "assistant", 
+                                "content": f"I called the {tool_name} tool and received: {tool_output}"
+                            })
+                        else:
+                            formatted_messages.append(msg)
+                else:
+                    # For new conversations, just use enhanced system prompt
+                    formatted_messages = []
+                    formatted_messages.append({"role": "system", "content": enhanced_system_prompt})
+                    formatted_messages.append({"role": "user", "content": prompt})
+                
+                # Use standard chat template without tools parameter
+                formatted_prompt = self._processor.apply_chat_template(
+                    formatted_messages,
+                    add_generation_prompt=True
+                )
+            else:
+                # Standard chat template without tools - use chat_messages directly
+                formatted_prompt = self._processor.apply_chat_template(
+                    chat_messages,
+                    add_generation_prompt=True
+                )
+            
+            # Generate with MLX
             generate_kwargs = {
                 "model": self._model,
                 "tokenizer": self._processor,
-                "prompt": prompt,
+                "prompt": formatted_prompt,
                 "max_tokens": max_tokens,
                 "verbose": False,
+                **generation_params
             }
             
-            # Add model-specific generation parameters
-            generate_kwargs.update(generation_params)
-            
             # Generate text
-            output = mlx_lm.generate(**generate_kwargs)
+            output = generate_text(**generate_kwargs)
             
-            # Count tokens
+            # Parse MLX tool call response
+            if mlx_tools and self._has_tool_calls(output):
+                # MLX generates tool calls in specific format: <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+                tool_calls = self._parse_mlx_tool_calls(output)
+                if tool_calls:
+                    return ToolCallRequest(
+                        content=output,
+                        tool_calls=tool_calls
+                    )
+            
+            # Calculate token usage
             try:
-                prompt_tokens = len(self._processor.encode(prompt))
-                completion_tokens = len(self._processor.encode(output)) - prompt_tokens
-                completion_tokens = max(0, completion_tokens)  # Ensure non-negative
-            except:
-                # Fallback to rough estimates
-                prompt_tokens = len(prompt.split())
-                completion_tokens = len(output.split()) - prompt_tokens
-                completion_tokens = max(0, completion_tokens)  # Ensure non-negative
+                if hasattr(self._processor, 'encode') and isinstance(formatted_prompt, str) and isinstance(output, str):
+                    prompt_tokens = len(self._processor.encode(formatted_prompt))
+                    completion_tokens = len(self._processor.encode(output))
+                else:
+                    # Fallback to word counting
+                    prompt_tokens = len(formatted_prompt.split()) if isinstance(formatted_prompt, str) else 0
+                    completion_tokens = len(output.split()) if isinstance(output, str) else 0
+            except Exception as e:
+                logger.warning(f"Token counting failed: {e}. Using word count fallback.")
+                # Fallback to word counting
+                prompt_tokens = len(formatted_prompt.split()) if isinstance(formatted_prompt, str) else 0
+                completion_tokens = len(output.split()) if isinstance(output, str) else 0
             
             return GenerateResponse(
                 content=output,
@@ -718,82 +949,196 @@ class MLXProvider(AbstractLLMInterface):
                 usage={
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
-                    "total_tokens": prompt_tokens + completion_tokens
+                    "total_tokens": prompt_tokens + completion_tokens,
+                    "time": time.time() - start_time
                 }
             )
             
         except Exception as e:
             logger.error(f"Text generation failed: {e}")
             raise GenerationError(f"Text generation failed: {str(e)}")
-
-    def _generate_text_stream(self, prompt: str, **kwargs) -> Generator[GenerateResponse, None, None]:
-        """
-        Stream text generation using MLX-LM.
-        
-        Args:
-            prompt: The prompt text
             
-        Yields:
-            GenerateResponse objects with incremental content
-        """
+    def _has_tool_calls(self, response: str) -> bool:
+        """Check if the response contains MLX tool calls."""
+        return "<tool_call>" in response and "</tool_call>" in response
+        
+    def _parse_mlx_tool_calls(self, response: str) -> List[ToolCall]:
+        """Parse MLX native tool call format."""
+        import json
+        import re
+        
+        tool_calls = []
+        
+        # MLX format: <tool_call>{"name": "tool_name", "arguments": {...}}</tool_call>
+        pattern = r'<tool_call>(.*?)</tool_call>'
+        matches = re.findall(pattern, response, re.DOTALL)
+        
+        for i, match in enumerate(matches):
+            try:
+                tool_data = json.loads(match.strip())
+                tool_call = ToolCall(
+                    id=f"call_{i}",
+                    name=tool_data.get("name"),
+                    arguments=tool_data.get("arguments", {})
+                )
+                tool_calls.append(tool_call)
+            except (json.JSONDecodeError, Exception) as e:
+                logger.warning(f"Failed to parse tool call: {match}. Error: {e}")
+                continue
+                
+        return tool_calls
+
+    def _generate_text_stream(self, prompt: str, system_prompt: Optional[str] = None, tools: Optional[List[Any]] = None, messages: Optional[List[Dict[str, Any]]] = None, **kwargs) -> Generator[GenerateResponse, None, None]:
+        """Stream text generation using MLX with native tool calling support."""
+        
+        # Make sure model is loaded
+        if not self._is_loaded:
+            logger.info("Model not loaded, loading now")
+            self.load_model()
+        
+        # Get parameters from config with kwargs override (do NOT modify config)
+        max_tokens = kwargs.get("max_tokens", self.config_manager.get_param(ModelParameter.MAX_TOKENS))
+        temperature = kwargs.get("temperature", self.config_manager.get_param(ModelParameter.TEMPERATURE))
+        
         try:
-            # Use mlx_lm's streaming functionality
+            start_time = time.time()
+            
+            # Get model-specific generation parameters
+            if self._model_config is None:
+                self._model_config = ModelConfigFactory.create_config(
+                    self.config_manager.get_param(ModelParameter.MODEL)
+                )
+            
+            # Create a copy of kwargs without temperature to avoid conflict
+            config_kwargs = kwargs.copy()
+            config_kwargs.pop("temperature", None)  # Remove temperature to avoid duplicate argument
+            generation_params = self._model_config.get_generation_params(temperature, **config_kwargs)
+            
+            # Prepare messages for MLX chat template
+            if messages is not None:
+                # Use provided messages (includes conversation history and tool results)
+                chat_messages = messages.copy()
+            else:
+                # Construct messages from prompt and system_prompt
+                chat_messages = []
+                if system_prompt:
+                    chat_messages.append({"role": "system", "content": system_prompt})
+                chat_messages.append({"role": "user", "content": prompt})
+            
+            # Convert AbstractLLM tools to MLX format
+            mlx_tools = None
+            if tools:
+                mlx_tools = []
+                for tool in tools:
+                    if hasattr(tool, 'to_dict'):
+                        # ToolDefinition object from Session
+                        tool_dict = tool.to_dict()
+                        mlx_tool = {
+                            "type": "function",
+                            "function": {
+                                "name": tool_dict.get("name"),
+                                "description": tool_dict.get("description", ""),
+                                "parameters": tool_dict.get("input_schema", {})
+                            }
+                        }
+                        mlx_tools.append(mlx_tool)
+                    
+            logger.info(f"Converted {len(tools)} tools to MLX format")
+            
+            # Apply chat template with tools
+            if mlx_tools:
+                # For MLX, use simplified approach without native tool calling
+                # Just add tool descriptions to the system prompt
+                tool_descriptions = []
+                for tool in mlx_tools:
+                    func_info = tool["function"]
+                    # Get parameter names from the schema
+                    params = func_info.get("parameters", {}).get("properties", {})
+                    param_names = list(params.keys())
+                    param_desc = ", ".join(param_names) if param_names else "no parameters"
+                    tool_descriptions.append(f"- {func_info['name']}({param_desc}): {func_info['description']}")
+                
+                tool_system_prompt = f"""You have access to the following tools:
+{chr(10).join(tool_descriptions)}
+
+To use a tool, respond with: <tool_call>{{"name": "tool_name", "arguments": {{"param_name": "value"}}}}</tool_call>
+Use the exact parameter names shown above.
+
+Examples:
+- To read a file: <tool_call>{{"name": "read_file", "arguments": {{"file_path": "filename.txt"}}}}</tool_call>
+- To calculate: <tool_call>{{"name": "calculate_math", "arguments": {{"expression": "2 + 2"}}}}</tool_call>"""
+                
+                # Add tool instructions to system prompt
+                if system_prompt:
+                    enhanced_system_prompt = f"{system_prompt}\n\n{tool_system_prompt}"
+                else:
+                    enhanced_system_prompt = tool_system_prompt
+                
+                # Update messages with enhanced system prompt
+                if messages is not None:
+                    # When using conversation history, preserve it but enhance system prompt
+                    formatted_messages = []
+                    for msg in chat_messages:
+                        if msg["role"] == "system":
+                            # Replace system prompt with enhanced version
+                            formatted_messages.append({"role": "system", "content": enhanced_system_prompt})
+                        elif msg["role"] == "tool":
+                            # Convert tool messages to assistant messages with clear formatting
+                            tool_name = msg.get("name", "unknown_tool")
+                            tool_output = msg.get("content", "")
+                            formatted_messages.append({
+                                "role": "assistant", 
+                                "content": f"I called the {tool_name} tool and received: {tool_output}"
+                            })
+                        else:
+                            formatted_messages.append(msg)
+                else:
+                    # For new conversations, just use enhanced system prompt
+                    formatted_messages = []
+                    formatted_messages.append({"role": "system", "content": enhanced_system_prompt})
+                    formatted_messages.append({"role": "user", "content": prompt})
+                
+                # Use standard chat template without tools parameter
+                formatted_prompt = self._processor.apply_chat_template(
+                    formatted_messages,
+                    add_generation_prompt=True
+                )
+            else:
+                # Standard chat template without tools - use chat_messages directly
+                formatted_prompt = self._processor.apply_chat_template(
+                    chat_messages,
+                    add_generation_prompt=True
+                )
+            
+            # Stream tokens from the model using stream_generate
+            stream_kwargs = {
+                "model": self._model,
+                "tokenizer": self._processor,
+                "prompt": formatted_prompt,
+                "max_tokens": max_tokens,
+                **generation_params
+            }
+            
             current_text = ""
             model_name = self.config_manager.get_param(ModelParameter.MODEL)
             
-            # Get generation parameters
-            temperature = kwargs.pop("temperature", 
-                                    self.config_manager.get_param(ModelParameter.TEMPERATURE))
-            
-            # Ensure temperature is valid (not None)
-            if temperature is None:
-                temperature = 0.7  # Default temperature
-                logger.info(f"Temperature was None, using default: {temperature}")
-            
-            max_tokens = kwargs.pop("max_tokens", 100)
-            
-            # Get generation parameters from the model config
-            try:
-                generation_params = self._model_config.get_generation_params(temperature)
-            except Exception as e:
-                logger.warning(f"Error getting model-specific generation parameters: {e}. Using defaults.")
-                generation_params = {}
-                # Ensure we at least have a valid sampler
-                try:
-                    # Use the mlx_lm that was imported at the module level
-                    sampler = mlx_lm.sample_utils.make_sampler(temp=float(max(0.01, temperature)))
-                    generation_params["sampler"] = sampler
-                except Exception as sampler_error:
-                    logger.warning(f"Could not create sampler: {sampler_error}")
-                    # If we can't create a sampler, we'll let mlx_lm use its defaults
-            
-            # Stream tokens from the model
-            generate_kwargs = {
-                "model": self._model,
-                "tokenizer": self._processor,
-                "prompt": prompt,
-                "max_tokens": max_tokens,
-                "stream": True,
-                "verbose": False,
-            }
-            
-            # Add model-specific generation parameters
-            generate_kwargs.update(generation_params)
-            
-            start_time = time.time()
-            
-            # Stream tokens from the model
-            for token in mlx_lm.generate(**generate_kwargs):
-                current_text += token
+            # Stream tokens from the model using stream_generate
+            for response in stream_generate(**stream_kwargs):
+                current_text = response.text  # stream_generate yields response objects with .text attribute
                 
-                # Calculate a rough estimate of token count
+                # Calculate token usage
                 try:
-                    prompt_tokens = len(self._processor.encode(prompt))
-                    completion_tokens = len(self._processor.encode(current_text))
-                except:
-                    # Fallback to rough estimates
-                    prompt_tokens = len(prompt.split())
-                    completion_tokens = len(current_text.split())
+                    if hasattr(self._processor, 'encode') and isinstance(formatted_prompt, str) and isinstance(current_text, str):
+                        prompt_tokens = len(self._processor.encode(formatted_prompt))
+                        completion_tokens = len(self._processor.encode(current_text))
+                    else:
+                        # Fallback to word counting
+                        prompt_tokens = len(formatted_prompt.split()) if isinstance(formatted_prompt, str) else 0
+                        completion_tokens = len(current_text.split()) if isinstance(current_text, str) else 0
+                except Exception as e:
+                    # Fallback to word counting
+                    prompt_tokens = len(formatted_prompt.split()) if isinstance(formatted_prompt, str) else 0
+                    completion_tokens = len(current_text.split()) if isinstance(current_text, str) else 0
                 
                 yield GenerateResponse(
                     content=current_text,
@@ -807,8 +1152,8 @@ class MLXProvider(AbstractLLMInterface):
                 )
                 
         except Exception as e:
-            logger.error(f"Text streaming failed: {e}")
-            raise GenerationError(f"Text streaming failed: {str(e)}")
+            logger.error(f"Text stream generation failed: {e}")
+            raise GenerationError(f"Text stream generation failed: {str(e)}")
 
     def get_capabilities(self) -> Dict[Union[str, ModelCapability], Any]:
         """Return capabilities of this LLM provider."""
@@ -817,8 +1162,8 @@ class MLXProvider(AbstractLLMInterface):
             ModelCapability.MAX_TOKENS: self.config_manager.get_param(ModelParameter.MAX_TOKENS, 4096),
             ModelCapability.SYSTEM_PROMPT: True,
             ModelCapability.ASYNC: True,
-            ModelCapability.FUNCTION_CALLING: False,
-            ModelCapability.TOOL_USE: False,
+            ModelCapability.FUNCTION_CALLING: True,  # Now uses native MLX tool calling
+            ModelCapability.TOOL_USE: True,  # Now uses native MLX tool calling
             ModelCapability.VISION: self._is_vision_model and MLXVLM_AVAILABLE,
         }
         

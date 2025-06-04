@@ -355,6 +355,13 @@ class Session:
                             "role": "assistant",
                             "content": f"Tool '{tool_name}' returned the following output:\n\n{output}".strip()
                         })
+                    elif provider_name == "mlx":
+                        # MLX expects tool results in a specific format that indicates successful execution
+                        formatted.append({
+                            "role": "tool",
+                            "name": tool_name, 
+                            "content": output
+                        })
                     elif provider_name in ["ollama", "huggingface"]:
                         # These providers may not have special tool formatting
                         # Add a prefixed assistant message
