@@ -6,12 +6,29 @@ Uses the simplest approach to tool calling with an interactive REPL.
 # Requirements
 - AbstractLLM: pip install abstractllm[anthropic]
 - Anthropic API key: export ANTHROPIC_API_KEY=your_api_key_here
+
+# Adding More Tools
+To add more tools from the common_tools module, simply import and add them:
+
+from abstractllm.tools.common_tools import (
+    list_files, search_files, write_file, update_file,
+    execute_command, search_internet, fetch_url, 
+    fetch_and_parse_html, ask_user_multiple_choice
+)
+
+Then add them to the tools list:
+    session = Session(
+        system_prompt="...",
+        provider=provider,
+        tools=[read_file, list_files, search_files, write_file, ...]  # Add more tools here
+    )
 """
 
 from abstractllm import create_llm
 from abstractllm.session import Session
 from abstractllm.utils.logging import configure_logging
 from abstractllm.utils.formatting import format_response_display, format_stats_display
+from abstractllm.tools.common_tools import read_file, list_files
 import os
 import logging
 import re
@@ -26,52 +43,6 @@ configure_logging(
 RED_BOLD = '\033[1m\033[31m'    # Red bold
 BLUE_ITALIC = '\033[3m\033[34m'  # Blue italic
 RESET = '\033[0m'               # Reset formatting
-
-def read_file(file_path: str, should_read_entire_file: bool = True, start_line_one_indexed: int = 1, end_line_one_indexed_inclusive: int = None) -> str:
-    """
-    Read the contents of a file.
-    
-    Args:
-        file_path: Path to the file to read
-        should_read_entire_file: Whether to read the entire file (default: True)
-        start_line_one_indexed: Starting line number (1-indexed, default: 1)
-        end_line_one_indexed_inclusive: Ending line number (1-indexed, inclusive, default: None for end of file)
-    
-    Returns:
-        File contents or error message
-    """
-    try:
-        with open(file_path, 'r') as f:
-            if should_read_entire_file:
-                return f.read()
-            else:
-                # Read specific line range
-                lines = f.readlines()
-                
-                # Convert to 0-indexed for Python
-                start_idx = max(0, start_line_one_indexed - 1)
-                
-                if end_line_one_indexed_inclusive is None:
-                    end_idx = len(lines)
-                else:
-                    end_idx = min(len(lines), end_line_one_indexed_inclusive)
-                
-                # Extract the requested lines
-                selected_lines = lines[start_idx:end_idx]
-                
-                # Add line numbers for clarity
-                result_lines = []
-                for i, line in enumerate(selected_lines, start=start_line_one_indexed):
-                    result_lines.append(f"{i:4d}: {line.rstrip()}")
-                
-                return "\n".join(result_lines)
-                
-    except FileNotFoundError:
-        return f"Error: File not found: {file_path}"
-    except PermissionError:
-        return f"Error: Permission denied reading file: {file_path}"
-    except Exception as e:
-        return f"Error reading file: {str(e)}"
 
 def main():    
     # Initialize the provider with the model - this is the key step
@@ -113,6 +84,7 @@ For example, if you need to read a file, you should:
 
 You have access to these tools:
 - read_file(file_path, should_read_entire_file=True, start_line_one_indexed=1, end_line_one_indexed_inclusive=None)
+- list_files(directory_path=".", pattern="*", recursive=False)
 
 When following multi-step procedures:
 1. Read the instructions first by CALLING read_file
@@ -122,13 +94,18 @@ When following multi-step procedures:
 
 You are an ACTION-TAKING agent, not just an advisor. Take action immediately when requested.""",
         provider=provider,
-        tools=[read_file]  # Function is automatically registered
+        tools=[read_file, list_files]  # Functions are automatically registered
     )
     
     print("\nMinimal ALMA - Type '/exit', '/quit', or '/q' to quit")
     print("Example: 'Read the file README.md and summarize it'")
     print("Commands: /stats, /save <filename>, /load <filename>")
     print("Type '/help' for more information")
+    print(f"\n💡 Tip: See the common_tools module for more shareable tools:")
+    print(f"   - File operations: list_files, search_files, write_file, update_file")
+    print(f"   - Web operations: search_internet, fetch_url, fetch_and_parse_html")
+    print(f"   - System: execute_command")
+    print(f"   - User interaction: ask_user_multiple_choice")
     
     # Simple REPL loop
     while True:
@@ -231,8 +208,12 @@ You are an ACTION-TAKING agent, not just an advisor. Take action immediately whe
                     print(f"  /stats                    - Shows message counts, tool usage, etc.")
                     
                     print(f"\nTool Support:")
-                    print(f"  Available tools: read_file")
+                    print(f"  Available tools: read_file, list_files")
                     print(f"  Example: 'Read the README.md file and summarize it'")
+                    
+                    print(f"\n📦 Available Common Tools:")
+                    print(f"  See abstractllm.tools.common_tools for more shareable tools")
+                    print(f"  Run: python examples/common_tools_demo.py")
                     continue
                 
                 else:
