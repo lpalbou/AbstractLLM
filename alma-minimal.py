@@ -31,7 +31,9 @@ def main():
     
     model_name = "cogito"
     model_name = "qwen2.5"
-    provider = create_llm("ollama", model=model_name)
+    #provider = create_llm("ollama", model=model_name)
+    provider = create_llm("mlx", model="mlx-community/Qwen3-30B-A3B-4bit")
+
 
     # TEST WITH ANTHROPIC
     # provider = create_llm("anthropic", 
@@ -40,6 +42,10 @@ def main():
     # TEST WITH OPENAI
     # provider = create_llm("openai", 
     #                     model="gpt-4o")
+
+    # TEST WITH MLX (Apple Silicon only)
+    # provider = create_llm("mlx", 
+    #                     model="mlx-community/Qwen3-30B-A3B-4bit")
 
     # Create session with the provider and tool function
     # The tool is automatically registered for both definition and execution

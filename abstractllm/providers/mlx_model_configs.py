@@ -184,6 +184,76 @@ class PaliGemmaConfig(MLXModelConfig):
         pass
 
 
+class Qwen2VLConfig(MLXModelConfig):
+    """Configuration for Qwen vision language models.
+    
+    This covers both Qwen2-VL and Qwen2.5-VL models.
+    """
+    
+    name = "qwen2_vl"
+    eos_tokens = ["<|endoftext|>", "</s>"]
+    bos_tokens = ["<|endoftext|>", "<s>"]
+    supports_vision = True
+    
+    @classmethod
+    def format_system_prompt(cls, system_prompt: str, user_prompt: str, processor) -> str:
+        """Format system and user prompts for Qwen VL models."""
+        if not system_prompt:
+            system_prompt = "You are a helpful assistant."
+            
+        # Detect if chat template should be used
+        if hasattr(processor, "apply_chat_template"):
+            try:
+                # Try using the model's chat template
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
+                formatted_prompt = processor.apply_chat_template(
+                    messages, 
+                    tokenize=False,
+                    add_generation_prompt=True
+                )
+                return formatted_prompt
+            except Exception as e:
+                logger.warning(f"Failed to apply chat template: {e}. Falling back to manual formatting.")
+        
+        # Fall back to manual formatting with im_start/im_end
+        return f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{user_prompt}<|im_end|>\n<|im_start|>assistant\n"
+    
+    @classmethod
+    def get_image_size(cls, processor, config_type: str = "qwen2_vl") -> dict:
+        """Get the preferred image size for Qwen VL models."""
+        # Default sizes depending on model type
+        if "qwen2.5-vl" in config_type or "qwen2-5-vl" in config_type:
+            # For Qwen2.5-VL models
+            default_size = {"height": 336, "width": 336}
+        else:
+            # For Qwen2-VL models
+            default_size = {"height": 448, "width": 448}
+            
+        # Try to get the size from the processor if available
+        if processor and hasattr(processor, "image_processor") and hasattr(processor.image_processor, "size"):
+            if isinstance(processor.image_processor.size, dict):
+                return processor.image_processor.size
+        
+        return default_size
+
+
+class Qwen25VLConfig(Qwen2VLConfig):
+    """Configuration for Qwen2.5-VL models.
+    
+    Inherits from Qwen2VLConfig with specific overrides for Qwen2.5-VL.
+    """
+    
+    name = "qwen2_5_vl"
+    
+    @classmethod
+    def get_image_size(cls, processor, config_type: str = "qwen2_5_vl") -> dict:
+        """Get the preferred image size for Qwen2.5-VL models."""
+        return super().get_image_size(processor, config_type="qwen2.5-vl")
+
+
 class CodeModelConfig(MLXModelConfig):
     """Configuration for code generation models (SQLCoder, etc.)."""
     
@@ -202,73 +272,99 @@ class CodeModelConfig(MLXModelConfig):
         return user_prompt
 
 
-class ModelConfigFactory:
-    """Factory for getting the appropriate model configuration."""
+class GemmaConfig(MLXModelConfig):
+    """Configuration for Gemma models."""
     
-    # Mapping of model name patterns to config classes
+    name = "gemma"
+    eos_tokens = ["<eos>", "</s>"]
+    bos_tokens = ["<bos>", "<s>"]
+
+
+# Create aliases for common model variations
+class DefaultModelConfig(MLXModelConfig):
+    """Default configuration that works for most models."""
+    pass
+
+
+class Phi3Config(PhiConfig):
+    """Configuration for Phi-3 models (inherits from PhiConfig)."""
+    name = "phi3"
+
+
+class Llama3Config(LlamaConfig):
+    """Configuration for Llama-3 models (inherits from LlamaConfig)."""
+    name = "llama3"
+
+
+class Llama2Config(LlamaConfig):
+    """Configuration for Llama-2 models (inherits from LlamaConfig)."""
+    name = "llama2"
+
+
+class ModelConfigFactory:
+    """Factory class to create model configuration objects for MLX models.
+    
+    This class handles mapping model name patterns to configuration classes.
+    """
+    
+    # Map of model name patterns to configuration classes
     CONFIG_MAP = {
-        # Llama family models and variants
+        # Default config
+        "default": DefaultModelConfig,
+        
+        # Phi family
+        "phi-3": Phi3Config,
+        "phi3": Phi3Config,
+        "phi-2": PhiConfig,
+        "phi2": PhiConfig,
+        "phi": PhiConfig,
+        
+        # Llama family
+        "llama-3": Llama3Config,
+        "llama3": Llama3Config,
+        "llama-2": Llama2Config,
+        "llama2": Llama2Config,
         "llama": LlamaConfig,
         "h2o-danube": LlamaConfig,  # H2O's Danube models are based on Llama
         "wizard": LlamaConfig,       # WizardLM models are based on Llama
         "vicuna": LlamaConfig,       # Vicuna models are based on Llama
         "alpaca": LlamaConfig,       # Alpaca models are based on Llama
         
-        # Qwen family
-        "qwen": QwenConfig,
         
         # Mistral family
         "mistral": MistralConfig,
         "mixtral": MistralConfig,    # Mixtral is based on Mistral
         "zephyr": MistralConfig,     # Zephyr models are based on Mistral
         
-        # Phi family
-        "phi": PhiConfig,
-        
-        # Vision models
+        # Gemma family
+        "gemma": GemmaConfig,
         "paligemma": PaliGemmaConfig,
         
+        # Qwen family
+        "qwen2.5-vl": Qwen25VLConfig, # Check this first (more specific)
+        "qwen2-5-vl": Qwen25VLConfig, # Alternative naming format
+        "qwen2-vl": Qwen2VLConfig,   # Qwen2-VL models
+        "qwen": QwenConfig,
+        
         # Code models
+        "code": CodeModelConfig,
         "sqlcoder": CodeModelConfig,
         "starcoder": CodeModelConfig,
         "codellama": CodeModelConfig,
         "coder": CodeModelConfig,
-        "code": CodeModelConfig,
     }
     
     @classmethod
-    def get_for_model(cls, model_name: str) -> MLXModelConfig:
-        """Get the appropriate configuration for a model."""
+    def create_config(cls, model_name: str) -> MLXModelConfig:
+        """Create a model config instance for a given model name."""
         model_name_lower = model_name.lower()
         
-        # First try direct matches
-        for key, config_class in cls.CONFIG_MAP.items():
-            if key in model_name_lower:
-                logger.info(f"Using {config_class.name} configuration for model {model_name}")
+        # Check for specialized configs first (order matters for Qwen variants)
+        for pattern, config_class in cls.CONFIG_MAP.items():
+            if pattern in model_name_lower:
+                logger.debug(f"Using {config_class.__name__} for model {model_name}")
                 return config_class()
-        
-        # If no direct match, try to detect from model config or architecture hint
-        # Check for common architecture identifiers in the model name
-        architecture_hints = {
-            "7b": "llama",  # Most 7B models are Llama-based
-            "-13b": "llama",  # Most 13B models are Llama-based
-            "3.1": "llama",  # Llama 3.1
-            "3.2": "llama",  # Llama 3.2
-            "3-": "llama",   # Llama 3
-            "70b": "llama",  # Likely Llama
-            "bloom": "bloom",
-            "neox": "neox",
-            "gpt2": "gpt2",
-            "gpt-j": "gptj",
-            "opt": "opt",
-        }
-        
-        # Try to detect architecture from hints in name
-        for hint, arch_family in architecture_hints.items():
-            if hint in model_name_lower:
-                if arch_family in cls.CONFIG_MAP:
-                    logger.info(f"Detected {arch_family} architecture for {model_name} based on name hint")
-                    return cls.CONFIG_MAP[arch_family]()
-        
-        logger.info(f"No specific configuration found for {model_name}, using generic configuration")
-        return MLXModelConfig() 
+                
+        # Fall back to default config
+        logger.debug(f"No specific config found for {model_name}, using DefaultModelConfig")
+        return DefaultModelConfig() 
