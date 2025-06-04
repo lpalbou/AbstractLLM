@@ -105,3 +105,4 @@ investigate/
 *.mdc
 
 .venv-abstractllm
+untracked

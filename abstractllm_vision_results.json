@@ -1,6 +1,0 @@
-[
-  {
-    "model": "paligemma",
-    "error": "Generation failed: [mlx] Failed to load MLX model mlx-community/paligemma-3b-mix-448-8bit: Model type paligemma not supported."
-  }
-]
