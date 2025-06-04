@@ -50,7 +50,7 @@ class VerboseSession(Session):
             output_preview = str(result.get('output', ''))[:100]
             if len(output_preview) >= 100:
                 output_preview += "..."
-            print(f"{RED_BOLD}   Result: SUCCESS ({len(str(result.get('output', '')))} chars) - {output_preview}{RESET}")
+            print(f"{RED_BOLD}   Result: SUCCESS ({len(str(result.get('output', '')))} chars)")
         
         return result
 
@@ -179,6 +179,7 @@ def main():
     #provider = create_llm("ollama", model=model_name)
     provider = create_llm("mlx", 
                          model="mlx-community/Qwen3-30B-A3B-4bit",
+                         #model="mlx-community/DeepSeek-R1-0528-Qwen3-8B-4bit",
                          max_tokens=4096)  # Set default max_tokens
 
 

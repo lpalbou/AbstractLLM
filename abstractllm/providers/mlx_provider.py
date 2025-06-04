@@ -853,13 +853,14 @@ class MLXProvider(AbstractLLMInterface):
                     param_desc = ", ".join(param_names) if param_names else "no parameters"
                     tool_descriptions.append(f"- {func_info['name']}({param_desc}): {func_info['description']}")
                 
-                tool_system_prompt = f"""You have access to the following tools:
+                tool_system_prompt = f"""Executing a tool gives you access to new information that helps you define the next steps : calling another tool if you haven't fulfill the requests from the original prompt, or if you have, providing your final answer.
+                To help resolve the prompt, you have access to the following tools:
 {chr(10).join(tool_descriptions)}
 
 To use a tool, respond with: <tool_call>{{"name": "tool_name", "arguments": {{"param_name": "value"}}}}</tool_call>
-Use the exact parameter names shown above.
+Use the exact parameter names shown above. 
 
-Examples:
+Examples of tool calls:
 - To read a file: <tool_call>{{"name": "read_file", "arguments": {{"file_path": "filename.txt"}}}}</tool_call>
 - To calculate: <tool_call>{{"name": "calculate_math", "arguments": {{"expression": "2 + 2"}}}}</tool_call>"""
                 
@@ -960,32 +961,222 @@ Examples:
             
     def _has_tool_calls(self, response: str) -> bool:
         """Check if the response contains MLX tool calls."""
-        return "<tool_call>" in response and "</tool_call>" in response
+        # Check for XML-wrapped format
+        if "<tool_call>" in response and "</tool_call>" in response:
+            return True
+            
+        # Check for raw JSON format (DeepSeek and other models)
+        import json
+        try:
+            # First, try to find JSON blocks that span multiple lines
+            # Look for patterns like { ... } that contain "name" and "arguments"
+            json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
+            json_matches = re.findall(json_pattern, response, re.DOTALL)
+            
+            for match in json_matches:
+                try:
+                    parsed = json.loads(match)
+                    if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
+                        return True
+                except json.JSONDecodeError:
+                    continue
+            
+            # Also look for single-line JSON objects with "name" and "arguments" keys
+            lines = response.strip().split('\n')
+            for line in lines:
+                line = line.strip()
+                if line.startswith('{') and line.endswith('}'):
+                    try:
+                        parsed = json.loads(line)
+                        if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
+                            return True
+                    except json.JSONDecodeError:
+                        # Try to fix common JSON formatting errors before giving up
+                        try:
+                            # Fix missing colon after "arguments"
+                            fixed_line = re.sub(r'"arguments"\s*\{', '"arguments": {', line)
+                            # Fix missing colon after "name" (less common but possible)
+                            fixed_line = re.sub(r'"name"\s*"', '"name": "', fixed_line)
+                            
+                            parsed = json.loads(fixed_line)
+                            if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
+                                return True
+                        except json.JSONDecodeError:
+                            continue
+            
+            # Finally, check if the entire response is a single JSON tool call
+            try:
+                response_stripped = response.strip()
+                if response_stripped.startswith('{') and response_stripped.endswith('}'):
+                    parsed = json.loads(response_stripped)
+                    if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
+                        return True
+            except json.JSONDecodeError:
+                pass
+                        
+        except Exception:
+            pass
+            
+        return False
         
     def _parse_mlx_tool_calls(self, response: str) -> List[ToolCall]:
-        """Parse MLX native tool call format."""
+        """Parse MLX native tool call format with robust error handling."""
         import json
         import re
         
         tool_calls = []
         
-        # MLX format: <tool_call>{"name": "tool_name", "arguments": {...}}</tool_call>
+        def clean_json_string(json_str: str) -> str:
+            """Clean and fix common JSON formatting issues."""
+            # Remove comments and extra text
+            json_str = re.sub(r'//.*$', '', json_str, flags=re.MULTILINE)  # Remove // comments
+            json_str = re.sub(r'/\*.*?\*/', '', json_str, flags=re.DOTALL)  # Remove /* */ comments
+            
+            # Fix missing colons
+            json_str = re.sub(r'"arguments"\s*\{', '"arguments": {', json_str)
+            json_str = re.sub(r'"name"\s*"', '"name": "', json_str)
+            
+            # Remove trailing commas
+            json_str = re.sub(r',\s*}', '}', json_str)
+            json_str = re.sub(r',\s*]', ']', json_str)
+            
+            # Fix null values
+            json_str = re.sub(r':\s*null(?=\s*[,}])', ': null', json_str)
+            
+            # Remove question marks and other invalid characters
+            json_str = re.sub(r'\?', '', json_str)
+            
+            return json_str.strip()
+        
+        def try_parse_json(json_str: str) -> dict:
+            """Try to parse JSON with multiple fallback strategies."""
+            # Strategy 1: Direct parsing
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                pass
+            
+            # Strategy 2: Clean and try again
+            try:
+                cleaned = clean_json_string(json_str)
+                return json.loads(cleaned)
+            except json.JSONDecodeError:
+                pass
+            
+            # Strategy 3: Extract just the JSON part using regex
+            try:
+                json_match = re.search(r'\{.*\}', json_str, re.DOTALL)
+                if json_match:
+                    return json.loads(clean_json_string(json_match.group()))
+            except json.JSONDecodeError:
+                pass
+            
+            # Strategy 4: Manual parsing for simple cases
+            try:
+                # Extract name and arguments manually
+                name_match = re.search(r'"name"\s*:\s*"([^"]+)"', json_str)
+                if name_match:
+                    name = name_match.group(1)
+                    
+                    # Extract arguments - look for file_path specifically
+                    args = {}
+                    file_path_match = re.search(r'"file_path"\s*:\s*"([^"]+)"', json_str)
+                    if file_path_match:
+                        args["file_path"] = file_path_match.group(1)
+                    
+                    # Look for should_read_entire_file
+                    read_entire_match = re.search(r'"should_read_entire_file"\s*:\s*(true|false)', json_str)
+                    if read_entire_match:
+                        args["should_read_entire_file"] = read_entire_match.group(1) == "true"
+                    
+                    return {"name": name, "arguments": args}
+            except Exception:
+                pass
+            
+            raise json.JSONDecodeError("All parsing strategies failed", json_str, 0)
+        
+        # First try XML format: <tool_call>{"name": "tool_name", "arguments": {...}}</tool_call>
         pattern = r'<tool_call>(.*?)</tool_call>'
         matches = re.findall(pattern, response, re.DOTALL)
         
         for i, match in enumerate(matches):
             try:
-                tool_data = json.loads(match.strip())
-                tool_call = ToolCall(
-                    id=f"call_{i}",
-                    name=tool_data.get("name"),
-                    arguments=tool_data.get("arguments", {})
-                )
-                tool_calls.append(tool_call)
-            except (json.JSONDecodeError, Exception) as e:
-                logger.warning(f"Failed to parse tool call: {match}. Error: {e}")
+                tool_data = try_parse_json(match.strip())
+                if isinstance(tool_data, dict) and "name" in tool_data:
+                    tool_call = ToolCall(
+                        id=f"call_{i}",
+                        name=tool_data.get("name"),
+                        arguments=tool_data.get("arguments", {})
+                    )
+                    tool_calls.append(tool_call)
+                    logger.info(f"Successfully parsed XML-wrapped tool call: {tool_data}")
+            except Exception as e:
+                logger.warning(f"Failed to parse XML-wrapped tool call: {match}. Error: {e}")
                 continue
-                
+        
+        # If no XML matches found, try to find JSON blocks (including multi-line)
+        if not tool_calls:
+            # Look for JSON blocks that might span multiple lines
+            json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
+            json_matches = re.findall(json_pattern, response, re.DOTALL)
+            
+            call_id = 0
+            for match in json_matches:
+                try:
+                    tool_data = try_parse_json(match)
+                    if isinstance(tool_data, dict) and "name" in tool_data:
+                        tool_call = ToolCall(
+                            id=f"call_{call_id}",
+                            name=tool_data.get("name"),
+                            arguments=tool_data.get("arguments", {})
+                        )
+                        tool_calls.append(tool_call)
+                        call_id += 1
+                        logger.info(f"Successfully parsed multi-line JSON tool call: {tool_data}")
+                except Exception as e:
+                    logger.warning(f"Failed to parse multi-line JSON tool call: {match}. Error: {e}")
+                    continue
+        
+        # If still no matches, try line-by-line parsing for single-line JSON
+        if not tool_calls:
+            # Check if the entire response is a single JSON tool call
+            response_stripped = response.strip()
+            if response_stripped.startswith('{') and response_stripped.endswith('}'):
+                try:
+                    tool_data = try_parse_json(response_stripped)
+                    if isinstance(tool_data, dict) and "name" in tool_data:
+                        tool_call = ToolCall(
+                            id="call_0",
+                            name=tool_data.get("name"),
+                            arguments=tool_data.get("arguments", {})
+                        )
+                        tool_calls.append(tool_call)
+                        logger.info(f"Successfully parsed single JSON tool call: {tool_data}")
+                        return tool_calls
+                except Exception as e:
+                    logger.warning(f"Failed to parse single JSON tool call: {e}")
+            
+            # Try line-by-line parsing for multiple JSON tool calls
+            lines = response.strip().split('\n')
+            call_id = 0
+            for line in lines:
+                line = line.strip()
+                if line.startswith('{') and (line.endswith('}') or '}' in line):
+                    try:
+                        tool_data = try_parse_json(line)
+                        if isinstance(tool_data, dict) and "name" in tool_data:
+                            tool_call = ToolCall(
+                                id=f"call_{call_id}",
+                                name=tool_data.get("name"),
+                                arguments=tool_data.get("arguments", {})
+                            )
+                            tool_calls.append(tool_call)
+                            call_id += 1
+                            logger.info(f"Successfully parsed line JSON tool call: {tool_data}")
+                    except Exception as e:
+                        logger.warning(f"Failed to parse line JSON tool call: {line}. Error: {e}")
+                        continue
+                        
         return tool_calls
 
     def _generate_text_stream(self, prompt: str, system_prompt: Optional[str] = None, tools: Optional[List[Any]] = None, messages: Optional[List[Dict[str, Any]]] = None, **kwargs) -> Generator[GenerateResponse, None, None]:
@@ -1058,13 +1249,14 @@ Examples:
                     param_desc = ", ".join(param_names) if param_names else "no parameters"
                     tool_descriptions.append(f"- {func_info['name']}({param_desc}): {func_info['description']}")
                 
-                tool_system_prompt = f"""You have access to the following tools:
+                tool_system_prompt = f"""Executing a tool gives you new information that helps you define the next steps : calling another tool if you haven't fulfill the requests from the original prompt, or if you have, providing your final answer.
+                To help resolve the prompt, you have access to the following tools:
 {chr(10).join(tool_descriptions)}
 
 To use a tool, respond with: <tool_call>{{"name": "tool_name", "arguments": {{"param_name": "value"}}}}</tool_call>
-Use the exact parameter names shown above.
+Use the exact parameter names shown above. 
 
-Examples:
+Examples of tool calls:
 - To read a file: <tool_call>{{"name": "read_file", "arguments": {{"file_path": "filename.txt"}}}}</tool_call>
 - To calculate: <tool_call>{{"name": "calculate_math", "arguments": {{"expression": "2 + 2"}}}}</tool_call>"""
                 
