@@ -177,7 +177,9 @@ def main():
     model_name = "cogito"
     model_name = "qwen2.5"
     #provider = create_llm("ollama", model=model_name)
-    provider = create_llm("mlx", model="mlx-community/Qwen3-30B-A3B-4bit")
+    provider = create_llm("mlx", 
+                         model="mlx-community/Qwen3-30B-A3B-4bit",
+                         max_tokens=4096)  # Set default max_tokens
 
 
     # TEST WITH ANTHROPIC
@@ -218,67 +220,18 @@ def main():
             if not user_input.strip():
                 continue
             
-            # Reset tool call counter for each new request
-            session.tool_call_count = 0
-            
             # Generate response with tool support
             print(f"\nAssistant:")
             
-            # Use the unified generate method
+            # Use the unified generate method - trust AbstractLLM to handle everything
             response = session.generate(
                 prompt=user_input,
-                max_tool_calls=25,  # Limit tool calls to avoid infinite loops
-                max_tokens=4096     # Ensure enough tokens for complete response
+                max_tool_calls=25  # Limit tool calls to avoid infinite loops
             )
             
-            # Handle different response types:
-            # - If response has .content attribute (tool was used), use that
-            # - If response is a string (direct answer, no tool used), use as is
-            if hasattr(response, 'content'):
-                # Check if we're dealing with a tool call request that hasn't been resolved
-                if hasattr(response, 'has_tool_calls') and response.has_tool_calls():
-                    print(f"\n{RED_BOLD}⚠️  TOOL LOOP DETECTED - Model still requesting tools after max_tool_calls reached{RESET}")
-                    
-                    # If we're still getting tool calls after max_tool_calls, 
-                    # the model is stuck in a loop. Force a direct question instead.
-                    # First, get the content from the last tool execution
-                    tool_content = None
-                    print(f"Looking through {len(session.messages)} messages for tool results...")
-                    
-                    for i, message in enumerate(session.messages):
-                        if hasattr(message, 'tool_results') and message.tool_results:
-                            for j, result in enumerate(message.tool_results):
-                                if 'output' in result:
-                                    tool_content = result['output']
-                                    print(f"Found tool content from message {i} (length: {len(tool_content)})")
-                                    break
-                        if tool_content:
-                            break
-                    
-                    if tool_content:
-                        # For a summarization task, we ask the model directly with the content
-                        direct_prompt = f"Here is the content of the file that was read. Please provide a concise summary:\n\n{tool_content}"
-                        
-                        # Generate response without tool support (direct query)
-                        print(f"\n{RED_BOLD}🔄 Forcing direct response with file content...{RESET}")
-                        direct_response = provider.generate(
-                            prompt=direct_prompt,
-                            system_prompt="You are a helpful assistant summarizing file contents.",
-                            max_tokens=2048
-                        )
-                        
-                        print()  # Add spacing
-                        format_response_display(direct_response)
-                    else:
-                        print("Unable to get content from tool execution. Please try again.")
-                else:
-                    # Normal content response
-                    print()  # Add spacing
-                    format_response_display(response)
-            else:
-                # Direct string response
-                print()  # Add spacing  
-                format_response_display(response)
+            # Simply display the response - trust AbstractLLM formatting
+            print()  # Add spacing
+            format_response_display(response)
             
         except EOFError:
             # Handle EOF gracefully (Ctrl+D or redirected input)
