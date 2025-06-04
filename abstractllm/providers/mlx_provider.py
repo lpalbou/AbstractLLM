@@ -495,9 +495,10 @@ class MLXProvider(AbstractLLMInterface):
         if not self._is_loaded:
             self.load_model()
         
-        # Get parameters from config with kwargs override (do NOT modify config)
-        max_tokens = kwargs.get("max_tokens", self.config_manager.get_param(ModelParameter.MAX_TOKENS))
-        temperature = kwargs.get("temperature", self.config_manager.get_param(ModelParameter.TEMPERATURE))
+        # Get parameters using the new helper method
+        params = self._get_generation_params(**kwargs)
+        max_tokens = params["max_tokens"]
+        temperature = params["temperature"]
         
         images = []
         # Process images
@@ -675,9 +676,10 @@ class MLXProvider(AbstractLLMInterface):
         if not self._is_loaded:
             self.load_model()
         
-        # Get parameters from config with kwargs override (do NOT modify config)
-        max_tokens = kwargs.get("max_tokens", self.config_manager.get_param(ModelParameter.MAX_TOKENS))
-        temperature = kwargs.get("temperature", self.config_manager.get_param(ModelParameter.TEMPERATURE))
+        # Get parameters using the new helper method
+        params = self._get_generation_params(**kwargs)
+        max_tokens = params["max_tokens"]
+        temperature = params["temperature"]
         
         images = []
         # Process images
@@ -767,6 +769,28 @@ class MLXProvider(AbstractLLMInterface):
             logger.error(f"Vision stream generation failed: {e}")
             raise GenerationError(f"Vision stream generation failed: {str(e)}")
 
+    def _get_generation_params(self, **kwargs) -> Dict[str, Any]:
+        """
+        Get generation parameters by merging config defaults with kwargs, filtering out None values.
+        
+        Args:
+            **kwargs: Generation parameters provided to the method
+            
+        Returns:
+            Dictionary of generation parameters with None values filtered out
+        """
+        # Filter out None values from kwargs to prevent them from overriding config defaults
+        filtered_kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        
+        # Get parameters from config with filtered kwargs override
+        params = {
+            "max_tokens": filtered_kwargs.get("max_tokens", self.config_manager.get_param(ModelParameter.MAX_TOKENS)),
+            "temperature": filtered_kwargs.get("temperature", self.config_manager.get_param(ModelParameter.TEMPERATURE)),
+            "top_p": filtered_kwargs.get("top_p", self.config_manager.get_param(ModelParameter.TOP_P, 0.95))
+        }
+        
+        return params
+
     def _generate_text(self, prompt: str, system_prompt: Optional[str] = None, tools: Optional[List[Any]] = None, messages: Optional[List[Dict[str, Any]]] = None, **kwargs) -> GenerateResponse:
         """Generate text using MLX with native tool calling support."""
         
@@ -775,10 +799,11 @@ class MLXProvider(AbstractLLMInterface):
             logger.info("Model not loaded, loading now")
             self.load_model()
         
-        # Get parameters from config with kwargs override (do NOT modify config)
-        max_tokens = kwargs.get("max_tokens", self.config_manager.get_param(ModelParameter.MAX_TOKENS))
-        temperature = kwargs.get("temperature", self.config_manager.get_param(ModelParameter.TEMPERATURE))
-        top_p = kwargs.get("top_p", self.config_manager.get_param(ModelParameter.TOP_P, 0.95))
+        # Get parameters using the new helper method
+        params = self._get_generation_params(**kwargs)
+        max_tokens = params["max_tokens"]
+        temperature = params["temperature"]
+        top_p = params["top_p"]
         
         try:
             start_time = time.time()
@@ -853,16 +878,20 @@ class MLXProvider(AbstractLLMInterface):
                     param_desc = ", ".join(param_names) if param_names else "no parameters"
                     tool_descriptions.append(f"- {func_info['name']}({param_desc}): {func_info['description']}")
                 
-                tool_system_prompt = f"""Executing a tool gives you access to new information that helps you define the next steps : calling another tool if you haven't fulfill the requests from the original prompt, or if you have, providing your final answer.
-                To help resolve the prompt, you have access to the following tools:
+                tool_system_prompt = f"""When the user asks you to follow instructions from a document, you should EXECUTE those instructions step by step, not just summarize them. If you read a document containing step-by-step procedures with tool calls, perform those tool calls in the order specified.
+
+You have access to these tools:
 {chr(10).join(tool_descriptions)}
 
-To use a tool, respond with: <tool_call>{{"name": "tool_name", "arguments": {{"param_name": "value"}}}}</tool_call>
-Use the exact parameter names shown above. 
+To use a tool: <tool_call>{{"name": "tool_name", "arguments": {{"param_name": "value"}}}}</tool_call>
 
-Examples of tool calls:
-- To read a file: <tool_call>{{"name": "read_file", "arguments": {{"file_path": "filename.txt"}}}}</tool_call>
-- To calculate: <tool_call>{{"name": "calculate_math", "arguments": {{"expression": "2 + 2"}}}}</tool_call>"""
+When following multi-step procedures:
+1. Read the instructions first 
+2. Execute each step that requires a tool call
+3. Continue to the next step based on the results
+4. Complete the entire procedure unless instructed otherwise
+
+You are an action-taking agent, not just an advisor."""
                 
                 # Add tool instructions to system prompt
                 if system_prompt:
@@ -1187,9 +1216,10 @@ Examples of tool calls:
             logger.info("Model not loaded, loading now")
             self.load_model()
         
-        # Get parameters from config with kwargs override (do NOT modify config)
-        max_tokens = kwargs.get("max_tokens", self.config_manager.get_param(ModelParameter.MAX_TOKENS))
-        temperature = kwargs.get("temperature", self.config_manager.get_param(ModelParameter.TEMPERATURE))
+        # Get parameters using the new helper method
+        params = self._get_generation_params(**kwargs)
+        max_tokens = params["max_tokens"]
+        temperature = params["temperature"]
         
         try:
             start_time = time.time()
@@ -1249,16 +1279,20 @@ Examples of tool calls:
                     param_desc = ", ".join(param_names) if param_names else "no parameters"
                     tool_descriptions.append(f"- {func_info['name']}({param_desc}): {func_info['description']}")
                 
-                tool_system_prompt = f"""Executing a tool gives you new information that helps you define the next steps : calling another tool if you haven't fulfill the requests from the original prompt, or if you have, providing your final answer.
-                To help resolve the prompt, you have access to the following tools:
+                tool_system_prompt = f"""When the user asks you to follow instructions from a document, you should EXECUTE those instructions step by step, not just summarize them. If you read a document containing step-by-step procedures with tool calls, perform those tool calls in the order specified.
+
+You have access to these tools:
 {chr(10).join(tool_descriptions)}
 
-To use a tool, respond with: <tool_call>{{"name": "tool_name", "arguments": {{"param_name": "value"}}}}</tool_call>
-Use the exact parameter names shown above. 
+To use a tool: <tool_call>{{"name": "tool_name", "arguments": {{"param_name": "value"}}}}</tool_call>
 
-Examples of tool calls:
-- To read a file: <tool_call>{{"name": "read_file", "arguments": {{"file_path": "filename.txt"}}}}</tool_call>
-- To calculate: <tool_call>{{"name": "calculate_math", "arguments": {{"expression": "2 + 2"}}}}</tool_call>"""
+When following multi-step procedures:
+1. Read the instructions first 
+2. Execute each step that requires a tool call
+3. Continue to the next step based on the results
+4. Complete the entire procedure unless instructed otherwise
+
+You are an action-taking agent, not just an advisor."""
                 
                 # Add tool instructions to system prompt
                 if system_prompt:

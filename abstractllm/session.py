@@ -490,6 +490,93 @@ class Session:
         with open(filepath, 'w') as f:
             json.dump(data, f, indent=2)
     
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        Get comprehensive statistics about the session.
+        
+        Returns:
+            Dictionary containing session statistics including:
+            - Session info (id, created_at, last_updated, duration)
+            - Message statistics (total, by role, average length)
+            - Tool usage statistics (if applicable)
+            - Provider information
+        """
+        stats = {
+            "session_info": {
+                "id": self.id,
+                "created_at": self.created_at.isoformat(),
+                "last_updated": self.last_updated.isoformat(),
+                "duration_hours": (self.last_updated - self.created_at).total_seconds() / 3600,
+                "has_system_prompt": bool(self.system_prompt),
+                "metadata": self.metadata
+            },
+            "message_stats": {
+                "total_messages": len(self.messages),
+                "by_role": {},
+                "total_characters": 0,
+                "average_message_length": 0,
+                "first_message_time": None,
+                "last_message_time": None
+            },
+            "tool_stats": {
+                "total_tool_calls": 0,
+                "unique_tools_used": set(),
+                "successful_tool_calls": 0,
+                "failed_tool_calls": 0,
+                "tool_success_rate": 0.0,
+                "tools_available": len(self.tools),
+                "tool_names": [tool.name for tool in self.tools] if hasattr(self, 'tools') and self.tools else []
+            },
+            "provider_info": {
+                "current_provider": self._get_provider_name(self._provider) if self._provider else "None",
+                "provider_capabilities": list(self._provider.get_capabilities().keys()) if self._provider else []
+            }
+        }
+        
+        # Calculate message statistics
+        role_counts = {}
+        total_chars = 0
+        
+        for message in self.messages:
+            # Count by role
+            role = message.role
+            role_counts[role] = role_counts.get(role, 0) + 1
+            
+            # Character count
+            total_chars += len(message.content)
+            
+            # Tool statistics
+            if message.tool_results:
+                for tool_result in message.tool_results:
+                    stats["tool_stats"]["total_tool_calls"] += 1
+                    tool_name = tool_result.get("name", "unknown")
+                    stats["tool_stats"]["unique_tools_used"].add(tool_name)
+                    
+                    if tool_result.get("error"):
+                        stats["tool_stats"]["failed_tool_calls"] += 1
+                    else:
+                        stats["tool_stats"]["successful_tool_calls"] += 1
+            
+            # Timestamp tracking
+            if stats["message_stats"]["first_message_time"] is None:
+                stats["message_stats"]["first_message_time"] = message.timestamp.isoformat()
+            stats["message_stats"]["last_message_time"] = message.timestamp.isoformat()
+        
+        # Finalize message stats
+        stats["message_stats"]["by_role"] = role_counts
+        stats["message_stats"]["total_characters"] = total_chars
+        if len(self.messages) > 0:
+            stats["message_stats"]["average_message_length"] = total_chars / len(self.messages)
+        
+        # Finalize tool stats
+        stats["tool_stats"]["unique_tools_used"] = list(stats["tool_stats"]["unique_tools_used"])
+        if stats["tool_stats"]["total_tool_calls"] > 0:
+            stats["tool_stats"]["tool_success_rate"] = (
+                stats["tool_stats"]["successful_tool_calls"] / stats["tool_stats"]["total_tool_calls"]
+            )
+        
+        return stats
+    
     @classmethod
     def load(cls, filepath: str, 
              provider: Optional[Union[str, AbstractLLMInterface]] = None,
