@@ -200,31 +200,6 @@ def main():
         tools=[read_file]  # Function is automatically registered
     )
     
-    # Check if running in interactive mode
-    import sys
-    is_interactive = sys.stdin.isatty()
-    
-    if not is_interactive:
-        # Non-interactive mode - run a simple test
-        print("Running in non-interactive mode - testing basic functionality...")
-        test_prompt = "What is 2+2? Explain your reasoning."
-        print(f"\nTest prompt: {test_prompt}")
-        print("\nAssistant: ", end="")
-        
-        try:
-            response = session.generate(
-                prompt=test_prompt,
-                max_tokens=1024
-            )
-            
-            format_response_display(response)
-        except Exception as e:
-            print(f"Error: {e}")
-            import traceback
-            traceback.print_exc()
-        
-        return
-    
     print("\nMinimal ALMA - Type '/exit', '/quit', or '/q' to quit")
     print("Example: 'Read the file README.md and summarize it'")
     
@@ -252,8 +227,8 @@ def main():
             # Use the unified generate method
             response = session.generate(
                 prompt=user_input,
-                max_tool_calls=3,  # Limit tool calls to avoid infinite loops
-                max_tokens=2048    # Ensure enough tokens for complete response
+                max_tool_calls=25,  # Limit tool calls to avoid infinite loops
+                max_tokens=4096     # Ensure enough tokens for complete response
             )
             
             # Handle different response types:
