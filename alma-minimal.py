@@ -3,10 +3,6 @@
 Minimal ALMA (AbstractLLM Agent) implementation with file reading capability.
 Uses the simplest approach to tool calling with an interactive REPL.
 
-# Requirements
-- AbstractLLM: pip install abstractllm[anthropic]
-- Anthropic API key: export ANTHROPIC_API_KEY=your_api_key_here
-
 # Adding More Tools
 To add more tools from the common_tools module, simply import and add them:
 
@@ -27,7 +23,11 @@ Then add them to the tools list:
 from abstractllm import create_llm
 from abstractllm.session import Session
 from abstractllm.utils.logging import configure_logging, log_step
-from abstractllm.utils.formatting import format_response_display, format_stats_display
+from abstractllm.utils.formatting import (
+    format_response_display, format_stats_display, format_last_interactions,
+    format_system_prompt_info, format_update_result, format_tools_list,
+    format_provider_switch_result, format_provider_info
+)
 from abstractllm.tools.common_tools import (
     read_file, list_files,
     get_system_info, get_performance_stats, get_running_processes,
@@ -38,59 +38,34 @@ import logging
 import re
 import sys
 
-# Configure AbstractLLM logging for console output with tool execution details
-# Enable dual logging: console + file
-# This will be reconfigured in main() based on verbose flag
 
 # ANSI color codes for error messages
-RED_BOLD = '\033[1m\033[31m'    # Red bold
+RED_BOLD = '\033[1m\033[31m'     # Red bold
 BLUE_ITALIC = '\033[3m\033[34m'  # Blue italic
-RESET = '\033[0m'               # Reset formatting
-
-def main():    
-    # Add basic command-line argument parsing for verbose logging
-    verbose = "--verbose" in sys.argv or "-v" in sys.argv
-    
-    if verbose:
-        # Enable detailed logging for development/debugging
-        configure_logging(
-            log_dir="logs",
-            console_level=logging.DEBUG,  # Show everything in console when verbose
-            file_level=logging.DEBUG     # Show everything in file when verbose
-        )
-        print("🔍 Verbose logging enabled - detailed logs to console and logs/ directory")
-    else:
-        # Standard production logging: warnings to console, everything to file
-        configure_logging(
-            log_dir="logs", 
-            console_level=logging.WARNING,  # Only warnings/errors to console
-            file_level=logging.DEBUG        # Everything to file
-        )
-        print("📝 Logging enabled - warnings to console, detailed logs to logs/ directory")
-    
-    # Initialize the provider with the model - this is the key step
-    # The Session will use this provider's model by default
-    
-    model_name = "cogito"
-    model_name = "qwen2.5"
-    #provider = create_llm("ollama", model=model_name)
-    provider = create_llm("mlx", 
-                         model="mlx-community/Qwen3-30B-A3B-4bit",
-                         #model="mlx-community/DeepSeek-R1-0528-Qwen3-8B-4bit",
-                         max_tokens=4096)  # Set default max_tokens
+GREY_ITALIC = '\033[3m\033[90m'  # Grey italic
+RESET = '\033[0m'                # Reset formatting
 
 
-    # TEST WITH ANTHROPIC
-    # provider = create_llm("anthropic", 
-    #                    model="claude-3-5-haiku-20241022")
+def start_session():
+    #Store current provider info for /model command
+    provider_name = "mlx" # or anthropic or openai or ollama
+    model_name="mlx-community/Qwen3-30B-A3B-4bit"
+    #model_name="mlx-community/DeepSeek-R1-Distill-Qwen-32B-MLX-4Bit"
+    #model_name="mlx-community/DeepSeek-R1-0528-Qwen3-8B-4bit"
+    #model_name="a-m-team/AM-Thinking-v1"
+    #model_name="claude-3-5-haiku-20241022"
+    #model_name="gpt-4o"
+    #model_name = "cogito"
+    #model_name = "qwen2.5"
 
-    # TEST WITH OPENAI
-    # provider = create_llm("openai", 
-    #                     model="gpt-4o")
+    provider = create_llm(provider_name, 
+                         model=model_name,
+                         max_tokens=4096)
 
-    # TEST WITH MLX (Apple Silicon only)
-    # provider = create_llm("mlx", 
-    #                     model="mlx-community/Qwen3-30B-A3B-4bit")
+    # Load the model immediately at startup
+    print("🔄 Loading model...")
+    provider.load_model()
+    print("✅ Model loaded and ready!")
 
     # Create session with the provider and tool function
     # Use the standard Session class - no need to override it
@@ -108,12 +83,6 @@ For example, if you need to read a file, you should:
 You have access to these tools:
 - read_file(file_path, should_read_entire_file=True, start_line_one_indexed=1, end_line_one_indexed_inclusive=None)
 - list_files(directory_path=".", pattern="*", recursive=False)
-- get_system_info() - Get comprehensive system information including OS, hardware, and Python environment
-- get_performance_stats() - Get current system performance statistics including CPU, memory, and disk usage
-- get_running_processes(limit=10, sort_by="cpu") - Get information about currently running processes
-- get_network_connections(limit=10) - Get information about active network connections
-- get_disk_partitions() - Get information about disk partitions and usage
-- monitor_resource_usage(duration=5) - Monitor system resource usage over a specified duration
 
 When following multi-step procedures:
 1. Read the instructions first by CALLING read_file
@@ -121,35 +90,13 @@ When following multi-step procedures:
 3. Continue to the next step based on the results
 4. Complete the entire procedure unless instructed otherwise
 
-You can monitor and understand the system environment using the system monitoring tools. These help you understand:
-- Hardware capabilities (CPU cores, memory, disk space)
-- Current performance (CPU/memory usage, running processes)
-- System limitations and resources available for tasks
-- Network connectivity and disk I/O patterns
-
 You are an ACTION-TAKING agent, not just an advisor. Take action immediately when requested.""",
         provider=provider,
-        tools=[read_file, list_files, get_system_info, get_performance_stats, get_running_processes, get_network_connections, get_disk_partitions, monitor_resource_usage]  # Functions are automatically registered
+        tools=[read_file, list_files]  # Functions are automatically registered
     )
+    return session
     
-    print("\nMinimal ALMA - Type '/exit', '/quit', or '/q' to quit")
-    print("Example: 'Read the file README.md and summarize it'")
-    print("Example: 'What system am I running on and what are the current performance stats?'")
-    print("Commands: /stats, /save <filename>, /load <filename>")
-    print("Type '/help' for more information")
-    print(f"\n💡 Tip: See the common_tools module for more shareable tools:")
-    print(f"   - File operations: list_files, search_files, write_file, update_file")
-    print(f"   - System monitoring: get_system_info, get_performance_stats, get_running_processes")
-    print(f"   - Web operations: search_internet, fetch_url, fetch_and_parse_html")
-    print(f"   - System: execute_command")
-    print(f"   - User interaction: ask_user_multiple_choice")
-    print(f"\n📝 Logging: All activity logged to logs/ directory")
-    print(f"   Console shows warnings/errors (or everything with --verbose)")
-    print(f"   Files contain complete debug logs for troubleshooting")
-    print(f"\n🖥️  System Awareness: The agent can now understand your system environment!")
-    print(f"   Ask about: hardware specs, performance, running processes, disk usage, network")
-    
-    # Simple REPL loop
+def start_repl(session):
     while True:
         try:
             # Get user input
@@ -169,7 +116,30 @@ You are an ACTION-TAKING agent, not just an advisor. Take action immediately whe
                 command_parts = user_input.split()
                 command = command_parts[0].lower()
                 
-                if command == "/stats":
+                if command == "/model":
+                    # Handle model switching
+                    if len(command_parts) == 1:
+                        # Show current model info from session
+                        print(f"\n{BLUE_ITALIC}🤖 Model Information{RESET}")
+                        provider_info = session.get_provider_info()
+                        print(format_provider_info(provider_info))
+                        continue
+                    else:
+                        # Switch to new model - parse provider:model format
+                        new_model_spec = " ".join(command_parts[1:])
+                        
+                        if ":" not in new_model_spec:
+                            print(f"{RED_BOLD}Error: Format should be 'provider:model'{RESET}")
+                            continue
+                        
+                        provider_name, model_name = new_model_spec.split(":", 1)
+                        
+                        # Call session method and format result
+                        result = session.switch_provider(provider_name.strip(), model_name.strip())
+                        print(format_provider_switch_result(result))
+                        continue
+                
+                elif command == "/stats":
                     # Show session statistics
                     try:
                         stats = session.get_stats()
@@ -206,8 +176,8 @@ You are an ACTION-TAKING agent, not just an advisor. Take action immediately whe
                         filename += '.json'
                     
                     try:
-                        # Load session and replace current session
-                        new_session = Session.load(filename, provider=provider)
+                        # Load session - provider will be restored automatically from saved state
+                        new_session = Session.load(filename)
                         
                         # Transfer tools from current session to loaded session
                         new_session.tools = session.tools
@@ -228,103 +198,45 @@ You are an ACTION-TAKING agent, not just an advisor. Take action immediately whe
                         print(f"{RED_BOLD}Error loading session: {str(e)}{RESET}")
                     continue
                 
+                elif command == "/last":
+                    # Handle last command - show last X interactions
+                    # Default to 1 if no parameter provided
+                    count = abs(int(command_parts[1])) if len(command_parts) > 1 else 1
+                    # Get structured data from session
+                    interactions = session.get_last_interactions(count)
+                    # Format and display
+                    print(format_last_interactions(interactions))
+                    continue
+                
                 elif command == "/help":
                     # Show help information
-                    print(f"\n{BLUE_ITALIC}💡 ALMA Session Management Help{RESET}")
-                    print(f"\nAvailable Commands:")
-                    print(f"  /stats                  - Show session statistics")
-                    print(f"  /save <filename>        - Save current session to file")
-                    print(f"  /load <filename>        - Load session from file")
-                    print(f"  /tools                  - List all available tools")
-                    print(f"  /help                   - Show this help message")
-                    print(f"  /exit, /quit, /q        - Exit ALMA")
-                    
-                    print(f"\nSession Features:")
-                    print(f"  • Conversation history is automatically saved")
-                    print(f"  • Tool calls and results are tracked")
-                    print(f"  • Sessions persist system prompts and metadata")
-                    print(f"  • JSON format allows easy inspection and sharing")
-                    
-                    print(f"\nExample Usage:")
-                    print(f"  /save my_conversation     - Saves to 'my_conversation.json'")
-                    print(f"  /load my_conversation     - Loads from 'my_conversation.json'")
-                    print(f"  /stats                    - Shows message counts, tool usage, etc.")
-                    print(f"  /tools                    - Shows all available tools and descriptions")
-                    
-                    print(f"\nTool Support:")
-                    print(f"  Available tools: read_file, list_files")
-                    print(f"  Example: 'Read the README.md file and summarize it'")
-                    
-                    print(f"\n📦 Available Common Tools:")
-                    print(f"  See abstractllm.tools.common_tools for more shareable tools")
-                    print(f"  Run: python examples/common_tools_demo.py")
+                    show_help()                    
                     continue
                 
                 elif command == "/tools":
                     # List all available tools with descriptions
-                    print(f"\n{BLUE_ITALIC}🔧 Available Tools{RESET}")
-                    print(f"\nThis session has access to the following tools:")
-                    
-                    try:
-                        # Get tools from session
-                        if hasattr(session, 'tools') and session.tools:
-                            tool_count = 0
-                            for tool in session.tools:
-                                tool_count += 1
-                                
-                                # Extract tool name and description
-                                if hasattr(tool, 'to_dict'):
-                                    # ToolDefinition object
-                                    tool_dict = tool.to_dict()
-                                    name = tool_dict.get('name', 'unknown')
-                                    description = tool_dict.get('description', 'No description available')
-                                    
-                                    # Get parameter info if available
-                                    params = tool_dict.get('input_schema', {}).get('properties', {})
-                                    param_names = list(params.keys())
-                                    param_str = f"({', '.join(param_names)})" if param_names else "()"
-                                    
-                                elif callable(tool):
-                                    # Function object
-                                    name = getattr(tool, '__name__', 'unknown')
-                                    description = getattr(tool, '__doc__', 'No description available')
-                                    if description:
-                                        # Clean up docstring - take first line only
-                                        description = description.strip().split('\n')[0]
-                                    else:
-                                        description = 'No description available'
-                                    param_str = ""
-                                else:
-                                    name = str(tool)
-                                    description = 'Unknown tool type'
-                                    param_str = ""
-                                
-                                print(f"  {tool_count}. {name}{param_str}")
-                                print(f"     {description}")
-                                print()
-                        
-                        else:
-                            print(f"  No tools are currently available in this session.")
-                        
-                        print(f"\n💡 Usage Tips:")
-                        print(f"  • Tools are called automatically when needed")
-                        print(f"  • Example: 'List all Python files in the current directory'")
-                        print(f"  • Example: 'Read the contents of README.md'")
-                        print(f"  • The agent will choose and execute the right tools")
-                        
-                        print(f"\n📚 More Tools:")
-                        print(f"  See abstractllm.tools.common_tools for additional tools:")
-                        print(f"  • search_files, write_file, update_file")
-                        print(f"  • search_internet, fetch_url, fetch_and_parse_html")
-                        print(f"  • execute_command, ask_user_multiple_choice")
-                        
-                    except Exception as e:
-                        print(f"{RED_BOLD}Error listing tools: {str(e)}{RESET}")
+                    tools = session.get_tools_list()
+                    print(format_tools_list(tools))
                     continue
+                
+                elif command == "/system":
+                    # Handle system command
+                    if len(command_parts) == 1:
+                        # Show current system prompt info
+                        print(f"\n{BLUE_ITALIC}🤖 System Prompt Information{RESET}")
+                        prompt_info = session.get_system_prompt_info()
+                        print(format_system_prompt_info(prompt_info))
+                        continue
+                    else:
+                        # Update system prompt
+                        new_prompt = " ".join(command_parts[1:])
+                        result = session.update_system_prompt(new_prompt)
+                        print(format_update_result(result))
+                        continue
                 
                 else:
                     print(f"{RED_BOLD}Unknown command: {command}{RESET}")
-                    print("Available commands: /stats, /save <filename>, /load <filename>, /tools, /help, /exit")
+                    print("Available commands: /stats, /save <filename>, /load <filename>, /model [provider:model], /system [prompt], /last [count], /tools, /help, /exit")
                     continue
             
             # Generate response with tool support
@@ -343,7 +255,6 @@ You are an ACTION-TAKING agent, not just an advisor. Take action immediately whe
             log_step(3, "LLM→AGENT", "Received response, displaying to user")
             
             # Simply display the response - trust AbstractLLM formatting
-            print()  # Add spacing
             format_response_display(response)
             
         except EOFError:
@@ -358,6 +269,65 @@ You are an ACTION-TAKING agent, not just an advisor. Take action immediately whe
             print(f"\nError: {str(e)}")
             import traceback
             traceback.print_exc()
+
+
+
+def set_logging():
+    configure_logging(
+        log_dir="logs", 
+        console_level=logging.WARNING,  # Only warnings/errors to console
+        file_level=logging.DEBUG        # Everything to file
+    )
+    print("📝 Logging enabled - warnings to console, detailed logs to logs/ directory")
+
+def show_help():
+    print(f"\n{BLUE_ITALIC}💡 ALMA Session Management Help{RESET}")
+    print(f"\nAvailable Commands:")
+    print(f"  /stats                  - Show session statistics")
+    print(f"  /save <filename>        - Save current session to file")
+    print(f"  /load <filename>        - Load session from file")
+    print(f"  /model [provider:model] - Show current model or switch to new model")
+    print(f"  /system [prompt]        - Show current system prompt or set new one")
+    print(f"  /last [count]           - Show last X interactions (default: 1)")
+    print(f"  /tools                  - List all available tools")
+    print(f"  /help                   - Show this help message")
+    print(f"  /exit, /quit, /q        - Exit ALMA")
+
+    print(f"\nSession Features:")
+    print(f"  • Conversation history is automatically saved")
+    print(f"  • Tool calls and results are tracked")
+    print(f"  • Sessions persist system prompts and metadata")
+    print(f"  • JSON format allows easy inspection and sharing")
+
+    print(f"\nModel Switching:")
+    print(f"  • Format: provider:model_name")
+    print(f"  • Supported providers: ollama, mlx, anthropic, openai")
+    print(f"  • Previous model is unloaded from memory")
+    print(f"  • Conversation history and tools are preserved")
+    print(f"  • Examples:")
+    print(f"    - ollama:qwen3:30b-a3b-q4_K_M")
+    print(f"    - mlx:mlx-community/Qwen3-30B-A3B-4bit")
+    print(f"    - anthropic:claude-3-5-haiku-20241022")
+    print(f"    - openai:gpt-4o")
+    
+    print(f"\nTool Support:")
+    print(f"  Available tools: read_file, list_files, system monitoring tools")
+    print(f"  Example: 'Read the README.md file and summarize it'")    
+
+
+def main():    
+    # Set logging
+    set_logging()
+
+    # Show help
+    show_help()
+
+    # Create session
+    session = start_session()
+
+    # Start REPL loop
+    start_repl(session)
+
 
 if __name__ == "__main__":
     main() 

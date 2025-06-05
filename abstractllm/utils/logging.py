@@ -16,6 +16,12 @@ from .formatting import RED_BOLD, GREY_ITALIC, BLUE_ITALIC, RESET
 # Configure logger
 logger = logging.getLogger("abstractllm")
 
+# Immediately suppress noisy third-party loggers at import time
+# This catches warnings that happen before configure_logging() is called
+logging.getLogger("huggingface_hub").setLevel(logging.CRITICAL)
+logging.getLogger("huggingface_hub._snapshot_download").setLevel(logging.CRITICAL)
+logging.getLogger("transformers").setLevel(logging.ERROR)
+
 # Global configuration
 class LogConfig:
     """Global logging configuration."""
@@ -469,6 +475,10 @@ def setup_logging(
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
         logging.getLogger("urllib3").setLevel(logging.WARNING)
+        logging.getLogger("huggingface_hub").setLevel(logging.CRITICAL)  # Suppress cache warnings more aggressively
+        logging.getLogger("huggingface_hub._snapshot_download").setLevel(logging.CRITICAL)  # Specific suppression
+        # Also suppress any transformers warnings
+        logging.getLogger("transformers").setLevel(logging.ERROR)
 
 def log_step(step_number: int, step_name: str, message: str, logger_name: str = "alma.steps") -> None:
     """

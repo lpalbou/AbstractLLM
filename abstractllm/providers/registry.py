@@ -50,18 +50,14 @@ def register_mlx_provider() -> bool:
     Returns:
         bool: True if the provider was registered, False otherwise
     """
-    # Check platform first before importing anything
-    import platform
-    is_macos = platform.system().lower() == "darwin"
-    is_arm = platform.processor() == "arm"
+    # Check platform compatibility
+    from abstractllm.utils.utilities import is_apple_silicon
     
-    # Log availability status
-    if not is_macos or not is_arm:
-        logger.info(
-            "MLX provider not registered: requires macOS with Apple Silicon. "
-            f"Current platform: {platform.system()} {platform.processor()}"
-        )
+    if not is_apple_silicon():
+        logger.info("MLX provider not registered: requires Apple Silicon hardware")
         return False
+    
+    logger.debug("Platform check passed - Apple Silicon detected")
     
     # Import MLX dependencies
     try:
@@ -92,7 +88,6 @@ def register_mlx_provider() -> bool:
         register_provider("mlx", "abstractllm.providers.mlx_provider", "MLXProvider")
         logger.info("MLX provider successfully registered for Apple Silicon")
         
-        # No need to import the factory module since we've simplified the provider
         if has_vision:
             logger.info("MLX Vision support is available")
         return True

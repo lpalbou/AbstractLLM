@@ -301,6 +301,47 @@ class Llama2Config(LlamaConfig):
     name = "llama2"
 
 
+class AMThinkingConfig(MLXModelConfig):
+    """Configuration for A-M Team Thinking models (DeepSeek-R1 based)."""
+    
+    name = "am_thinking"
+    eos_tokens = ["<|im_end|>", "<|endoftext|>", "</s>", "<think>", "</think>", "<answer>", "</answer>"]
+    bos_tokens = ["<|im_start|>"]
+    default_repetition_penalty = 1.15  # Higher to prevent loops
+    default_temperature = 0.7
+    
+    @classmethod
+    def get_generation_params(cls, temperature: float, **kwargs) -> Dict[str, Any]:
+        """Get parameters for generation with stronger loop prevention."""
+        params = super().get_generation_params(temperature, **kwargs)
+        
+        # MLX-LM uses sampler for repetition penalty, not direct parameters
+        # The repetition penalty is handled in the base class through sampler creation
+        
+        return params
+    
+    @classmethod
+    def format_system_prompt(cls, system_prompt: str, user_prompt: str, processor) -> str:
+        """Format system and user prompts for AM-Thinking models."""
+        if hasattr(processor, "apply_chat_template"):
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+            return processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        else:
+            # Fallback for models without chat template
+            return f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{user_prompt}<|im_end|>\n<|im_start|>assistant\n"
+
+
+class DeepSeekR1Config(AMThinkingConfig):
+    """Configuration for DeepSeek-R1 models."""
+    
+    name = "deepseek_r1"
+    eos_tokens = ["<|endoftext|>", "<|im_end|>", "</s>", "<think>", "</think>", "<answer>", "</answer>"]
+    default_repetition_penalty = 1.2  # Even higher for DeepSeek models
+
+
 class ModelConfigFactory:
     """Factory class to create model configuration objects for MLX models.
     
@@ -352,6 +393,13 @@ class ModelConfigFactory:
         "starcoder": CodeModelConfig,
         "codellama": CodeModelConfig,
         "coder": CodeModelConfig,
+        
+        # AM-Thinking family
+        "am-thinking": AMThinkingConfig,
+        "am_thinking": AMThinkingConfig,
+        "deepseek-r1": DeepSeekR1Config,
+        "deepseek_r1": DeepSeekR1Config,
+        "deepseek": DeepSeekR1Config,
     }
     
     @classmethod

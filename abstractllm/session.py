@@ -226,6 +226,21 @@ class Session:
             for tool in tools:
                 self.add_tool(tool)
     
+    @property
+    def provider(self) -> Optional[AbstractLLMInterface]:
+        """Get the current provider instance."""
+        return self._provider
+    
+    @provider.setter
+    def provider(self, value: Optional[Union[str, AbstractLLMInterface]]) -> None:
+        """Set the provider instance."""
+        if value is None:
+            self._provider = None
+        elif isinstance(value, str):
+            self._provider = create_llm(value)
+        else:
+            self._provider = value
+    
     def add_message(self, 
                     role: Union[str, MessageRole], 
                     content: str, 
@@ -473,11 +488,12 @@ class Session:
     
     def save(self, filepath: str) -> None:
         """
-        Save the session to a file.
+        Save the session to a file, including current provider state.
         
         Args:
             filepath: Path to save the session to
         """
+        # Basic session data
         data = {
             "id": self.id,
             "created_at": self.created_at.isoformat(),
@@ -486,6 +502,31 @@ class Session:
             "metadata": self.metadata,
             "messages": [m.to_dict() for m in self.messages]
         }
+        
+        # Save provider state if available
+        if self.provider is not None:
+            provider_name = self._get_provider_name(self.provider)
+            model_name = self._get_provider_model(self.provider)
+            
+            # Extract provider config - be careful with different provider types
+            provider_config = {}
+            if hasattr(self.provider, 'config') and self.provider.config:
+                # Make a copy and serialize only JSON-serializable values
+                for key, value in self.provider.config.items():
+                    # Convert ModelParameter enum keys to strings for JSON serialization
+                    str_key = str(key) if hasattr(key, 'name') else key
+                    
+                    # Only include serializable values
+                    if isinstance(value, (str, int, float, bool, list, dict, type(None))):
+                        provider_config[str_key] = value
+                    elif hasattr(value, '__name__'):  # For enum values
+                        provider_config[str_key] = str(value)
+            
+            data["provider_state"] = {
+                "provider_name": provider_name,
+                "model_name": model_name,
+                "provider_config": provider_config
+            }
         
         with open(filepath, 'w') as f:
             json.dump(data, f, indent=2)
@@ -500,173 +541,88 @@ class Session:
             - Message statistics (total, by role, average length)
             - Tool usage statistics (if applicable)
             - Provider information
+            - Token statistics (automatically computed for missing data)
         """
-        stats = {
-            "session_info": {
-                "id": self.id,
-                "created_at": self.created_at.isoformat(),
-                "last_updated": self.last_updated.isoformat(),
-                "duration_hours": (self.last_updated - self.created_at).total_seconds() / 3600,
-                "has_system_prompt": bool(self.system_prompt),
-                "metadata": self.metadata
-            },
-            "message_stats": {
-                "total_messages": len(self.messages),
-                "by_role": {},
-                "total_characters": 0,
-                "average_message_length": 0,
-                "first_message_time": None,
-                "last_message_time": None
-            },
-            "tool_stats": {
-                "total_tool_calls": 0,
-                "unique_tools_used": set(),
-                "successful_tool_calls": 0,
-                "failed_tool_calls": 0,
-                "tool_success_rate": 0.0,
-                "tools_available": len(self.tools),
-                "tool_names": [tool.name for tool in self.tools] if hasattr(self, 'tools') and self.tools else []
-            },
-            "provider_info": {
-                "current_provider": self._get_provider_name(self._provider) if self._provider else "None",
-                "provider_capabilities": list(self._provider.get_capabilities().keys()) if self._provider else []
-            }
-        }
-        
-        # Calculate message statistics
-        role_counts = {}
-        total_chars = 0
-        
-        # Token statistics
-        token_stats = {
-            "total_prompt_tokens": 0,
-            "total_completion_tokens": 0,
-            "total_tokens": 0,
-            "messages_with_usage": 0,
-            "average_prompt_tokens": 0,
-            "average_completion_tokens": 0,
-            "total_time": 0.0,
-            "average_prompt_tps": 0.0,
-            "average_completion_tps": 0.0,
-            "average_total_tps": 0.0,
-            "by_provider": {}
-        }
-        
-        for message in self.messages:
-            # Count by role
-            role = message.role
-            role_counts[role] = role_counts.get(role, 0) + 1
-            
-            # Character count
-            total_chars += len(message.content)
-            
-            # Token usage tracking from message metadata
-            if message.metadata and "usage" in message.metadata:
-                usage = message.metadata["usage"]
-                if isinstance(usage, dict):
-                    prompt_tokens = usage.get("prompt_tokens", 0)
-                    completion_tokens = usage.get("completion_tokens", 0)
-                    total_message_tokens = usage.get("total_tokens", prompt_tokens + completion_tokens)
-                    time_taken = usage.get("time", 0.0)
-                    
-                    token_stats["total_prompt_tokens"] += prompt_tokens
-                    token_stats["total_completion_tokens"] += completion_tokens
-                    token_stats["total_tokens"] += total_message_tokens
-                    token_stats["total_time"] += time_taken
-                    token_stats["messages_with_usage"] += 1
-                    
-                    # Track by provider if available
-                    provider_name = message.metadata.get("provider", "unknown")
-                    if provider_name not in token_stats["by_provider"]:
-                        token_stats["by_provider"][provider_name] = {
-                            "prompt_tokens": 0,
-                            "completion_tokens": 0,
-                            "total_tokens": 0,
-                            "total_time": 0.0,
-                            "messages": 0,
-                            "average_tps": 0.0
-                        }
-                    
-                    provider_stats = token_stats["by_provider"][provider_name]
-                    provider_stats["prompt_tokens"] += prompt_tokens
-                    provider_stats["completion_tokens"] += completion_tokens
-                    provider_stats["total_tokens"] += total_message_tokens
-                    provider_stats["total_time"] += time_taken
-                    provider_stats["messages"] += 1
-                    
-                    # Calculate provider-specific TPS
-                    if provider_stats["total_time"] > 0:
-                        provider_stats["average_tps"] = provider_stats["total_tokens"] / provider_stats["total_time"]
-            
-            # Tool statistics
-            if message.tool_results:
-                for tool_result in message.tool_results:
-                    stats["tool_stats"]["total_tool_calls"] += 1
-                    tool_name = tool_result.get("name", "unknown")
-                    stats["tool_stats"]["unique_tools_used"].add(tool_name)
-                    
-                    if tool_result.get("error"):
-                        stats["tool_stats"]["failed_tool_calls"] += 1
-                    else:
-                        stats["tool_stats"]["successful_tool_calls"] += 1
-            
-            # Timestamp tracking
-            if stats["message_stats"]["first_message_time"] is None:
-                stats["message_stats"]["first_message_time"] = message.timestamp.isoformat()
-            stats["message_stats"]["last_message_time"] = message.timestamp.isoformat()
-        
-        # Calculate token averages
-        if token_stats["messages_with_usage"] > 0:
-            token_stats["average_prompt_tokens"] = token_stats["total_prompt_tokens"] / token_stats["messages_with_usage"]
-            token_stats["average_completion_tokens"] = token_stats["total_completion_tokens"] / token_stats["messages_with_usage"]
-            
-            # Calculate TPS averages
-            if token_stats["total_time"] > 0:
-                token_stats["average_total_tps"] = token_stats["total_tokens"] / token_stats["total_time"]
-                token_stats["average_prompt_tps"] = token_stats["total_prompt_tokens"] / token_stats["total_time"]
-                token_stats["average_completion_tps"] = token_stats["total_completion_tokens"] / token_stats["total_time"]
-        
-        # Finalize message stats
-        stats["message_stats"]["by_role"] = role_counts
-        stats["message_stats"]["total_characters"] = total_chars
-        if len(self.messages) > 0:
-            stats["message_stats"]["average_message_length"] = total_chars / len(self.messages)
-        
-        # Add token stats to the return dictionary
-        stats["token_stats"] = token_stats
-        
-        # Finalize tool stats
-        stats["tool_stats"]["unique_tools_used"] = list(stats["tool_stats"]["unique_tools_used"])
-        if stats["tool_stats"]["total_tool_calls"] > 0:
-            stats["tool_stats"]["tool_success_rate"] = (
-                stats["tool_stats"]["successful_tool_calls"] / stats["tool_stats"]["total_tool_calls"]
-            )
-        
-        return stats
+        from abstractllm.utils.utilities import get_session_stats
+        return get_session_stats(self)
     
     @classmethod
     def load(cls, filepath: str, 
              provider: Optional[Union[str, AbstractLLMInterface]] = None,
              provider_config: Optional[Dict[Union[str, ModelParameter], Any]] = None) -> 'Session':
         """
-        Load a session from a file.
+        Load a session from a file, automatically restoring provider state if saved.
         
         Args:
             filepath: Path to load the session from
-            provider: Provider to use for the loaded session
-            provider_config: Configuration for the provider
+            provider: Provider to use (only if no provider was saved or as override)
+            provider_config: Configuration for the provider (only if no config was saved or as override)
             
         Returns:
-            A Session instance
+            A Session instance with restored provider state
         """
         with open(filepath, 'r') as f:
             data = json.load(f)
         
+        # Check if provider state was saved
+        saved_provider_state = data.get("provider_state")
+        
+        # Determine which provider to use
+        provider_to_use = provider
+        config_to_use = provider_config
+        
+        if saved_provider_state and provider is None:
+            # Restore saved provider if no override provided
+            saved_provider_name = saved_provider_state.get("provider_name")
+            saved_model_name = saved_provider_state.get("model_name")
+            saved_config = saved_provider_state.get("provider_config", {})
+            
+            if saved_provider_name and saved_model_name:
+                try:
+                    from abstractllm import create_llm
+                    
+                    # Convert string keys back to ModelParameter enums where applicable
+                    restored_config = {}
+                    for key, value in saved_config.items():
+                        # Try to convert back to ModelParameter enum
+                        try:
+                            if hasattr(ModelParameter, key):
+                                restored_config[getattr(ModelParameter, key)] = value
+                            else:
+                                restored_config[key] = value
+                        except AttributeError:
+                            restored_config[key] = value
+                    
+                    # Add the model to config
+                    restored_config[ModelParameter.MODEL] = saved_model_name
+                    
+                    provider_to_use = create_llm(saved_provider_name, **restored_config)
+                    config_to_use = restored_config
+                    
+                    # Load the model immediately (like we do at startup)
+                    print(f"🔄 Loading restored model...")
+                    provider_to_use.load_model()
+                    print(f"✅ Restored provider: {saved_provider_name} with model: {saved_model_name}")
+                    
+                except Exception as e:
+                    print(f"⚠️  Could not restore saved provider {saved_provider_name}:{saved_model_name}: {e}")
+                    print("📝 Session will be loaded without provider - you can set one manually")
+                    provider_to_use = None
+                    config_to_use = None
+        elif provider_to_use and hasattr(provider_to_use, 'load_model'):
+            # If we have a provider (either provided or already instantiated), make sure it's loaded
+            try:
+                print(f"🔄 Loading model...")
+                provider_to_use.load_model()
+                print(f"✅ Model loaded and ready!")
+            except Exception as e:
+                print(f"⚠️  Warning: Could not load model: {e}")
+        
         # Create a new session
         session = cls(
             system_prompt=data.get("system_prompt"),
-            provider=provider,
-            provider_config=provider_config,
+            provider=provider_to_use,
+            provider_config=config_to_use,
             metadata=data.get("metadata", {})
         )
         
@@ -1736,20 +1692,57 @@ class Session:
         Returns:
             Model name or None if not found
         """
-        if not hasattr(provider, 'config'):
-            return None
+        # Try getting config through the standard interface methods
+        try:
+            # First try the get_config() method
+            if hasattr(provider, 'get_config'):
+                config = provider.get_config()
+                
+                # Check for ModelParameter.MODEL in config dictionary
+                if ModelParameter.MODEL in config:
+                    return config[ModelParameter.MODEL]
+                    
+                # Check for 'model' as string key in config dictionary
+                if 'model' in config:
+                    return config['model']
+        except Exception:
+            pass
             
-        # Check for 'model' in config dictionary
-        if 'model' in provider.config:
-            return provider.config['model']
+        # Try config_manager directly
+        try:
+            if hasattr(provider, 'config_manager'):
+                model = provider.config_manager.get_param(ModelParameter.MODEL)
+                if model:
+                    return model
+        except Exception:
+            pass
             
-        # Check for ModelParameter.MODEL in config dictionary
-        if hasattr(ModelParameter, 'MODEL') and ModelParameter.MODEL in provider.config:
-            return provider.config[ModelParameter.MODEL]
+        # Try direct config attribute (fallback for older providers)
+        try:
+            if hasattr(provider, 'config') and provider.config:
+                # Check for 'model' in config dictionary
+                if 'model' in provider.config:
+                    return provider.config['model']
+                    
+                # Check for ModelParameter.MODEL in config dictionary
+                if ModelParameter.MODEL in provider.config:
+                    return provider.config[ModelParameter.MODEL]
+        except Exception:
+            pass
             
-        # Check for model as a direct attribute
-        if hasattr(provider, 'model'):
-            return provider.model
+        # Check for model as a direct attribute (some providers might store it this way)
+        try:
+            if hasattr(provider, 'model'):
+                return provider.model
+        except Exception:
+            pass
+            
+        # Check for _model_id attribute (MLX provider stores it this way after loading)
+        try:
+            if hasattr(provider, '_model_id'):
+                return provider._model_id
+        except Exception:
+            pass
             
         # No model found
         return None
@@ -1858,9 +1851,10 @@ class Session:
             
             # Create generator that adds the assistant message at the end
             accumulated_content = ""
+            final_response_metadata = {}
             
             def stream_wrapper():
-                nonlocal accumulated_content
+                nonlocal accumulated_content, final_response_metadata
                 for chunk in stream_response:
                     if isinstance(chunk, str):
                         accumulated_content += chunk
@@ -1870,10 +1864,17 @@ class Session:
                         if content_chunk:
                             accumulated_content += content_chunk
                             yield content_chunk
+                        
+                        # Capture metadata from the chunk (especially the last one)
+                        if hasattr(chunk, 'usage') and chunk.usage:
+                            final_response_metadata["usage"] = chunk.usage
+                        if hasattr(chunk, 'model') and chunk.model:
+                            final_response_metadata["provider"] = provider_name
+                            final_response_metadata["model"] = chunk.model
                 
-                # Add the final message to the conversation
+                # Add the final message to the conversation with metadata
                 if accumulated_content:
-                    self.add_message(MessageRole.ASSISTANT, accumulated_content)
+                    self.add_message(MessageRole.ASSISTANT, accumulated_content, metadata=final_response_metadata)
             
             return stream_wrapper()
         
@@ -1918,10 +1919,246 @@ class Session:
             **kwargs
         )
         
-        # Add the response to the conversation
-        self.add_message(MessageRole.ASSISTANT, response)
+        # Extract content and metadata from the response
+        if isinstance(response, str):
+            content = response
+            metadata = {}
+        else:
+            content = response.content if hasattr(response, 'content') else str(response)
+            
+            # Extract usage information and other metadata from response
+            metadata = {}
+            if hasattr(response, 'usage') and response.usage:
+                metadata["usage"] = response.usage
+            if hasattr(response, 'model') and response.model:
+                metadata["provider"] = provider_name
+                metadata["model"] = response.model
+        
+        # Add the response to the conversation with metadata
+        self.add_message(MessageRole.ASSISTANT, content, metadata=metadata)
         
         return response
+
+    def get_last_interactions(self, count: int = 1) -> List[Dict[str, Any]]:
+        """
+        Get the last N interactions as structured data.
+        
+        Args:
+            count: Number of interactions to retrieve
+            
+        Returns:
+            List of interaction dictionaries with message pairs and metadata,
+            ordered from most recent to oldest
+        """
+        if count < 1:
+            raise ValueError("Count must be positive")
+        
+        interactions = []
+        messages = [msg for msg in self.messages if msg.role != MessageRole.SYSTEM]
+        
+        # Group messages into interactions (user message + assistant response + any tool results)
+        i = 0
+        while i < len(messages):
+            interaction = {}
+            
+            # Look for user message
+            if i < len(messages) and messages[i].role == MessageRole.USER:
+                interaction["user"] = {
+                    "content": messages[i].content,
+                    "timestamp": messages[i].timestamp,
+                    "metadata": messages[i].metadata
+                }
+                i += 1
+                
+                # Look for assistant response
+                if i < len(messages) and messages[i].role == MessageRole.ASSISTANT:
+                    interaction["assistant"] = {
+                        "content": messages[i].content,
+                        "timestamp": messages[i].timestamp,
+                        "metadata": messages[i].metadata,
+                        "tool_results": messages[i].tool_results
+                    }
+                    i += 1
+                    
+                    # Look for any tool messages that follow
+                    tool_messages = []
+                    while i < len(messages) and messages[i].role == MessageRole.TOOL:
+                        tool_messages.append({
+                            "content": messages[i].content,
+                            "timestamp": messages[i].timestamp,
+                            "metadata": messages[i].metadata
+                        })
+                        i += 1
+                    
+                    if tool_messages:
+                        interaction["tools"] = tool_messages
+                
+                interactions.append(interaction)
+            else:
+                i += 1
+        
+        # Get the most recent interactions and return them in reverse chronological order (most recent first)
+        recent_interactions = interactions[-count:] if len(interactions) >= count else interactions
+        return list(reversed(recent_interactions))
+
+    def get_system_prompt_info(self) -> Dict[str, Any]:
+        """
+        Get system prompt information as structured data.
+        
+        Returns:
+            Dictionary containing system prompt details
+        """
+        return {
+            "has_system_prompt": self.system_prompt is not None,
+            "system_prompt": self.system_prompt,
+            "character_count": len(self.system_prompt) if self.system_prompt else 0,
+            "line_count": self.system_prompt.count('\n') + 1 if self.system_prompt else 0
+        }
+
+    def update_system_prompt(self, new_prompt: str) -> Dict[str, Any]:
+        """
+        Update the session's system prompt.
+        
+        Args:
+            new_prompt: New system prompt text
+            
+        Returns:
+            Dictionary with update result and details
+        """
+        if not new_prompt.strip():
+            return {
+                "success": False,
+                "error": "System prompt cannot be empty",
+                "old_prompt": self.system_prompt,
+                "new_prompt": None
+            }
+        
+        old_prompt = self.system_prompt
+        self.system_prompt = new_prompt.strip()
+        
+        return {
+            "success": True,
+            "error": None,
+            "old_prompt": old_prompt,
+            "new_prompt": self.system_prompt,
+            "old_length": len(old_prompt) if old_prompt else 0,
+            "new_length": len(self.system_prompt)
+        }
+
+    def get_tools_list(self) -> List[Dict[str, Any]]:
+        """
+        Get list of available tools as structured data.
+        
+        Returns:
+            List of tool dictionaries with details
+        """
+        tools_list = []
+        
+        for tool_def in self.tools:
+            if hasattr(tool_def, 'to_dict'):
+                # ToolDefinition object
+                tool_dict = tool_def.to_dict()
+                tools_list.append({
+                    "name": tool_dict.get("name", "Unknown"),
+                    "description": tool_dict.get("description", "No description available"),
+                    "parameters": tool_dict.get("input_schema", {}),
+                    "source": "ToolDefinition"
+                })
+            elif callable(tool_def):
+                # Function object
+                tools_list.append({
+                    "name": getattr(tool_def, '__name__', 'Unknown'),
+                    "description": getattr(tool_def, '__doc__', 'No description available') or 'No description available',
+                    "parameters": {},  # Functions don't have structured parameters in this implementation
+                    "source": "Function"
+                })
+            elif isinstance(tool_def, dict):
+                # Dictionary tool definition
+                tools_list.append({
+                    "name": tool_def.get("name", "Unknown"),
+                    "description": tool_def.get("description", "No description available"),
+                    "parameters": tool_def.get("parameters", {}),
+                    "source": "Dictionary"
+                })
+        
+        return tools_list
+
+    def switch_provider(self, provider_name: str, model_name: str) -> Dict[str, Any]:
+        """
+        Switch to a new provider and model combination.
+        
+        Args:
+            provider_name: Name of the provider (e.g., "mlx", "anthropic", "openai")
+            model_name: Name of the model (e.g., "mlx-community/Qwen3-30B-A3B-4bit")
+            
+        Returns:
+            Dictionary with switch result and details
+        """
+        try:
+            # Store old provider info
+            old_provider_name = self._get_provider_name(self.provider) if self.provider else None
+            old_model_name = self._get_provider_model(self.provider) if self.provider else None
+            
+            # Create new provider
+            from abstractllm import create_llm
+            new_provider = create_llm(provider_name, model=model_name)
+            
+            # Set it on session (preserves conversation history and tools)
+            self.provider = new_provider
+            
+            # Return success result
+            return {
+                "success": True,
+                "error": None,
+                "old_provider": old_provider_name,
+                "old_model": old_model_name,
+                "new_provider": provider_name,
+                "new_model": model_name
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "old_provider": self._get_provider_name(self.provider) if self.provider else None,
+                "old_model": self._get_provider_model(self.provider) if self.provider else None,
+                "new_provider": provider_name,
+                "new_model": model_name
+            }
+
+    def get_provider_info(self) -> Dict[str, Any]:
+        """
+        Get current provider information as structured data.
+        
+        Returns:
+            Dictionary with current provider details
+        """
+        if not self.provider:
+            return {
+                "has_provider": False,
+                "provider_name": None,
+                "model_name": None,
+                "capabilities": []
+            }
+        
+        provider_name = self._get_provider_name(self.provider)
+        model_name = self._get_provider_model(self.provider)
+        capabilities = []
+        
+        # Get capabilities if available
+        if hasattr(self.provider, 'get_capabilities'):
+            try:
+                caps = self.provider.get_capabilities()
+                capabilities = [str(cap) for cap in caps.keys()] if caps else []
+            except Exception:
+                capabilities = []
+        
+        return {
+            "has_provider": True,
+            "provider_name": provider_name,
+            "model_name": model_name,
+            "capabilities": capabilities
+        }
 
 
 class SessionManager:
@@ -2029,11 +2266,12 @@ class SessionManager:
                 provider: Optional[Union[str, AbstractLLMInterface]] = None,
                 provider_config: Optional[Dict[Union[str, ModelParameter], Any]] = None) -> None:
         """
-        Load all sessions from disk.
+        Load all sessions from disk. Provider parameters are optional since 
+        Session.load() now automatically restores saved provider state.
         
         Args:
-            provider: Provider to use for the loaded sessions
-            provider_config: Configuration for the provider
+            provider: Provider to use for sessions without saved provider state
+            provider_config: Configuration for the provider (fallback only)
         """
         if not self.sessions_dir or not os.path.exists(self.sessions_dir):
             return
@@ -2046,4 +2284,4 @@ class SessionManager:
                     provider=provider,
                     provider_config=provider_config
                 )
-                self.sessions[session.id] = session 
+                self.sessions[session.id] = session

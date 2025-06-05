@@ -35,6 +35,8 @@ from abstractllm.providers.mlx_model_configs import ModelConfigFactory, MLXModel
 from abstractllm.media.factory import MediaFactory
 from abstractllm.providers.tensor_type_patch import apply_all_patches as apply_tensor_patches
 from abstractllm.tools.types import ToolCallRequest, ToolCall
+from abstractllm.utils.utilities import TokenCounter, is_apple_silicon
+from abstractllm.utils.logging import log_request, log_response
 
 # Set up logging
 logger = logging.getLogger("abstractllm.providers.mlx_provider")
@@ -95,15 +97,16 @@ class MLXProvider(AbstractLLMInterface):
             logger.error("MLX-LM package not found")
             raise ImportError("MLX-LM is required for MLXProvider. Install with: pip install mlx-lm")
         
+        if not is_apple_silicon():
+            logger.error("MLX requires Apple Silicon hardware")
+            raise EnvironmentError("MLX requires Apple Silicon hardware (M1/M2/M3/M4)")
+        
         # Apply tensor type and vision patches
         apply_tensor_patches()
         
-        # Check if running on Apple Silicon
-        self._check_apple_silicon()
-        
         # Set default configuration
         default_config = {
-            ModelParameter.MODEL: "mlx-community/Nous-Hermes-2-Mistral-7B-DPO-4bit-MLX",
+            ModelParameter.MODEL: "mlx-community/DeepSeek-R1-0528-Qwen3-8B-4bit",
             ModelParameter.TEMPERATURE: 0.7,
             ModelParameter.MAX_TOKENS: 4096,
             ModelParameter.TOP_P: 0.9,
@@ -188,29 +191,6 @@ class MLXProvider(AbstractLLMInterface):
             logger.info(f"Model {model_name} does not appear to be a vision model")
             
         return is_vision_model
-
-    def _check_apple_silicon(self) -> None:
-        """Check if running on Apple Silicon."""
-        is_macos = platform.system().lower() == "darwin"
-        if not is_macos:
-            logger.warning(f"MLX requires macOS, current platform: {platform.system()}")
-            raise UnsupportedFeatureError(
-                feature="mlx",
-                message="MLX provider is only available on macOS with Apple Silicon",
-                provider="mlx"
-            )
-        
-        # Check processor architecture
-        is_arm = platform.processor() == "arm"
-        if not is_arm:
-            logger.warning(f"MLX requires Apple Silicon, current processor: {platform.processor()}")
-            raise UnsupportedFeatureError(
-                feature="mlx",
-                message="MLX provider requires Apple Silicon (M1/M2/M3) hardware",
-                provider="mlx"
-            )
-        
-        logger.info(f"Platform check successful: macOS with Apple Silicon detected")
 
     def load_model(self) -> None:
         """Load the MLX model and processor."""
@@ -551,6 +531,19 @@ class MLXProvider(AbstractLLMInterface):
                 if key not in ["max_tokens", "temperature", "stream", "images"]:
                     generate_kwargs[key] = value
             
+            # LOG THE EXACT REQUEST PAYLOAD FOR VISION
+            vision_request_params = {
+                "model": self.config_manager.get_param(ModelParameter.MODEL),
+                "original_prompt": prompt,
+                "num_images": len(images),
+                "image_sizes": [f"{img.size[0]}x{img.size[1]}" for img in images],
+                "use_conversation": use_conversation,
+                **generate_kwargs
+            }
+            
+            log_request("mlx_vision", prompt, vision_request_params)
+            logger.info(f"MLX vision generation starting - prompt: '{prompt}', images: {len(images)}")
+            
             # Try multiple approaches to handle potential broadcasting errors
             try:
                 # First approach - standard generation
@@ -639,6 +632,10 @@ class MLXProvider(AbstractLLMInterface):
                     logger.error(f"Error generating vision response: {e}")
                     return GenerateResponse(text=f"Error generating vision response: {e}")
                         
+            # LOG THE EXACT RAW RESPONSE FOR VISION
+            log_response("mlx_vision", output)
+            logger.info(f"MLX vision generation completed - response length: {len(output)} chars")
+            
             # Return the output as a GenerateResponse with proper usage stats
             return GenerateResponse(
                 content=output,
@@ -926,14 +923,36 @@ You are an action-taking agent, not just an advisor."""
                 # Use standard chat template without tools parameter
                 formatted_prompt = self._processor.apply_chat_template(
                     formatted_messages,
-                    add_generation_prompt=True
+                    add_generation_prompt=True,
+                    tokenize=False
                 )
             else:
                 # Standard chat template without tools - use chat_messages directly
                 formatted_prompt = self._processor.apply_chat_template(
                     chat_messages,
-                    add_generation_prompt=True
+                    add_generation_prompt=True,
+                    tokenize=False
                 )
+            
+            # LOG THE EXACT REQUEST PAYLOAD
+            request_params = {
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "top_p": top_p,
+                "model": self.config_manager.get_param(ModelParameter.MODEL),
+                "original_prompt": prompt,
+                "system_prompt": system_prompt,
+                "tools_count": len(tools) if tools else 0,
+                "messages_count": len(messages) if messages else 0,
+                "formatted_messages": formatted_messages if mlx_tools else chat_messages,
+                "enhanced_system_prompt": enhanced_system_prompt if mlx_tools else None,
+                **generation_params
+            }
+            
+            # Log the exact request with the formatted prompt that gets sent to MLX
+            log_request("mlx", formatted_prompt, request_params)
+            
+            logger.info(f"MLX generation starting - prompt length: {len(formatted_prompt)} chars")
             
             # Generate with MLX
             generate_kwargs = {
@@ -948,6 +967,11 @@ You are an action-taking agent, not just an advisor."""
             # Generate text
             output = generate_text(**generate_kwargs)
             
+            # LOG THE EXACT RAW RESPONSE
+            log_response("mlx", output)
+            
+            logger.info(f"MLX generation completed - response length: {len(output)} chars")
+            
             # Parse MLX tool call response
             if mlx_tools and self._has_tool_calls(output):
                 # MLX generates tool calls in specific format: <tool_call>{"name": "...", "arguments": {...}}</tool_call>
@@ -959,19 +983,8 @@ You are an action-taking agent, not just an advisor."""
                     )
             
             # Calculate token usage
-            try:
-                if hasattr(self._processor, 'encode') and isinstance(formatted_prompt, str) and isinstance(output, str):
-                    prompt_tokens = len(self._processor.encode(formatted_prompt))
-                    completion_tokens = len(self._processor.encode(output))
-                else:
-                    # Fallback to word counting
-                    prompt_tokens = len(formatted_prompt.split()) if isinstance(formatted_prompt, str) else 0
-                    completion_tokens = len(output.split()) if isinstance(output, str) else 0
-            except Exception as e:
-                logger.warning(f"Token counting failed: {e}. Using word count fallback.")
-                # Fallback to word counting
-                prompt_tokens = len(formatted_prompt.split()) if isinstance(formatted_prompt, str) else 0
-                completion_tokens = len(output.split()) if isinstance(output, str) else 0
+            prompt_tokens = TokenCounter.count_tokens(formatted_prompt, self.config_manager.get_param(ModelParameter.MODEL))
+            completion_tokens = TokenCounter.count_tokens(output, self.config_manager.get_param(ModelParameter.MODEL))
             
             return GenerateResponse(
                 content=output,
@@ -1327,13 +1340,15 @@ You are an action-taking agent, not just an advisor."""
                 # Use standard chat template without tools parameter
                 formatted_prompt = self._processor.apply_chat_template(
                     formatted_messages,
-                    add_generation_prompt=True
+                    add_generation_prompt=True,
+                    tokenize=False
                 )
             else:
                 # Standard chat template without tools - use chat_messages directly
                 formatted_prompt = self._processor.apply_chat_template(
                     chat_messages,
-                    add_generation_prompt=True
+                    add_generation_prompt=True,
+                    tokenize=False
                 )
             
             # Stream tokens from the model using stream_generate
@@ -1353,18 +1368,8 @@ You are an action-taking agent, not just an advisor."""
                 current_text = response.text  # stream_generate yields response objects with .text attribute
                 
                 # Calculate token usage
-                try:
-                    if hasattr(self._processor, 'encode') and isinstance(formatted_prompt, str) and isinstance(current_text, str):
-                        prompt_tokens = len(self._processor.encode(formatted_prompt))
-                        completion_tokens = len(self._processor.encode(current_text))
-                    else:
-                        # Fallback to word counting
-                        prompt_tokens = len(formatted_prompt.split()) if isinstance(formatted_prompt, str) else 0
-                        completion_tokens = len(current_text.split()) if isinstance(current_text, str) else 0
-                except Exception as e:
-                    # Fallback to word counting
-                    prompt_tokens = len(formatted_prompt.split()) if isinstance(formatted_prompt, str) else 0
-                    completion_tokens = len(current_text.split()) if isinstance(current_text, str) else 0
+                prompt_tokens = TokenCounter.count_tokens(formatted_prompt, self.config_manager.get_param(ModelParameter.MODEL))
+                completion_tokens = TokenCounter.count_tokens(current_text, self.config_manager.get_param(ModelParameter.MODEL))
                 
                 yield GenerateResponse(
                     content=current_text,
