@@ -10,6 +10,8 @@ from datetime import datetime
 from typing import Dict, Any, Union, List, Optional
 from pathlib import Path
 
+# Import color codes from formatting module
+from .formatting import RED_BOLD, GREY_ITALIC, BLUE_ITALIC, RESET
 
 # Configure logger
 logger = logging.getLogger("abstractllm")
@@ -93,55 +95,72 @@ config = LogConfig()
 
 def configure_logging(
     log_dir: Optional[str] = None,
-    log_level: Optional[int] = None,
-    provider_level: Optional[int] = None,
+    console_level: Optional[int] = None,
+    file_level: Optional[int] = None,
     console_output: Optional[bool] = None
 ) -> None:
     """
-    Configure global logging settings for AbstractLLM.
+    Configure global logging settings for AbstractLLM with independent console and file control.
     
     This is the main function that external programs should use to configure logging.
     
     Args:
         log_dir: Directory to store log files (default: ABSTRACTLLM_LOG_DIR env var)
-                If not set, no file logging occurs unless forced
-        log_level: Default logging level for all loggers (default: INFO)
-        provider_level: Specific level for provider loggers (default: same as log_level)
-        console_output: Control console output:
-            - None (default): automatic (console if no log_dir, no console if log_dir)
-            - True: Force console output regardless of log_dir
-            - False: Force no console output regardless of log_dir
+                If not set, no file logging occurs
+        console_level: Logging level for console output (default: WARNING)
+                     Set to None to disable console logging entirely
+        file_level: Logging level for file output (default: DEBUG)
+                   Only used if log_dir is provided
+        console_output: DEPRECATED - use console_level instead
+                       If provided, overrides console_level behavior for backward compatibility
     
-    Example:
-        >>> from abstractllm import configure_logging
-        >>> import logging
-        >>> 
-        >>> # Development: Everything to console
-        >>> configure_logging(log_level=logging.DEBUG)
-        >>> 
-        >>> # Production: Everything to files
+    Recommended Usage:
+        >>> # Development: Detailed console + file logging
         >>> configure_logging(
-        ...     log_dir="/var/log/abstractllm",
-        ...     log_level=logging.INFO
+        ...     log_dir="logs",
+        ...     console_level=logging.DEBUG,
+        ...     file_level=logging.DEBUG
         ... )
         >>> 
-        >>> # Both: Console and file output
+        >>> # Production: Warnings to console, everything to file
         >>> configure_logging(
         ...     log_dir="/var/log/abstractllm",
-        ...     console_output=True
+        ...     console_level=logging.WARNING,  # Default
+        ...     file_level=logging.DEBUG        # Default
+        ... )
+        >>>
+        >>> # Silent mode: Only file logging
+        >>> configure_logging(
+        ...     log_dir="logs",
+        ...     console_level=None  # Disable console
         ... )
     """
+    # Set sensible defaults
+    if console_level is None and console_output is None:
+        console_level = logging.WARNING  # Only warnings and errors to console by default
+    
+    if file_level is None:
+        file_level = logging.DEBUG  # Everything to file by default
+    
+    # Handle backward compatibility with console_output parameter
+    if console_output is not None:
+        if console_output is False:
+            console_level = None  # Disable console logging
+        elif console_output is True and console_level is None:
+            console_level = logging.INFO  # Enable console with reasonable level
+    
+    # Update global config
     if log_dir is not None:
         config.log_dir = log_dir
-    if log_level is not None:
-        config.log_level = log_level
-    if provider_level is not None:
-        config.provider_level = provider_level
-    if console_output is not None:
-        config.console_output = console_output
+    if console_level is not None:
+        config.log_level = console_level  # Store console level as main level
     
-    # Initialize or reinitialize logging
-    config.initialize()
+    # Initialize logging with new parameters
+    setup_logging(
+        console_level=console_level,
+        file_level=file_level,
+        log_dir=log_dir or config.log_dir
+    )
 
 def truncate_base64(data: Any, max_length: int = 50) -> Any:
     """
@@ -355,52 +374,58 @@ def log_request_url(provider: str, url: str, method: str = "POST") -> None:
 
 
 def setup_logging(
-    level: int = logging.INFO,
-    provider_level: Optional[int] = None,
-    log_dir: Optional[str] = None,
-    console_output: Optional[bool] = None
+    console_level: Optional[int] = logging.WARNING,
+    file_level: Optional[int] = logging.DEBUG,
+    log_dir: Optional[str] = None
 ) -> None:
     """
-    Set up logging configuration for AbstractLLM.
+    Set up logging configuration for AbstractLLM with independent console and file control.
     
     Args:
-        level: Default logging level for all loggers (default: INFO)
-        provider_level: Specific level for provider loggers (default: same as level)
-        log_dir: Directory to store log files (default: None)
-        console_output: Whether to output to console (default: automatic based on log_dir)
+        console_level: Logging level for console output (None to disable console)
+        file_level: Logging level for file output (default: DEBUG)
+        log_dir: Directory to store log files (None to disable file logging)
     """
-    # Use the same level for providers if not specified
-    if provider_level is None:
-        provider_level = level
+    # Set up base logger to capture the most verbose level needed
+    base_level = logging.DEBUG  # Always capture everything at the root level
+    if console_level is not None and file_level is not None:
+        base_level = min(console_level, file_level)
+    elif console_level is not None:
+        base_level = console_level
+    elif file_level is not None:
+        base_level = file_level
     
-    # Set up base logger
-    logger.setLevel(level)
+    logger.setLevel(base_level)
     
-    # Set up provider-specific loggers
-    logging.getLogger("abstractllm.providers").setLevel(provider_level)
+    # Configure the root logger to handle all messages
+    root_logger = logging.getLogger()
+    root_logger.setLevel(base_level)
     
-    # Remove all existing handlers
+    # Set up provider-specific loggers to use the same base level
+    logging.getLogger("abstractllm.providers").setLevel(base_level)
+    
+    # Remove all existing handlers to start fresh
+    root_logger.handlers.clear()
     logger.handlers.clear()
     
-    # Determine if we should output to console
-    should_console = True if console_output is True else (
-        False if console_output is False else (log_dir is None)
-    )
-    
-    # Create console handler if needed
-    if should_console:
+    # Create console handler if console logging is enabled
+    if console_level is not None:
         console_handler = logging.StreamHandler()
-        console_handler.setLevel(level)
+        console_handler.setLevel(console_level)
         
-        # Create formatter
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        console_handler.setFormatter(formatter)
+        # Create colored truncating formatter for console
+        console_formatter = ColoredTruncatingFormatter(
+            max_message_length=1000,
+            fmt='%(levelname)s - %(name)s - %(message)s'
+        )
+        console_handler.setFormatter(console_formatter)
         
-        # Add handler to the logger
-        logger.addHandler(console_handler)
+        # Add handler to the root logger so all loggers inherit it
+        root_logger.addHandler(console_handler)
+        logger.info(f"Console logging enabled at {logging.getLevelName(console_level)} level")
     
     # Create file handler for detailed logging if we have a directory
-    if log_dir:
+    if log_dir and file_level is not None:
         try:
             # Ensure log directory exists
             directory = ensure_log_directory(log_dir)
@@ -408,17 +433,107 @@ def setup_logging(
             # Create a file handler for detailed logs
             log_file = os.path.join(directory, f"abstractllm_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
             file_handler = logging.FileHandler(log_file)
-            file_handler.setLevel(min(level, logging.DEBUG))  # Always capture at least DEBUG level in files
+            file_handler.setLevel(file_level)
             
-            # Create formatter with more details for file logs
-            file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            # Create plain formatter with full details for file logs (no colors, no truncation)
+            file_formatter = PlainFormatter(
+                fmt='%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
+            )
             file_handler.setFormatter(file_formatter)
             
-            # Add file handler to the logger
-            logger.addHandler(file_handler)
+            # Add file handler to the root logger so all loggers inherit it
+            root_logger.addHandler(file_handler)
             
+            logger.info(f"File logging enabled at {logging.getLevelName(file_level)} level")
             logger.info(f"Detailed logs will be written to: {log_file}")
             logger.info(f"Request and response payloads will be stored in: {directory}")
             
         except Exception as e:
-            logger.warning(f"Could not set up file logging: {e}") 
+            logger.warning(f"Could not set up file logging: {e}")
+    
+    # Configure specific component loggers
+    # Make sure alma.steps logger follows the same levels and uses our handlers
+    alma_logger = logging.getLogger("alma.steps")
+    alma_logger.setLevel(base_level)
+    # Don't add handlers to specific loggers - let them inherit from root
+    alma_logger.propagate = True  # Ensure propagation to root logger
+    
+    # Also configure other common loggers used by ALMA
+    for logger_name in ["alma", "abstractllm.session", "abstractllm.tools"]:
+        component_logger = logging.getLogger(logger_name)
+        component_logger.setLevel(base_level)
+        component_logger.propagate = True
+    
+    # Suppress noisy third-party loggers unless in debug mode
+    if console_level != logging.DEBUG and file_level != logging.DEBUG:
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
+        logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+def log_step(step_number: int, step_name: str, message: str, logger_name: str = "alma.steps") -> None:
+    """
+    Log a step in the agent's process with consistent formatting.
+    
+    Args:
+        step_number: Sequential step number
+        step_name: Name/description of the step (e.g., "USER→AGENT", "AGENT→LLM")
+        message: Detailed message about what happened in this step
+        logger_name: Name of the logger to use (default: "alma.steps")
+    
+    Example:
+        >>> log_step(1, "USER→AGENT", "Received query: How to create a file?")
+        >>> log_step(2, "AGENT→LLM", "Sending query to LLM with tool support enabled")
+    """
+    step_logger = logging.getLogger(logger_name)
+    step_logger.info(f"STEP {step_number}: {step_name} - {message}")
+
+class ColoredTruncatingFormatter(logging.Formatter):
+    """
+    Custom formatter that adds colors and truncates long messages for console output.
+    """
+    
+    # Color mapping for different log levels
+    LEVEL_COLORS = {
+        logging.DEBUG: GREY_ITALIC,
+        logging.INFO: BLUE_ITALIC,
+        logging.WARNING: f'\033[1m\033[33m',  # Yellow bold
+        logging.ERROR: RED_BOLD,
+        logging.CRITICAL: RED_BOLD,
+    }
+    
+    def __init__(self, max_message_length: int = 1000, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_message_length = max_message_length
+    
+    def format(self, record):
+        # Format the record first to get the full message
+        formatted = super().format(record)
+        
+        # Truncate message if too long (without modifying the original record)
+        if len(formatted) > self.max_message_length:
+            # Find a good place to truncate (try to break at word boundaries)
+            half_length = self.max_message_length // 2 - 10  # Leave room for ellipsis
+            
+            # Get the beginning and end parts
+            start_part = formatted[:half_length].rsplit(' ', 1)[0] if ' ' in formatted[:half_length] else formatted[:half_length]
+            end_part = formatted[-half_length:].split(' ', 1)[-1] if ' ' in formatted[-half_length:] else formatted[-half_length:]
+            
+            # Create truncated message
+            omitted_chars = len(formatted) - len(start_part) - len(end_part)
+            formatted = f"{start_part}... [{omitted_chars} chars omitted] ...{end_part}"
+        
+        # Apply color based on log level
+        color = self.LEVEL_COLORS.get(record.levelno, '')
+        
+        # Add color if we have one
+        if color:
+            formatted = f"{color}{formatted}{RESET}"
+        
+        return formatted
+
+
+class PlainFormatter(logging.Formatter):
+    """
+    Plain formatter for file output without colors or truncation.
+    """
+    pass 

@@ -15,6 +15,7 @@ from abstractllm import create_llm
 from abstractllm.session import Session, SessionManager
 from abstractllm.tools import function_to_tool_definition
 from abstractllm.types import GenerateResponse
+from abstractllm.utils.logging import log_step
 
 # Configure logging - we'll set the level dynamically based on verbose flag
 logger = logging.getLogger("alma")
@@ -53,11 +54,6 @@ def configure_logging(verbose: bool = False):
     # If not verbose, suppress httpx logging
     if not verbose:
         logging.getLogger("httpx").setLevel(logging.WARNING)
-
-
-def log_step(step_number: int, step_name: str, message: str) -> None:
-    """Log a step in the agent's process with consistent formatting."""
-    logger.info(f"STEP {step_number}: {step_name} - {message}")
 
 
 def read_file(file_path: str, max_lines: Optional[int] = None) -> str:

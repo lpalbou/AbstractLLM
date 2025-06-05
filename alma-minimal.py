@@ -26,18 +26,17 @@ Then add them to the tools list:
 
 from abstractllm import create_llm
 from abstractllm.session import Session
-from abstractllm.utils.logging import configure_logging
+from abstractllm.utils.logging import configure_logging, log_step
 from abstractllm.utils.formatting import format_response_display, format_stats_display
 from abstractllm.tools.common_tools import read_file, list_files
 import os
 import logging
 import re
+import sys
 
 # Configure AbstractLLM logging for console output with tool execution details
-configure_logging(
-    log_level=logging.INFO,
-    console_output=True,  # Force console output
-)
+# Enable dual logging: console + file
+# This will be reconfigured in main() based on verbose flag
 
 # ANSI color codes for error messages
 RED_BOLD = '\033[1m\033[31m'    # Red bold
@@ -45,6 +44,26 @@ BLUE_ITALIC = '\033[3m\033[34m'  # Blue italic
 RESET = '\033[0m'               # Reset formatting
 
 def main():    
+    # Add basic command-line argument parsing for verbose logging
+    verbose = "--verbose" in sys.argv or "-v" in sys.argv
+    
+    if verbose:
+        # Enable detailed logging for development/debugging
+        configure_logging(
+            log_dir="logs",
+            console_level=logging.DEBUG,  # Show everything in console when verbose
+            file_level=logging.DEBUG     # Show everything in file when verbose
+        )
+        print("🔍 Verbose logging enabled - detailed logs to console and logs/ directory")
+    else:
+        # Standard production logging: warnings to console, everything to file
+        configure_logging(
+            log_dir="logs", 
+            console_level=logging.WARNING,  # Only warnings/errors to console
+            file_level=logging.DEBUG        # Everything to file
+        )
+        print("📝 Logging enabled - warnings to console, detailed logs to logs/ directory")
+    
     # Initialize the provider with the model - this is the key step
     # The Session will use this provider's model by default
     
@@ -106,6 +125,9 @@ You are an ACTION-TAKING agent, not just an advisor. Take action immediately whe
     print(f"   - Web operations: search_internet, fetch_url, fetch_and_parse_html")
     print(f"   - System: execute_command")
     print(f"   - User interaction: ask_user_multiple_choice")
+    print(f"\n📝 Logging: All activity logged to logs/ directory")
+    print(f"   Console shows warnings/errors (or everything with --verbose)")
+    print(f"   Files contain complete debug logs for troubleshooting")
     
     # Simple REPL loop
     while True:
@@ -193,6 +215,7 @@ You are an ACTION-TAKING agent, not just an advisor. Take action immediately whe
                     print(f"  /stats                  - Show session statistics")
                     print(f"  /save <filename>        - Save current session to file")
                     print(f"  /load <filename>        - Load session from file")
+                    print(f"  /tools                  - List all available tools")
                     print(f"  /help                   - Show this help message")
                     print(f"  /exit, /quit, /q        - Exit ALMA")
                     
@@ -206,6 +229,7 @@ You are an ACTION-TAKING agent, not just an advisor. Take action immediately whe
                     print(f"  /save my_conversation     - Saves to 'my_conversation.json'")
                     print(f"  /load my_conversation     - Loads from 'my_conversation.json'")
                     print(f"  /stats                    - Shows message counts, tool usage, etc.")
+                    print(f"  /tools                    - Shows all available tools and descriptions")
                     
                     print(f"\nTool Support:")
                     print(f"  Available tools: read_file, list_files")
@@ -216,19 +240,87 @@ You are an ACTION-TAKING agent, not just an advisor. Take action immediately whe
                     print(f"  Run: python examples/common_tools_demo.py")
                     continue
                 
+                elif command == "/tools":
+                    # List all available tools with descriptions
+                    print(f"\n{BLUE_ITALIC}🔧 Available Tools{RESET}")
+                    print(f"\nThis session has access to the following tools:")
+                    
+                    try:
+                        # Get tools from session
+                        if hasattr(session, 'tools') and session.tools:
+                            tool_count = 0
+                            for tool in session.tools:
+                                tool_count += 1
+                                
+                                # Extract tool name and description
+                                if hasattr(tool, 'to_dict'):
+                                    # ToolDefinition object
+                                    tool_dict = tool.to_dict()
+                                    name = tool_dict.get('name', 'unknown')
+                                    description = tool_dict.get('description', 'No description available')
+                                    
+                                    # Get parameter info if available
+                                    params = tool_dict.get('input_schema', {}).get('properties', {})
+                                    param_names = list(params.keys())
+                                    param_str = f"({', '.join(param_names)})" if param_names else "()"
+                                    
+                                elif callable(tool):
+                                    # Function object
+                                    name = getattr(tool, '__name__', 'unknown')
+                                    description = getattr(tool, '__doc__', 'No description available')
+                                    if description:
+                                        # Clean up docstring - take first line only
+                                        description = description.strip().split('\n')[0]
+                                    else:
+                                        description = 'No description available'
+                                    param_str = ""
+                                else:
+                                    name = str(tool)
+                                    description = 'Unknown tool type'
+                                    param_str = ""
+                                
+                                print(f"  {tool_count}. {name}{param_str}")
+                                print(f"     {description}")
+                                print()
+                        
+                        else:
+                            print(f"  No tools are currently available in this session.")
+                        
+                        print(f"\n💡 Usage Tips:")
+                        print(f"  • Tools are called automatically when needed")
+                        print(f"  • Example: 'List all Python files in the current directory'")
+                        print(f"  • Example: 'Read the contents of README.md'")
+                        print(f"  • The agent will choose and execute the right tools")
+                        
+                        print(f"\n📚 More Tools:")
+                        print(f"  See abstractllm.tools.common_tools for additional tools:")
+                        print(f"  • search_files, write_file, update_file")
+                        print(f"  • search_internet, fetch_url, fetch_and_parse_html")
+                        print(f"  • execute_command, ask_user_multiple_choice")
+                        
+                    except Exception as e:
+                        print(f"{RED_BOLD}Error listing tools: {str(e)}{RESET}")
+                    continue
+                
                 else:
                     print(f"{RED_BOLD}Unknown command: {command}{RESET}")
-                    print("Available commands: /stats, /save <filename>, /load <filename>, /help, /exit")
+                    print("Available commands: /stats, /save <filename>, /load <filename>, /tools, /help, /exit")
                     continue
             
             # Generate response with tool support
             print(f"\nAssistant:")
             
+            # Log the interaction steps for debugging
+            log_step(1, "USER→AGENT", f"Received query: {user_input}")
+            
             # Use the unified generate method - trust AbstractLLM to handle everything
+            log_step(2, "AGENT→LLM", "Sending query to LLM with tool support enabled")
             response = session.generate(
                 prompt=user_input,
                 max_tool_calls=25  # Limit tool calls to avoid infinite loops
             )
+            
+            log_step(3, "LLM→AGENT", "Received response, displaying to user")
             
             # Simply display the response - trust AbstractLLM formatting
             print()  # Add spacing
