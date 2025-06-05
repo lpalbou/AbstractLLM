@@ -240,8 +240,6 @@ def start_repl(session):
                     continue
             
             # Generate response with tool support
-            print(f"\nAssistant:")
-            
             # Log the interaction steps for debugging
             log_step(1, "USER→AGENT", f"Received query: {user_input}")
             
@@ -254,6 +252,8 @@ def start_repl(session):
             
             log_step(3, "LLM→AGENT", "Received response, displaying to user")
             
+            # Show "Assistant:" only when we have the response
+            print(f"\nAssistant:")
             # Simply display the response - trust AbstractLLM formatting
             format_response_display(response)
             
