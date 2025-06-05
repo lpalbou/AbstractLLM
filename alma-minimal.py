@@ -46,21 +46,10 @@ GREY_ITALIC = '\033[3m\033[90m'  # Grey italic
 RESET = '\033[0m'                # Reset formatting
 
 
-def start_session():
-    #Store current provider info for /model command
-    provider_name = "mlx" # or anthropic or openai or ollama
-    model_name="mlx-community/Qwen3-30B-A3B-4bit"
-    #model_name="mlx-community/DeepSeek-R1-Distill-Qwen-32B-MLX-4Bit"
-    #model_name="mlx-community/DeepSeek-R1-0528-Qwen3-8B-4bit"
-    #model_name="a-m-team/AM-Thinking-v1"
-    #model_name="claude-3-5-haiku-20241022"
-    #model_name="gpt-4o"
-    #model_name = "cogito"
-    #model_name = "qwen2.5"
-
+def start_session(provider_name, model_name, max_tokens = 4096):
     provider = create_llm(provider_name, 
                          model=model_name,
-                         max_tokens=4096)
+                         max_tokens=max_tokens)
 
     # Load the model immediately at startup
     print("🔄 Loading model...")
@@ -293,12 +282,25 @@ def show_help():
     print(f"  /help                   - Show this help message")
     print(f"  /exit, /quit, /q        - Exit ALMA")
 
+
+
+
 def main():    
     # Set logging
     set_logging()
 
+    provider_name = "mlx" # or anthropic or openai or ollama
+    model_name="mlx-community/Qwen3-30B-A3B-4bit"
+    #model_name="mlx-community/DeepSeek-R1-Distill-Qwen-32B-MLX-4Bit"
+    #model_name="mlx-community/DeepSeek-R1-0528-Qwen3-8B-4bit"
+    #model_name="a-m-team/AM-Thinking-v1"
+    #model_name="claude-3-5-haiku-20241022"
+    #model_name="gpt-4o"
+    #model_name = "cogito"
+    #model_name = "qwen2.5"
+
     # Create session
-    session = start_session()
+    session = start_session(provider_name, model_name, 4096)
 
     # Show help
     show_help()
