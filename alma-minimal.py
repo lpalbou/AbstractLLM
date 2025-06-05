@@ -28,7 +28,11 @@ from abstractllm import create_llm
 from abstractllm.session import Session
 from abstractllm.utils.logging import configure_logging, log_step
 from abstractllm.utils.formatting import format_response_display, format_stats_display
-from abstractllm.tools.common_tools import read_file, list_files
+from abstractllm.tools.common_tools import (
+    read_file, list_files,
+    get_system_info, get_performance_stats, get_running_processes,
+    get_network_connections, get_disk_partitions, monitor_resource_usage
+)
 import os
 import logging
 import re
@@ -104,6 +108,12 @@ For example, if you need to read a file, you should:
 You have access to these tools:
 - read_file(file_path, should_read_entire_file=True, start_line_one_indexed=1, end_line_one_indexed_inclusive=None)
 - list_files(directory_path=".", pattern="*", recursive=False)
+- get_system_info() - Get comprehensive system information including OS, hardware, and Python environment
+- get_performance_stats() - Get current system performance statistics including CPU, memory, and disk usage
+- get_running_processes(limit=10, sort_by="cpu") - Get information about currently running processes
+- get_network_connections(limit=10) - Get information about active network connections
+- get_disk_partitions() - Get information about disk partitions and usage
+- monitor_resource_usage(duration=5) - Monitor system resource usage over a specified duration
 
 When following multi-step procedures:
 1. Read the instructions first by CALLING read_file
@@ -111,23 +121,33 @@ When following multi-step procedures:
 3. Continue to the next step based on the results
 4. Complete the entire procedure unless instructed otherwise
 
+You can monitor and understand the system environment using the system monitoring tools. These help you understand:
+- Hardware capabilities (CPU cores, memory, disk space)
+- Current performance (CPU/memory usage, running processes)
+- System limitations and resources available for tasks
+- Network connectivity and disk I/O patterns
+
 You are an ACTION-TAKING agent, not just an advisor. Take action immediately when requested.""",
         provider=provider,
-        tools=[read_file, list_files]  # Functions are automatically registered
+        tools=[read_file, list_files, get_system_info, get_performance_stats, get_running_processes, get_network_connections, get_disk_partitions, monitor_resource_usage]  # Functions are automatically registered
     )
     
     print("\nMinimal ALMA - Type '/exit', '/quit', or '/q' to quit")
     print("Example: 'Read the file README.md and summarize it'")
+    print("Example: 'What system am I running on and what are the current performance stats?'")
     print("Commands: /stats, /save <filename>, /load <filename>")
     print("Type '/help' for more information")
     print(f"\n💡 Tip: See the common_tools module for more shareable tools:")
     print(f"   - File operations: list_files, search_files, write_file, update_file")
+    print(f"   - System monitoring: get_system_info, get_performance_stats, get_running_processes")
     print(f"   - Web operations: search_internet, fetch_url, fetch_and_parse_html")
     print(f"   - System: execute_command")
     print(f"   - User interaction: ask_user_multiple_choice")
     print(f"\n📝 Logging: All activity logged to logs/ directory")
     print(f"   Console shows warnings/errors (or everything with --verbose)")
     print(f"   Files contain complete debug logs for troubleshooting")
+    print(f"\n🖥️  System Awareness: The agent can now understand your system environment!")
+    print(f"   Ask about: hardware specs, performance, running processes, disk usage, network")
     
     # Simple REPL loop
     while True:

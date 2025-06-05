@@ -537,6 +537,21 @@ class Session:
         role_counts = {}
         total_chars = 0
         
+        # Token statistics
+        token_stats = {
+            "total_prompt_tokens": 0,
+            "total_completion_tokens": 0,
+            "total_tokens": 0,
+            "messages_with_usage": 0,
+            "average_prompt_tokens": 0,
+            "average_completion_tokens": 0,
+            "total_time": 0.0,
+            "average_prompt_tps": 0.0,
+            "average_completion_tps": 0.0,
+            "average_total_tps": 0.0,
+            "by_provider": {}
+        }
+        
         for message in self.messages:
             # Count by role
             role = message.role
@@ -544,6 +559,44 @@ class Session:
             
             # Character count
             total_chars += len(message.content)
+            
+            # Token usage tracking from message metadata
+            if message.metadata and "usage" in message.metadata:
+                usage = message.metadata["usage"]
+                if isinstance(usage, dict):
+                    prompt_tokens = usage.get("prompt_tokens", 0)
+                    completion_tokens = usage.get("completion_tokens", 0)
+                    total_message_tokens = usage.get("total_tokens", prompt_tokens + completion_tokens)
+                    time_taken = usage.get("time", 0.0)
+                    
+                    token_stats["total_prompt_tokens"] += prompt_tokens
+                    token_stats["total_completion_tokens"] += completion_tokens
+                    token_stats["total_tokens"] += total_message_tokens
+                    token_stats["total_time"] += time_taken
+                    token_stats["messages_with_usage"] += 1
+                    
+                    # Track by provider if available
+                    provider_name = message.metadata.get("provider", "unknown")
+                    if provider_name not in token_stats["by_provider"]:
+                        token_stats["by_provider"][provider_name] = {
+                            "prompt_tokens": 0,
+                            "completion_tokens": 0,
+                            "total_tokens": 0,
+                            "total_time": 0.0,
+                            "messages": 0,
+                            "average_tps": 0.0
+                        }
+                    
+                    provider_stats = token_stats["by_provider"][provider_name]
+                    provider_stats["prompt_tokens"] += prompt_tokens
+                    provider_stats["completion_tokens"] += completion_tokens
+                    provider_stats["total_tokens"] += total_message_tokens
+                    provider_stats["total_time"] += time_taken
+                    provider_stats["messages"] += 1
+                    
+                    # Calculate provider-specific TPS
+                    if provider_stats["total_time"] > 0:
+                        provider_stats["average_tps"] = provider_stats["total_tokens"] / provider_stats["total_time"]
             
             # Tool statistics
             if message.tool_results:
@@ -562,11 +615,25 @@ class Session:
                 stats["message_stats"]["first_message_time"] = message.timestamp.isoformat()
             stats["message_stats"]["last_message_time"] = message.timestamp.isoformat()
         
+        # Calculate token averages
+        if token_stats["messages_with_usage"] > 0:
+            token_stats["average_prompt_tokens"] = token_stats["total_prompt_tokens"] / token_stats["messages_with_usage"]
+            token_stats["average_completion_tokens"] = token_stats["total_completion_tokens"] / token_stats["messages_with_usage"]
+            
+            # Calculate TPS averages
+            if token_stats["total_time"] > 0:
+                token_stats["average_total_tps"] = token_stats["total_tokens"] / token_stats["total_time"]
+                token_stats["average_prompt_tps"] = token_stats["total_prompt_tokens"] / token_stats["total_time"]
+                token_stats["average_completion_tps"] = token_stats["total_completion_tokens"] / token_stats["total_time"]
+        
         # Finalize message stats
         stats["message_stats"]["by_role"] = role_counts
         stats["message_stats"]["total_characters"] = total_chars
         if len(self.messages) > 0:
             stats["message_stats"]["average_message_length"] = total_chars / len(self.messages)
+        
+        # Add token stats to the return dictionary
+        stats["token_stats"] = token_stats
         
         # Finalize tool stats
         stats["tool_stats"]["unique_tools_used"] = list(stats["tool_stats"]["unique_tools_used"])
@@ -1343,20 +1410,33 @@ class Session:
         if isinstance(response, str):
             final_content = response
             logger.info("Response is a string")
+            response_metadata = {}
         else:
             final_content = response.content if hasattr(response, 'content') else str(response)
             logger.info(f"Response has content attribute: {hasattr(response, 'content')}")
+            
+            # Extract usage information and other metadata from response
+            response_metadata = {}
+            if hasattr(response, 'usage') and response.usage:
+                response_metadata["usage"] = response.usage
+            if hasattr(response, 'model') and response.model:
+                response_metadata["provider"] = self._get_provider_name(provider_instance)
+                response_metadata["model"] = response.model
+
+        # Combine response metadata with tool execution metadata
+        combined_metadata = {
+            "tool_execution": {
+                "tool_call_count": tool_call_count,
+                "executed_tools": all_executed_tools,
+                "phase": "synthesis" if tool_call_count > 0 else "initial"
+            }
+        }
+        combined_metadata.update(response_metadata)
 
         final_message = self.add_message(
             MessageRole.ASSISTANT, 
             final_content,
-            metadata={
-                "tool_execution": {
-                    "tool_call_count": tool_call_count,
-                    "executed_tools": all_executed_tools,
-                    "phase": "synthesis" if tool_call_count > 0 else "initial"
-                }
-            }
+            metadata=combined_metadata
         )
         
         # Reset the system prompt to the original

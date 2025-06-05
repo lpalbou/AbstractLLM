@@ -134,6 +134,49 @@ def format_stats_display(stats: Dict[str, Any]) -> str:
     if unique_tools:
         output.append(f"Tools Used: {', '.join(unique_tools)}")
     
+    # Token Stats
+    token_stats = stats.get("token_stats", {})
+    if token_stats and token_stats.get("total_tokens", 0) > 0:
+        output.append(f"\n{BLUE_ITALIC}🪙 Token Statistics{RESET}")
+        output.append(f"Total Tokens: {token_stats.get('total_tokens', 0):,}")
+        output.append(f"  Prompt: {token_stats.get('total_prompt_tokens', 0):,}")
+        output.append(f"  Completion: {token_stats.get('total_completion_tokens', 0):,}")
+        
+        messages_with_usage = token_stats.get('messages_with_usage', 0)
+        if messages_with_usage > 0:
+            avg_prompt = token_stats.get('average_prompt_tokens', 0)
+            avg_completion = token_stats.get('average_completion_tokens', 0)
+            output.append(f"Average per Message: {avg_prompt:.1f} prompt, {avg_completion:.1f} completion")
+            output.append(f"Messages with Usage Data: {messages_with_usage}")
+        
+        # Add TPS information
+        total_time = token_stats.get('total_time', 0)
+        if total_time > 0:
+            avg_total_tps = token_stats.get('average_total_tps', 0)
+            avg_prompt_tps = token_stats.get('average_prompt_tps', 0)
+            avg_completion_tps = token_stats.get('average_completion_tps', 0)
+            
+            output.append(f"Performance:")
+            output.append(f"  Total: {avg_total_tps:.1f} tokens/sec")
+            output.append(f"  Prompt: {avg_prompt_tps:.1f} tokens/sec")
+            output.append(f"  Completion: {avg_completion_tps:.1f} tokens/sec")
+            output.append(f"Total Generation Time: {total_time:.2f} seconds")
+        
+        # Show by provider breakdown if available
+        by_provider = token_stats.get('by_provider', {})
+        if by_provider:
+            output.append(f"By Provider:")
+            for provider_name, provider_stats in by_provider.items():
+                total = provider_stats.get('total_tokens', 0)
+                messages = provider_stats.get('messages', 0)
+                provider_tps = provider_stats.get('average_tps', 0)
+                provider_time = provider_stats.get('total_time', 0)
+                
+                if provider_tps > 0:
+                    output.append(f"  {provider_name.title()}: {total:,} tokens ({messages} messages, {provider_tps:.1f} tokens/sec)")
+                else:
+                    output.append(f"  {provider_name.title()}: {total:,} tokens ({messages} messages)")
+    
     # Provider Info
     provider_info = stats.get("provider_info", {})
     output.append(f"\n{BLUE_ITALIC}🤖 Provider Information{RESET}")
