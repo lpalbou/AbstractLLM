@@ -293,40 +293,19 @@ def show_help():
     print(f"  /help                   - Show this help message")
     print(f"  /exit, /quit, /q        - Exit ALMA")
 
-    print(f"\nSession Features:")
-    print(f"  • Conversation history is automatically saved")
-    print(f"  • Tool calls and results are tracked")
-    print(f"  • Sessions persist system prompts and metadata")
-    print(f"  • JSON format allows easy inspection and sharing")
-
-    print(f"\nModel Switching:")
-    print(f"  • Format: provider:model_name")
-    print(f"  • Supported providers: ollama, mlx, anthropic, openai")
-    print(f"  • Previous model is unloaded from memory")
-    print(f"  • Conversation history and tools are preserved")
-    print(f"  • Examples:")
-    print(f"    - ollama:qwen3:30b-a3b-q4_K_M")
-    print(f"    - mlx:mlx-community/Qwen3-30B-A3B-4bit")
-    print(f"    - anthropic:claude-3-5-haiku-20241022")
-    print(f"    - openai:gpt-4o")
-    
-    print(f"\nTool Support:")
-    print(f"  Available tools: read_file, list_files, system monitoring tools")
-    print(f"  Example: 'Read the README.md file and summarize it'")    
-
-
 def main():    
     # Set logging
     set_logging()
 
-    # Show help
-    show_help()
-
     # Create session
     session = start_session()
 
+    # Show help
+    show_help()
+
     # Start REPL loop
     start_repl(session)
+
 
 
 if __name__ == "__main__":
