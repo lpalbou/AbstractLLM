@@ -944,10 +944,31 @@ You are an action-taking agent, not just an advisor."""
                 "system_prompt": system_prompt,
                 "tools_count": len(tools) if tools else 0,
                 "messages_count": len(messages) if messages else 0,
-                "formatted_messages": formatted_messages if mlx_tools else chat_messages,
-                "enhanced_system_prompt": enhanced_system_prompt if mlx_tools else None,
-                **generation_params
+                "formatted_messages": formatted_messages if mlx_tools else chat_messages
             }
+            
+            # Add actual parameter values instead of function objects
+            for key, value in generation_params.items():
+                if key == "sampler":
+                    # Extract sampler parameters if available
+                    if hasattr(value, '__name__'):
+                        request_params["sampler_type"] = value.__name__
+                    # Try to extract temperature from the sampler if possible
+                    request_params["sampler_temperature"] = temperature
+                elif key == "logits_processors":
+                    # Extract logits processor info
+                    if isinstance(value, list):
+                        processor_info = []
+                        for processor in value:
+                            if hasattr(processor, '__name__'):
+                                processor_info.append(processor.__name__)
+                            else:
+                                processor_info.append(str(type(processor).__name__))
+                        request_params["logits_processors"] = processor_info
+                        # Add repetition penalty info since that's the main one we use
+                        request_params["repetition_penalty"] = self._model_config.default_repetition_penalty if self._model_config else 1.0
+                else:
+                    request_params[key] = value
             
             # Log the exact request with the formatted prompt that gets sent to MLX
             log_request("mlx", formatted_prompt, request_params, model=self.config_manager.get_param(ModelParameter.MODEL))
