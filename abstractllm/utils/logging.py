@@ -6,6 +6,7 @@ import logging
 import json
 import os
 import sys
+import warnings
 from datetime import datetime
 from typing import Dict, Any, Union, List, Optional
 from pathlib import Path
@@ -19,11 +20,26 @@ logger = logging.getLogger("abstractllm")
 # Storage for pending requests to match with responses
 _pending_requests = {}
 
-# Immediately suppress noisy third-party loggers at import time
+# Immediately suppress noisy third-party loggers and warnings at import time
 # This catches warnings that happen before configure_logging() is called
-logging.getLogger("huggingface_hub").setLevel(logging.CRITICAL)
-logging.getLogger("huggingface_hub._snapshot_download").setLevel(logging.CRITICAL)
-logging.getLogger("transformers").setLevel(logging.ERROR)
+# Allow INFO level for progress bars, but set specific loggers higher
+logging.getLogger("huggingface_hub.file_download").setLevel(logging.WARNING)  # Allow progress, suppress deprecation warnings
+logging.getLogger("huggingface_hub._snapshot_download").setLevel(logging.INFO)  # Allow progress info
+logging.getLogger("transformers").setLevel(logging.ERROR)  # Still suppress transformers noise
+
+# Suppress specific HuggingFace Hub warnings that come from MLX libraries
+warnings.filterwarnings(
+    "ignore", 
+    category=FutureWarning, 
+    module="huggingface_hub.file_download",
+    message=".*resume_download.*deprecated.*"
+)
+
+# Also suppress any HuggingFace warnings about special tokens
+warnings.filterwarnings(
+    "ignore",
+    message=".*Special tokens have been added in the vocabulary.*"
+)
 
 # Global configuration
 class LogConfig:
@@ -431,6 +447,48 @@ def log_request_url(provider: str, url: str, method: str = "POST") -> None:
         logger.debug(f"API Request [{provider}]: {method} {url}")
 
 
+def suppress_third_party_warnings() -> None:
+    """
+    Suppress noisy warnings from third-party libraries.
+    
+    This function specifically targets warnings that commonly appear when using
+    MLX with HuggingFace models, such as:
+    - HuggingFace Hub deprecation warnings about resume_download
+    - Special token vocabulary warnings from transformers
+    - Other common HuggingFace infrastructure warnings
+    
+    This function is called automatically during logging setup but can also
+    be called independently if needed.
+    """
+    # Suppress HuggingFace Hub deprecation warnings
+    warnings.filterwarnings(
+        "ignore", 
+        category=FutureWarning, 
+        module="huggingface_hub.file_download",
+        message=".*resume_download.*deprecated.*"
+    )
+    
+    # Suppress special token warnings that appear during model loading
+    warnings.filterwarnings(
+        "ignore",
+        message=".*Special tokens have been added in the vocabulary.*"
+    )
+    
+    # Suppress other common HuggingFace warnings  
+    warnings.filterwarnings(
+        "ignore",
+        category=FutureWarning,
+        module="huggingface_hub.*"
+    )
+    
+    # Suppress transformers warnings about deprecated features
+    warnings.filterwarnings(
+        "ignore",
+        category=FutureWarning,
+        module="transformers.*"
+    )
+
+
 def setup_logging(
     console_level: Optional[int] = logging.WARNING,
     file_level: Optional[int] = logging.DEBUG,
@@ -522,15 +580,26 @@ def setup_logging(
         component_logger.setLevel(base_level)
         component_logger.propagate = True
     
-    # Suppress noisy third-party loggers unless in debug mode
+    # Be more targeted with third-party logger suppression
+    # Allow INFO level for progress bars but suppress warnings/errors unless in debug mode
     if console_level != logging.DEBUG and file_level != logging.DEBUG:
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
         logging.getLogger("urllib3").setLevel(logging.WARNING)
-        logging.getLogger("huggingface_hub").setLevel(logging.CRITICAL)  # Suppress cache warnings more aggressively
-        logging.getLogger("huggingface_hub._snapshot_download").setLevel(logging.CRITICAL)  # Specific suppression
-        # Also suppress any transformers warnings
+        
+        # More targeted HuggingFace suppression - allow progress but suppress deprecation warnings
+        logging.getLogger("huggingface_hub.file_download").setLevel(logging.WARNING)  # Allow progress, suppress deprecation
+        logging.getLogger("huggingface_hub._snapshot_download").setLevel(logging.INFO)  # Allow progress info
+        logging.getLogger("huggingface_hub.utils._errors").setLevel(logging.WARNING)  # Allow error messages
+        
+        # Suppress transformers warnings but allow errors
         logging.getLogger("transformers").setLevel(logging.ERROR)
+        
+        # Suppress third-party warnings (HuggingFace, etc.)
+        suppress_third_party_warnings()
+    else:
+        # In debug mode, allow more visibility but still suppress the most annoying warnings
+        suppress_third_party_warnings()
 
 def log_step(step_number: int, step_name: str, message: str, logger_name: str = "alma.steps") -> None:
     """
@@ -599,3 +668,8 @@ class PlainFormatter(logging.Formatter):
     Plain formatter for file output without colors or truncation.
     """
     pass 
+
+
+# Call warning suppression at module import time to catch warnings
+# that happen before logging is explicitly configured
+suppress_third_party_warnings() 
