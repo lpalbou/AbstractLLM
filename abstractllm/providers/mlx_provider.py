@@ -541,7 +541,7 @@ class MLXProvider(AbstractLLMInterface):
                 **generate_kwargs
             }
             
-            log_request("mlx_vision", prompt, vision_request_params)
+            log_request("mlx_vision", prompt, vision_request_params, model=self.config_manager.get_param(ModelParameter.MODEL))
             logger.info(f"MLX vision generation starting - prompt: '{prompt}', images: {len(images)}")
             
             # Try multiple approaches to handle potential broadcasting errors
@@ -633,7 +633,7 @@ class MLXProvider(AbstractLLMInterface):
                     return GenerateResponse(text=f"Error generating vision response: {e}")
                         
             # LOG THE EXACT RAW RESPONSE FOR VISION
-            log_response("mlx_vision", output)
+            log_response("mlx_vision", output, model=self.config_manager.get_param(ModelParameter.MODEL))
             logger.info(f"MLX vision generation completed - response length: {len(output)} chars")
             
             # Return the output as a GenerateResponse with proper usage stats
@@ -950,7 +950,7 @@ You are an action-taking agent, not just an advisor."""
             }
             
             # Log the exact request with the formatted prompt that gets sent to MLX
-            log_request("mlx", formatted_prompt, request_params)
+            log_request("mlx", formatted_prompt, request_params, model=self.config_manager.get_param(ModelParameter.MODEL))
             
             logger.info(f"MLX generation starting - prompt length: {len(formatted_prompt)} chars")
             
@@ -968,7 +968,7 @@ You are an action-taking agent, not just an advisor."""
             output = generate_text(**generate_kwargs)
             
             # LOG THE EXACT RAW RESPONSE
-            log_response("mlx", output)
+            log_response("mlx", output, model=self.config_manager.get_param(ModelParameter.MODEL))
             
             logger.info(f"MLX generation completed - response length: {len(output)} chars")
             

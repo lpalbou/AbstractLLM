@@ -16,6 +16,9 @@ from .formatting import RED_BOLD, GREY_ITALIC, BLUE_ITALIC, RESET
 # Configure logger
 logger = logging.getLogger("abstractllm")
 
+# Storage for pending requests to match with responses
+_pending_requests = {}
+
 # Immediately suppress noisy third-party loggers at import time
 # This catches warnings that happen before configure_logging() is called
 logging.getLogger("huggingface_hub").setLevel(logging.CRITICAL)
@@ -214,14 +217,15 @@ def ensure_log_directory(log_dir: Optional[str] = None) -> Optional[str]:
     return None
 
 
-def get_log_filename(provider: str, log_type: str, log_dir: Optional[str] = None) -> Optional[str]:
+def get_log_filename(provider: str, log_type: str, log_dir: Optional[str] = None, model: Optional[str] = None) -> Optional[str]:
     """
     Generate a filename for a log file.
     
     Args:
         provider: Provider name
-        log_type: Type of log (e.g., 'request', 'response')
+        log_type: Type of log (e.g., 'request', 'response', 'interaction')
         log_dir: Directory to store log files (default: use global config)
+        model: Model name to include in filename (optional)
         
     Returns:
         Full path to the log file or None if no directory is configured
@@ -231,7 +235,14 @@ def get_log_filename(provider: str, log_type: str, log_dir: Optional[str] = None
         return None
         
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    return os.path.join(directory, f"{provider}_{log_type}_{timestamp}.json")
+    
+    # Include model name in filename if provided
+    if model:
+        # Clean model name for filename (replace / with _)
+        clean_model = model.replace("/", "_").replace(":", "_")
+        return os.path.join(directory, f"{provider}_{clean_model}_{log_type}_{timestamp}.json")
+    else:
+        return os.path.join(directory, f"{provider}_{log_type}_{timestamp}.json")
 
 
 def write_to_log_file(data: Dict[str, Any], filename: Optional[str]) -> None:
@@ -275,7 +286,7 @@ def log_api_key_missing(provider: str, env_var_name: str) -> None:
     logger.warning(f"{provider} API key not found in environment variable {env_var_name}")
 
 
-def log_request(provider: str, prompt: str, parameters: Dict[str, Any], log_dir: Optional[str] = None) -> None:
+def log_request(provider: str, prompt: str, parameters: Dict[str, Any], log_dir: Optional[str] = None, model: Optional[str] = None) -> None:
     """
     Log an LLM request.
     
@@ -284,8 +295,13 @@ def log_request(provider: str, prompt: str, parameters: Dict[str, Any], log_dir:
         prompt: The request prompt
         parameters: Request parameters
         log_dir: Optional override for log directory
+        model: Model name (extracted from parameters if not provided)
     """
     timestamp = datetime.now().isoformat()
+    
+    # Extract model from parameters if not provided
+    if not model:
+        model = parameters.get("model") or parameters.get("model_name")
     
     # Create a safe copy of parameters for logging
     safe_parameters = parameters.copy()
@@ -323,26 +339,27 @@ def log_request(provider: str, prompt: str, parameters: Dict[str, Any], log_dir:
         logger.debug(f"Parameters: {safe_parameters}")
         logger.debug(f"Prompt: {prompt}")
     
-    # Write to file if directory is configured
-    log_filename = get_log_filename(provider, "request", log_dir)
-    if log_filename:
-        log_data = {
-            "timestamp": timestamp,
-            "provider": provider,
-            "prompt": prompt,
-            "parameters": parameters  # Original, non-truncated parameters
-        }
-        write_to_log_file(log_data, log_filename)
+    # Store request for later matching with response
+    request_id = f"{provider}_{timestamp}_{id(prompt)}"
+    _pending_requests[request_id] = {
+        "timestamp": timestamp,
+        "provider": provider,
+        "prompt": prompt,
+        "parameters": parameters,  # Original, non-truncated parameters
+        "model": model,
+        "log_dir": log_dir
+    }
 
 
-def log_response(provider: str, response: str, log_dir: Optional[str] = None) -> None:
+def log_response(provider: str, response: str, log_dir: Optional[str] = None, model: Optional[str] = None) -> None:
     """
-    Log an LLM response.
+    Log an LLM response and combine it with the matching request.
     
     Args:
         provider: Provider name
         response: The response text
-        log_dir: Optional override for log directory
+        log_dir: Optional override for log directory  
+        model: Model name (used to find matching request)
     """
     timestamp = datetime.now().isoformat()
     
@@ -355,15 +372,50 @@ def log_response(provider: str, response: str, log_dir: Optional[str] = None) ->
         else:
             logger.debug(f"Response: {response}")
     
-    # Write to file if directory is configured
-    log_filename = get_log_filename(provider, "response", log_dir)
-    if log_filename:
-        log_data = {
-            "timestamp": timestamp,
-            "provider": provider,
-            "response": response  # Original, full response
-        }
-        write_to_log_file(log_data, log_filename)
+    # Find matching request (most recent one for this provider)
+    matching_request = None
+    request_key_to_remove = None
+    
+    for key, request_data in _pending_requests.items():
+        if request_data["provider"] == provider:
+            # If model is specified, match on model too
+            if model and request_data.get("model") != model:
+                continue
+            matching_request = request_data
+            request_key_to_remove = key
+            break
+    
+    if matching_request:
+        # Remove the request from pending
+        del _pending_requests[request_key_to_remove]
+        
+        # Create combined interaction file
+        log_filename = get_log_filename(provider, "interaction", log_dir or matching_request["log_dir"], model or matching_request.get("model"))
+        if log_filename:
+            combined_data = {
+                "request": {
+                    "timestamp": matching_request["timestamp"],
+                    "provider": matching_request["provider"],
+                    "prompt": matching_request["prompt"],
+                    "parameters": matching_request["parameters"]
+                },
+                "response": {
+                    "timestamp": timestamp,
+                    "provider": provider,
+                    "response": response
+                }
+            }
+            write_to_log_file(combined_data, log_filename)
+    else:
+        # Fallback: write response-only file if no matching request found
+        log_filename = get_log_filename(provider, "response", log_dir, model)
+        if log_filename:
+            log_data = {
+                "timestamp": timestamp,
+                "provider": provider,
+                "response": response
+            }
+            write_to_log_file(log_data, log_filename)
 
 
 def log_request_url(provider: str, url: str, method: str = "POST") -> None:
