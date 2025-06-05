@@ -30,6 +30,7 @@ from abstractllm.utils.logging import (
     log_request_url,
     truncate_base64
 )
+from abstractllm.utils.model_capabilities import supports_tool_calls, supports_vision
 from abstractllm.media.processor import MediaProcessor
 from abstractllm.exceptions import ImageProcessingError, FileProcessingError, UnsupportedFeatureError, ProviderAPIError
 from abstractllm.media.factory import MediaFactory
@@ -60,31 +61,6 @@ except ImportError:
 
 # Configure logger
 logger = logging.getLogger("abstractllm.providers.ollama.OllamaProvider")
-
-# Models that support vision capabilities
-VISION_CAPABLE_MODELS = [
-    "llama3.2-vision:latest",
-    "deepseek-janus-pro",
-    "erwan2/DeepSeek-Janus-Pro-7B",
-    "llava",
-    "llama2-vision",
-    "bakllava",
-    "cogvlm",
-    "moondream",
-    "multimodal",
-    "vision"
-]
-
-# Models that support tool calls
-TOOL_CALL_CAPABLE_MODELS = [
-    "llama3.2",
-    "llama3.1",
-    "mistral",
-    "gemma3",
-    "cogito",
-    "qwen2.5",
-    "phi4-mini"
-]
 
 class OllamaProvider(AbstractLLMInterface):
     """
@@ -240,8 +216,8 @@ class OllamaProvider(AbstractLLMInterface):
         Returns:
             True if the current model supports tool calls, False otherwise
         """
-        model = self.config_manager.get_param(ModelParameter.MODEL).lower()
-        return any(model.startswith(supported.lower()) for supported in TOOL_CALL_CAPABLE_MODELS)
+        model = self.config_manager.get_param(ModelParameter.MODEL)
+        return supports_tool_calls(model)
         
     def _prepare_request_for_chat(self, 
                                  model: str,
@@ -430,7 +406,7 @@ class OllamaProvider(AbstractLLMInterface):
         
         # Check for images and model compatibility
         has_images = any(isinstance(f, ImageInput) for f in processed_files)
-        if has_images and not any(model.lower().startswith(vm.lower()) for vm in VISION_CAPABLE_MODELS):
+        if has_images and not supports_vision(model):
             raise UnsupportedFeatureError(
                 "vision",
                 "Current model does not support vision input",
@@ -650,7 +626,7 @@ class OllamaProvider(AbstractLLMInterface):
         
         # Check for images and model compatibility
         has_images = any(isinstance(f, ImageInput) for f in processed_files)
-        if has_images and not any(model.lower().startswith(vm.lower()) for vm in VISION_CAPABLE_MODELS):
+        if has_images and not supports_vision(model):
             raise UnsupportedFeatureError(
                 "vision",
                 "Current model does not support vision input",
@@ -825,10 +801,10 @@ class OllamaProvider(AbstractLLMInterface):
         model = self.config_manager.get_param(ModelParameter.MODEL)
         
         # Check if the current model supports vision
-        has_vision = any(vision_model.lower() in model.lower() for vision_model in [vm.lower() for vm in VISION_CAPABLE_MODELS])
+        has_vision = supports_vision(model)
         
         # Check if the current model supports tool calls
-        has_tool_calls = self._supports_tool_calls()
+        has_tool_calls = supports_tool_calls(model)
         
         # Update capabilities
         if has_vision:

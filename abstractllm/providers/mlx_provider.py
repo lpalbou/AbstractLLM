@@ -130,6 +130,9 @@ class MLXProvider(AbstractLLMInterface):
         # Determine if model has vision capabilities
         self._is_vision_model = self._check_vision_model(model_name)
         
+        # Automatically load the model during initialization
+        self.load_model()
+        
     def _check_vision_model(self, model_name: str) -> bool:
         """
         Check if the specified model has vision capabilities.

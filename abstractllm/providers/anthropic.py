@@ -25,6 +25,7 @@ from abstractllm.exceptions import (
     FileProcessingError,
     ProviderAPIError
 )
+from abstractllm.utils.model_capabilities import supports_tool_calls
 
 # Check if Anthropic package is available
 try:
@@ -61,25 +62,12 @@ logger = logging.getLogger("abstractllm.providers.anthropic.AnthropicProvider")
 
 # Models that support vision capabilities
 VISION_CAPABLE_MODELS = [
-    "claude-3-haiku-20240307"
-    "claude-3-sonnet-20240229",
-    "claude-3-opus-20240229", 
-    "claude-3-5-sonnet-20240620",
-    "claude-3-5-sonnet-20241022", # work on images
-    "claude-3-5-haiku-20241022", # did not work on images somehow...
-    "claude-3-7-sonnet-20250219"
-]
-
-# Models that support tool calls DO NOT CHANGE THIS LIST !!!!!!
-TOOL_CALL_CAPABLE_MODELS = [
-    # Claude 3 Opus models
+    # Claude 3 models
     "claude-3-opus-20240229",
-    
-    # Claude 3 Sonnet models
     "claude-3-sonnet-20240229",
     
     # Claude 3.5 models
-    "claude-3-5-haiku-20241022", 
+    "claude-3-5-haiku-20241022",
     "claude-3-5-sonnet-20241022",
     
     # Claude 3.7 models
@@ -247,13 +235,8 @@ class AnthropicProvider(AbstractLLMInterface):
             logger.warning("Model is None, cannot determine tool call support")
             return False
             
-        # Manually check for exact match with models in TOOL_CALL_CAPABLE_MODELS
-        if model in TOOL_CALL_CAPABLE_MODELS:
-            logger.debug(f"Exact match found for {model} in TOOL_CALL_CAPABLE_MODELS")
-            return True
-            
-        # Use startswith for partial matches (for model versions)
-        has_support = any(model.startswith(supported) for supported in TOOL_CALL_CAPABLE_MODELS)
+        # Use centralized capability checking
+        has_support = supports_tool_calls(model)
         logger.debug(f"Tool call support for {model}: {has_support}")
         return has_support
     

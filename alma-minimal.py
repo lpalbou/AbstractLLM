@@ -18,6 +18,13 @@ Then add them to the tools list:
         provider=provider,
         tools=[read_file, list_files, search_files, write_file, ...]  # Add more tools here
     )
+
+# Command Line Usage
+Examples:
+    python alma-minimal.py --provider mlx --model "mlx-community/Qwen3-30B-A3B-4bit"
+    python alma-minimal.py --provider anthropic --model "claude-3-5-haiku-20241022"
+    python alma-minimal.py --prompt "List all Python files in the current directory"
+    python alma-minimal.py --provider mlx --model "mlx-community/Qwen3-30B-A3B-4bit" --prompt "Read the README.md file"
 """
 
 from abstractllm import create_llm
@@ -37,6 +44,7 @@ import os
 import logging
 import re
 import sys
+import argparse
 
 
 # ANSI color codes for error messages
@@ -51,10 +59,7 @@ def start_session(provider_name, model_name, max_tokens = 4096):
                          model=model_name,
                          max_tokens=max_tokens)
 
-    # Load the model immediately at startup
-    print("🔄 Loading model...")
-    provider.load_model()
-    print("✅ Model loaded and ready!")
+    print(f"✅ Connected to {provider_name} provider with model {model_name}")
 
     # Create session with the provider and tool function
     # Use the standard Session class - no need to override it
@@ -84,6 +89,34 @@ You are an ACTION-TAKING agent, not just an advisor. Take action immediately whe
         tools=[read_file, list_files]  # Functions are automatically registered
     )
     return session
+
+
+def execute_single_prompt(session, prompt: str):
+    """Execute a single prompt and display the result without starting REPL."""
+    try:
+        print(f"\n{BLUE_ITALIC}Executing prompt:{RESET} {prompt}")
+        print(f"\n{BLUE_ITALIC}Assistant:{RESET}")
+        
+        # Log the interaction steps for debugging
+        log_step(1, "USER→AGENT", f"Received query: {prompt}")
+        
+        # Use the unified generate method - trust AbstractLLM to handle everything
+        log_step(2, "AGENT→LLM", "Sending query to LLM with tool support enabled")
+        response = session.generate(
+            prompt=prompt,
+            max_tool_calls=25  # Limit tool calls to avoid infinite loops
+        )
+        
+        log_step(3, "LLM→AGENT", "Received response, displaying to user")
+        
+        # Simply display the response - trust AbstractLLM formatting
+        format_response_display(response)
+        
+    except Exception as e:
+        print(f"\n{RED_BOLD}Error executing prompt: {str(e)}{RESET}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
     
 def start_repl(session):
     while True:
@@ -283,31 +316,89 @@ def show_help():
     print(f"  /exit, /quit, /q        - Exit ALMA")
 
 
+def parse_arguments():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="ALMA (AbstractLLM Agent) - Minimal implementation with tool support",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s
+    Launch with default settings (mlx:mlx-community/Qwen3-30B-A3B-4bit)
+  
+  %(prog)s --provider anthropic --model claude-3-5-haiku-20241022
+    Launch with Anthropic Claude model
+  
+  %(prog)s --provider openai --model gpt-4o
+    Launch with OpenAI GPT-4o model
+  
+  %(prog)s --prompt "List all Python files in the current directory"
+    Execute a single prompt and exit
+  
+  %(prog)s --provider mlx --model "mlx-community/Qwen3-30B-A3B-4bit" --prompt "Read the README.md file"
+    Execute a prompt with specific provider and model
+
+Supported providers: mlx, anthropic, openai, ollama
+        """
+    )
+    
+    parser.add_argument(
+        "--provider",
+        type=str,
+        default="mlx",
+        help="LLM provider to use (default: mlx). Options: mlx, anthropic, openai, ollama"
+    )
+    
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="mlx-community/Qwen3-30B-A3B-4bit",        
+        help="Model name to use (default: mlx-community/Qwen3-30B-A3B-4bit)"
+    )
+    
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        help="Execute a single prompt and exit (non-interactive mode)"
+    )
+    
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=4096,
+        help="Maximum tokens for generation (default: 4096)"
+    )
+    
+    return parser.parse_args()
 
 
 def main():    
+    # Parse command line arguments
+    args = parse_arguments()
+    
     # Set logging
     set_logging()
 
-    provider_name = "mlx" # or anthropic or openai or ollama
-    model_name="mlx-community/Qwen3-30B-A3B-4bit"
-    #model_name="mlx-community/DeepSeek-R1-Distill-Qwen-32B-MLX-4Bit"
-    #model_name="mlx-community/DeepSeek-R1-0528-Qwen3-8B-4bit"
-    #model_name="a-m-team/AM-Thinking-v1"
-    #model_name="claude-3-5-haiku-20241022"
-    #model_name="gpt-4o"
-    #model_name = "cogito"
-    #model_name = "qwen2.5"
+    # Use command line arguments or defaults
+    provider_name = args.provider
+    model_name = args.model
+    max_tokens = args.max_tokens
+
+    print(f"{BLUE_ITALIC}🚀 Starting ALMA with {provider_name}:{model_name}{RESET}")
 
     # Create session
-    session = start_session(provider_name, model_name, 4096)
+    session = start_session(provider_name, model_name, max_tokens)
 
-    # Show help
+    # If prompt is provided, execute it and exit
+    if args.prompt:
+        execute_single_prompt(session, args.prompt)
+        return
+
+    # Show help for interactive mode
     show_help()
 
     # Start REPL loop
     start_repl(session)
-
 
 
 if __name__ == "__main__":
