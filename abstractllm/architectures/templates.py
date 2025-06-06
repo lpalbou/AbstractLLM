@@ -346,4 +346,194 @@ def get_template(model_name: str, template_type: str = "default") -> Optional[Te
     Returns:
         TemplateInfo or None if not found
     """
-    return get_template_manager().get_template(model_name, template_type) 
+    return get_template_manager().get_template(model_name, template_type)
+
+
+def apply_chat_template(messages: List[Dict[str, Any]], model_name: str, template_type: str = "default") -> str:
+    """
+    Apply chat template to messages using architecture-specific formatting.
+    
+    Args:
+        messages: List of message dictionaries with roles and content
+        model_name: Model name for architecture detection
+        template_type: Template type to use
+        
+    Returns:
+        Formatted prompt string
+    """
+    from .detection import detect_architecture
+    
+    # Get architecture and apply appropriate template
+    architecture = detect_architecture(model_name)
+    
+    if architecture == "gemma":
+        return apply_gemma_template(messages)
+    elif architecture == "llama":
+        return apply_llama_template(messages)
+    elif architecture == "qwen":
+        return apply_qwen_template(messages)
+    elif architecture == "phi":
+        return apply_phi_template(messages)
+    elif architecture == "mistral":
+        return apply_mistral_template(messages)
+    else:
+        # Fallback to simple template
+        return apply_simple_fallback_template(messages, model_name)
+
+
+def apply_gemma_template(messages: List[Dict[str, Any]]) -> str:
+    """Apply Gemma-specific chat template."""
+    prompt_parts = []
+    system_content = None
+    
+    # Extract system content first
+    for msg in messages:
+        if msg["role"] == "system":
+            system_content = msg["content"]
+            break
+    
+    # Build conversation
+    for msg in messages:
+        if msg["role"] == "system":
+            continue  # Skip system messages - will be integrated into first user message
+        elif msg["role"] == "user":
+            prompt_parts.append(f"<start_of_turn>user\n{msg['content']}<end_of_turn>")
+        elif msg["role"] == "assistant":
+            prompt_parts.append(f"<start_of_turn>model\n{msg['content']}<end_of_turn>")
+    
+    # Add system content to first user message if present
+    if system_content and prompt_parts:
+        first_user_msg = prompt_parts[0]
+        if first_user_msg.startswith("<start_of_turn>user\n"):
+            user_content = first_user_msg[len("<start_of_turn>user\n"):-len("<end_of_turn>")]
+            enhanced_user_content = f"System: {system_content}\n\nUser: {user_content}"
+            prompt_parts[0] = f"<start_of_turn>user\n{enhanced_user_content}<end_of_turn>"
+    
+    prompt_parts.append("<start_of_turn>model\n")
+    return "\n".join(prompt_parts)
+
+
+def apply_llama_template(messages: List[Dict[str, Any]]) -> str:
+    """Apply Llama-specific chat template."""
+    prompt_parts = []
+    system_content = None
+    
+    # Extract system content
+    for msg in messages:
+        if msg["role"] == "system":
+            system_content = msg["content"]
+            break
+    
+    # Build conversation in Llama format
+    if system_content:
+        prompt_parts.append(f"<s>[INST] <<SYS>>\n{system_content}\n<</SYS>>\n\n")
+    else:
+        prompt_parts.append("<s>[INST] ")
+    
+    user_messages = []
+    assistant_messages = []
+    
+    for msg in messages:
+        if msg["role"] == "user":
+            user_messages.append(msg["content"])
+        elif msg["role"] == "assistant":
+            assistant_messages.append(msg["content"])
+    
+    # Interleave user and assistant messages
+    for i, user_msg in enumerate(user_messages):
+        if i == 0 and system_content:
+            prompt_parts.append(f"{user_msg} [/INST]")
+        else:
+            prompt_parts.append(f"<s>[INST] {user_msg} [/INST]")
+        
+        if i < len(assistant_messages):
+            prompt_parts.append(f" {assistant_messages[i]} </s>")
+    
+    # If we have more user messages than assistant messages, end with generation prompt
+    if len(user_messages) > len(assistant_messages):
+        prompt_parts.append(" ")
+    
+    return "".join(prompt_parts)
+
+
+def apply_qwen_template(messages: List[Dict[str, Any]]) -> str:
+    """Apply Qwen-specific chat template."""
+    prompt_parts = []
+    
+    for msg in messages:
+        if msg["role"] == "system":
+            prompt_parts.append(f"<|im_start|>system\n{msg['content']}<|im_end|>")
+        elif msg["role"] == "user":
+            prompt_parts.append(f"<|im_start|>user\n{msg['content']}<|im_end|>")
+        elif msg["role"] == "assistant":
+            prompt_parts.append(f"<|im_start|>assistant\n{msg['content']}<|im_end|>")
+    
+    prompt_parts.append("<|im_start|>assistant\n")
+    return "\n".join(prompt_parts)
+
+
+def apply_phi_template(messages: List[Dict[str, Any]]) -> str:
+    """Apply Phi-specific chat template."""
+    prompt_parts = []
+    
+    for msg in messages:
+        if msg["role"] == "system":
+            prompt_parts.append(f"<|system|>\n{msg['content']}<|end|>")
+        elif msg["role"] == "user":
+            prompt_parts.append(f"<|user|>\n{msg['content']}<|end|>")
+        elif msg["role"] == "assistant":
+            prompt_parts.append(f"<|assistant|>\n{msg['content']}<|end|>")
+    
+    prompt_parts.append("<|assistant|>\n")
+    return "\n".join(prompt_parts)
+
+
+def apply_mistral_template(messages: List[Dict[str, Any]]) -> str:
+    """Apply Mistral-specific chat template."""
+    prompt_parts = []
+    system_content = None
+    
+    # Extract system content
+    for msg in messages:
+        if msg["role"] == "system":
+            system_content = msg["content"]
+            break
+    
+    # Build conversation in Mistral format
+    for msg in messages:
+        if msg["role"] == "system":
+            continue  # System message handled separately
+        elif msg["role"] == "user":
+            if system_content and len(prompt_parts) == 0:
+                # Integrate system prompt into first user message
+                prompt_parts.append(f"<s>[INST] {system_content}\n\n{msg['content']} [/INST]")
+                system_content = None  # Don't repeat it
+            else:
+                prompt_parts.append(f"<s>[INST] {msg['content']} [/INST]")
+        elif msg["role"] == "assistant":
+            prompt_parts.append(f" {msg['content']} </s>")
+    
+    # End with generation prompt if needed
+    if not prompt_parts or not prompt_parts[-1].endswith("</s>"):
+        prompt_parts.append(" ")
+    
+    return "".join(prompt_parts)
+
+
+def apply_simple_fallback_template(messages: List[Dict[str, Any]], model_name: str) -> str:
+    """Apply simple fallback template for unknown architectures."""
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"Applying simple concatenation fallback for {model_name}")
+    
+    prompt_parts = []
+    for msg in messages:
+        if msg["role"] == "system":
+            prompt_parts.append(f"System: {msg['content']}")
+        elif msg["role"] == "user":
+            prompt_parts.append(f"User: {msg['content']}")
+        elif msg["role"] == "assistant":
+            prompt_parts.append(f"Assistant: {msg['content']}")
+    
+    prompt_parts.append("Assistant:")
+    return "\n\n".join(prompt_parts) 

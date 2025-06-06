@@ -15,6 +15,8 @@ import copy
 import io
 import numpy as np
 import re
+import json
+from datetime import datetime
 
 # Import the interface class
 from abstractllm.interface import (
@@ -35,8 +37,12 @@ from abstractllm.providers.mlx_model_configs import ModelConfigFactory, MLXModel
 from abstractllm.media.factory import MediaFactory
 from abstractllm.providers.tensor_type_patch import apply_all_patches as apply_tensor_patches
 from abstractllm.tools.types import ToolCallRequest, ToolCall
+from abstractllm.tools.architecture_tools import detect_tool_calls, parse_tool_calls, format_tools_for_prompt, create_tool_call_request
 from abstractllm.utils.utilities import TokenCounter, is_apple_silicon
 from abstractllm.utils.logging import log_request, log_response
+from abstractllm.architectures.detection import detect_architecture
+from abstractllm.architectures.capabilities import get_capabilities
+from abstractllm.architectures.templates import get_template_manager, apply_chat_template, apply_simple_fallback_template
 
 # Set up logging
 logger = logging.getLogger("abstractllm.providers.mlx_provider")
@@ -234,9 +240,12 @@ class MLXProvider(AbstractLLMInterface):
                 # MLX-LM load function only requires the model path
                 self._model, self._processor = load_model(model_name)
                 
+                # Ensure proper EOS token configuration for different model architectures
+                self._configure_eos_tokens(model_name)
+                
                 # Get model config from factory
                 self._config = ModelConfigFactory.create_config(model_name)
-                
+            
             # Set flags to indicate model is loaded
             self._is_loaded = True
             self._model_id = model_name
@@ -248,6 +257,56 @@ class MLXProvider(AbstractLLMInterface):
         except Exception as e:
             logger.error(f"Failed to load model {model_name}: {e}")
             raise ModelLoadingError(f"Failed to load model {model_name}: {str(e)}")
+            
+    def _configure_eos_tokens(self, model_name: str) -> None:
+        """
+        Configure EOS tokens properly for different model architectures.
+        This helps ensure models know when to stop generating.
+        """
+        if not self._processor:
+            return
+            
+        try:
+            model_lower = model_name.lower()
+            
+            # Configure EOS tokens based on model architecture
+            if "gemma" in model_lower:
+                # Gemma models use specific EOS tokens
+                if hasattr(self._processor, 'eos_token') and self._processor.eos_token is None:
+                    # Try to set the EOS token if it's not already set
+                    possible_eos_tokens = ["<end_of_turn>", "<eos>", "</s>"]
+                    for eos_token in possible_eos_tokens:
+                        if eos_token in getattr(self._processor, 'vocab', {}):
+                            self._processor.eos_token = eos_token
+                            logger.info(f"Set EOS token for Gemma model: {eos_token}")
+                            break
+            
+            elif "llama" in model_lower:
+                # Llama models typically use </s>
+                if hasattr(self._processor, 'eos_token') and self._processor.eos_token is None:
+                    if "</s>" in getattr(self._processor, 'vocab', {}):
+                        self._processor.eos_token = "</s>"
+                        logger.info("Set EOS token for Llama model: </s>")
+            
+            elif "qwen" in model_lower:
+                # Qwen models use specific tokens
+                if hasattr(self._processor, 'eos_token') and self._processor.eos_token is None:
+                    possible_eos_tokens = ["<|im_end|>", "<|endoftext|>", "</s>"]
+                    for eos_token in possible_eos_tokens:
+                        if eos_token in getattr(self._processor, 'vocab', {}):
+                            self._processor.eos_token = eos_token
+                            logger.info(f"Set EOS token for Qwen model: {eos_token}")
+                            break
+            
+            # Log current EOS token configuration
+            eos_token = getattr(self._processor, 'eos_token', None)
+            if eos_token:
+                logger.debug(f"Model {model_name} EOS token: {eos_token}")
+            else:
+                logger.warning(f"Model {model_name} has no EOS token configured")
+                
+        except Exception as e:
+            logger.warning(f"Failed to configure EOS tokens for {model_name}: {e}")
             
     def _check_chat_support(self) -> bool:
         """
@@ -422,7 +481,7 @@ class MLXProvider(AbstractLLMInterface):
                 tools: Optional[List[Union[Dict[str, Any], Callable]]] = None,
                 messages: Optional[List[Dict[str, Any]]] = None,
                 **kwargs) -> Union[GenerateResponse, Generator[GenerateResponse, None, None]]:
-        """Generate a response using the MLX model with native tool calling support."""
+        """Generate a response using the MLX model with architecture-based tool calling support."""
         
         logger.info(f"Generation request: model={self.config_manager.get_param(ModelParameter.MODEL)}, "
                    f"stream={stream}, has_system_prompt={system_prompt is not None}, files={len(files) if files else 0}")
@@ -791,8 +850,116 @@ class MLXProvider(AbstractLLMInterface):
         
         return params
 
+    def _ensure_chat_template_compatibility(self, messages: List[Dict[str, Any]], model_name: str) -> List[Dict[str, Any]]:
+        """
+        Ensure chat template compatibility by fixing role alternation issues.
+        
+        This method addresses the "Conversation roles must alternate user/assistant" error
+        that occurs with Gemma and Llama models when tools or multiple system messages are used.
+        
+        Args:
+            messages: List of message dictionaries
+            model_name: Name of the model to check compatibility for
+            
+        Returns:
+            Fixed list of messages that satisfy chat template requirements
+        """
+        if not messages:
+            return messages
+            
+        # Use architecture detection to determine if strict alternation is needed
+        architecture = detect_architecture(model_name)
+        capabilities = get_capabilities(architecture)
+        
+        # Check if this architecture requires strict role alternation
+        requires_strict_alternation = False
+        if capabilities and hasattr(capabilities, 'notes'):
+            requires_strict_alternation = "strict_alternation" in capabilities.notes.lower()
+        
+        # Fallback check for known problematic models
+        if not requires_strict_alternation:
+            strict_alternation_models = ["gemma", "llama"]
+            requires_strict_alternation = any(model.lower() in model_name.lower() for model in strict_alternation_models)
+        
+        if not requires_strict_alternation:
+            return messages
+            
+        logger.debug(f"Applying chat template compatibility fixes for {architecture} architecture")
+        
+        # Use the existing logic but simplified
+        fixed_messages = []
+        system_contents = []
+        
+        # Step 1: Collect all system messages and merge them
+        for msg in messages:
+            if msg["role"] == "system":
+                system_contents.append(msg["content"])
+            else:
+                # If we have collected system messages, add them before the first non-system message
+                if system_contents and not fixed_messages:
+                    merged_system_content = "\n\n".join(system_contents)
+                    
+                    # For Gemma models, integrate system prompt into first user message
+                    if architecture == "gemma" and msg["role"] == "user":
+                        enhanced_content = f"System: {merged_system_content}\n\nUser: {msg['content']}"
+                        fixed_messages.append({"role": "user", "content": enhanced_content})
+                    else:
+                        # For other models, keep as separate system message but ensure it's first
+                        fixed_messages.append({"role": "system", "content": merged_system_content})
+                        fixed_messages.append(msg)
+                    
+                    system_contents = []  # Clear collected system messages
+                else:
+                    fixed_messages.append(msg)
+        
+        # Step 2: Handle tool messages by converting them to assistant messages
+        final_messages = []
+        for msg in fixed_messages:
+            if msg["role"] == "tool":
+                tool_name = msg.get("name", "unknown_tool")
+                tool_content = msg.get("content", "")
+                # Convert tool response to assistant message
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": f"I executed the {tool_name} tool and received: {tool_content}"
+                }
+                final_messages.append(assistant_msg)
+            else:
+                final_messages.append(msg)
+        
+        # Step 3: Ensure proper user/assistant alternation
+        if len(final_messages) > 1:
+            validated_messages = []
+            last_role = None
+            
+            for i, msg in enumerate(final_messages):
+                current_role = msg["role"]
+                
+                # Skip consecutive messages with the same role (except system)
+                if current_role == last_role and current_role != "system":
+                    if current_role == "user":
+                        # Merge consecutive user messages
+                        if validated_messages:
+                            validated_messages[-1]["content"] += f"\n\n{msg['content']}"
+                        else:
+                            validated_messages.append(msg)
+                    elif current_role == "assistant":
+                        # Merge consecutive assistant messages
+                        if validated_messages:
+                            validated_messages[-1]["content"] += f"\n\n{msg['content']}"
+                        else:
+                            validated_messages.append(msg)
+                else:
+                    validated_messages.append(msg)
+                    last_role = current_role
+            
+            final_messages = validated_messages
+        
+        logger.debug(f"Fixed messages: {len(messages)} -> {len(final_messages)} messages")
+        return final_messages
+
     def _generate_text(self, prompt: str, system_prompt: Optional[str] = None, tools: Optional[List[Any]] = None, messages: Optional[List[Dict[str, Any]]] = None, **kwargs) -> GenerateResponse:
-        """Generate text using MLX with native tool calling support."""
+        """Generate text using MLX with architecture-based tool calling support."""
         
         # Make sure model is loaded
         if not self._is_loaded:
@@ -830,7 +997,8 @@ class MLXProvider(AbstractLLMInterface):
                     chat_messages.append({"role": "system", "content": system_prompt})
                 chat_messages.append({"role": "user", "content": prompt})
             
-            # Convert AbstractLLM tools to MLX format
+            # Convert AbstractLLM tools to MLX format and get model name for architecture detection
+            model_name = self.config_manager.get_param(ModelParameter.MODEL)
             mlx_tools = None
             if tools:
                 mlx_tools = []
@@ -865,33 +1033,10 @@ class MLXProvider(AbstractLLMInterface):
                         
                 logger.info(f"Converted {len(tools)} tools to MLX format")
             
-            # Apply chat template with tools
+            # Apply chat template with tools using architecture-based formatting
             if mlx_tools:
-                # For MLX, use simplified approach without native tool calling
-                # Just add tool descriptions to the system prompt
-                tool_descriptions = []
-                for tool in mlx_tools:
-                    func_info = tool["function"]
-                    # Get parameter names from the schema
-                    params = func_info.get("parameters", {}).get("properties", {})
-                    param_names = list(params.keys())
-                    param_desc = ", ".join(param_names) if param_names else "no parameters"
-                    tool_descriptions.append(f"- {func_info['name']}({param_desc}): {func_info['description']}")
-                
-                tool_system_prompt = f"""When the user asks you to follow instructions from a document, you should EXECUTE those instructions step by step, not just summarize them. If you read a document containing step-by-step procedures with tool calls, perform those tool calls in the order specified.
-
-You have access to these tools:
-{chr(10).join(tool_descriptions)}
-
-To use a tool: <tool_call>{{"name": "tool_name", "arguments": {{"param_name": "value"}}}}</tool_call>
-
-When following multi-step procedures:
-1. Read the instructions first 
-2. Execute each step that requires a tool call
-3. Continue to the next step based on the results
-4. Complete the entire procedure unless instructed otherwise
-
-You are an action-taking agent, not just an advisor."""
+                # Use architecture-based tool formatting
+                tool_system_prompt = format_tools_for_prompt(mlx_tools, model_name)
                 
                 # Add tool instructions to system prompt
                 if system_prompt:
@@ -903,10 +1048,14 @@ You are an action-taking agent, not just an advisor."""
                 if messages is not None:
                     # When using conversation history, preserve it but enhance system prompt
                     formatted_messages = []
+                    system_added = False
                     for msg in chat_messages:
                         if msg["role"] == "system":
-                            # Replace system prompt with enhanced version
-                            formatted_messages.append({"role": "system", "content": enhanced_system_prompt})
+                            if not system_added:
+                                # Replace first system prompt with enhanced version
+                                formatted_messages.append({"role": "system", "content": enhanced_system_prompt})
+                                system_added = True
+                            # Skip additional system messages (they'll be merged by compatibility fix)
                         elif msg["role"] == "tool":
                             # Convert tool messages to assistant messages with clear formatting
                             tool_name = msg.get("name", "unknown_tool")
@@ -917,32 +1066,47 @@ You are an action-taking agent, not just an advisor."""
                             })
                         else:
                             formatted_messages.append(msg)
+                    
+                    # If no system message was found, add enhanced system prompt at the beginning
+                    if not system_added:
+                        formatted_messages.insert(0, {"role": "system", "content": enhanced_system_prompt})
                 else:
                     # For new conversations, just use enhanced system prompt
                     formatted_messages = []
                     formatted_messages.append({"role": "system", "content": enhanced_system_prompt})
                     formatted_messages.append({"role": "user", "content": prompt})
-                
-                # Use standard chat template without tools parameter
-                formatted_prompt = self._processor.apply_chat_template(
-                    formatted_messages,
-                    add_generation_prompt=True,
-                    tokenize=False
-                )
             else:
                 # Standard chat template without tools - use chat_messages directly
+                formatted_messages = chat_messages
+            
+            # Apply chat template compatibility fixes for Gemma/Llama models
+            compatible_messages = self._ensure_chat_template_compatibility(formatted_messages, model_name)
+            
+            # Try to apply chat template with fallback mechanism
+            try:
                 formatted_prompt = self._processor.apply_chat_template(
-                    chat_messages,
+                    compatible_messages,
                     add_generation_prompt=True,
                     tokenize=False
                 )
+            except Exception as template_error:
+                logger.warning(f"Chat template failed: {template_error}")
+                
+                # Use architecture-based fallback template handling
+                logger.info(f"Using architecture-based fallback template")
+                try:
+                    # Apply the architecture-specific template
+                    formatted_prompt = apply_chat_template(compatible_messages, model_name, template_type="default")
+                except Exception as arch_error:
+                    logger.warning(f"Architecture template failed: {arch_error}, using simple fallback")
+                    formatted_prompt = apply_simple_fallback_template(compatible_messages, model_name)
             
             # LOG THE EXACT REQUEST PAYLOAD
             request_params = {
                 "max_tokens": max_tokens,
                 "temperature": temperature,
                 "top_p": top_p,
-                "model": self.config_manager.get_param(ModelParameter.MODEL),
+                "model": model_name,
                 "original_prompt": prompt,
                 "system_prompt": system_prompt,
                 "tools_count": len(tools) if tools else 0,
@@ -974,7 +1138,7 @@ You are an action-taking agent, not just an advisor."""
                     request_params[key] = value
             
             # Log the exact request with the formatted prompt that gets sent to MLX
-            log_request("mlx", formatted_prompt, request_params, model=self.config_manager.get_param(ModelParameter.MODEL))
+            log_request("mlx", formatted_prompt, request_params, model=model_name)
             
             logger.info(f"MLX generation starting - prompt length: {len(formatted_prompt)} chars")
             
@@ -988,31 +1152,37 @@ You are an action-taking agent, not just an advisor."""
                 **generation_params
             }
             
+            # For Gemma models, ensure proper EOS token configuration
+            if "gemma" in model_name.lower():
+                # Gemma models need proper repetition penalty to avoid looping
+                # Note: MLX-LM handles repetition penalty through the model config, not generation parameters
+                logger.info(f"Using Gemma model - repetition penalty handled by model config")
+            
             # Generate text
             output = generate_text(**generate_kwargs)
             
             # LOG THE EXACT RAW RESPONSE
-            log_response("mlx", output, model=self.config_manager.get_param(ModelParameter.MODEL))
+            log_response("mlx", output, model=model_name)
             
             logger.info(f"MLX generation completed - response length: {len(output)} chars")
             
-            # Parse MLX tool call response
-            if mlx_tools and self._has_tool_calls(output):
-                # MLX generates tool calls in specific format: <tool_call>{"name": "...", "arguments": {...}}</tool_call>
-                tool_calls = self._parse_mlx_tool_calls(output)
-                if tool_calls:
-                    return ToolCallRequest(
-                        content=output,
-                        tool_calls=tool_calls
-                    )
+            # Use architecture-based tool call detection and parsing
+            if mlx_tools:
+                # Use the create_tool_call_request function which properly handles tool call detection and parsing
+                from abstractllm.tools.architecture_tools import create_tool_call_request
+                result = create_tool_call_request(output, model_name)
+                
+                # If it's a ToolCallRequest, return it directly
+                if hasattr(result, 'tool_calls'):
+                    return result
             
             # Calculate token usage
-            prompt_tokens = TokenCounter.count_tokens(formatted_prompt, self.config_manager.get_param(ModelParameter.MODEL))
-            completion_tokens = TokenCounter.count_tokens(output, self.config_manager.get_param(ModelParameter.MODEL))
+            prompt_tokens = TokenCounter.count_tokens(formatted_prompt, model_name)
+            completion_tokens = TokenCounter.count_tokens(output, model_name)
             
             return GenerateResponse(
                 content=output,
-                model=self.config_manager.get_param(ModelParameter.MODEL),
+                model=model_name,
                 usage={
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
@@ -1024,229 +1194,9 @@ You are an action-taking agent, not just an advisor."""
         except Exception as e:
             logger.error(f"Text generation failed: {e}")
             raise GenerationError(f"Text generation failed: {str(e)}")
-            
-    def _has_tool_calls(self, response: str) -> bool:
-        """Check if the response contains MLX tool calls."""
-        # Check for XML-wrapped format
-        if "<tool_call>" in response and "</tool_call>" in response:
-            return True
-            
-        # Check for raw JSON format (DeepSeek and other models)
-        import json
-        try:
-            # First, try to find JSON blocks that span multiple lines
-            # Look for patterns like { ... } that contain "name" and "arguments"
-            json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
-            json_matches = re.findall(json_pattern, response, re.DOTALL)
-            
-            for match in json_matches:
-                try:
-                    parsed = json.loads(match)
-                    if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
-                        return True
-                except json.JSONDecodeError:
-                    continue
-            
-            # Also look for single-line JSON objects with "name" and "arguments" keys
-            lines = response.strip().split('\n')
-            for line in lines:
-                line = line.strip()
-                if line.startswith('{') and line.endswith('}'):
-                    try:
-                        parsed = json.loads(line)
-                        if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
-                            return True
-                    except json.JSONDecodeError:
-                        # Try to fix common JSON formatting errors before giving up
-                        try:
-                            # Fix missing colon after "arguments"
-                            fixed_line = re.sub(r'"arguments"\s*\{', '"arguments": {', line)
-                            # Fix missing colon after "name" (less common but possible)
-                            fixed_line = re.sub(r'"name"\s*"', '"name": "', fixed_line)
-                            
-                            parsed = json.loads(fixed_line)
-                            if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
-                                return True
-                        except json.JSONDecodeError:
-                            continue
-            
-            # Finally, check if the entire response is a single JSON tool call
-            try:
-                response_stripped = response.strip()
-                if response_stripped.startswith('{') and response_stripped.endswith('}'):
-                    parsed = json.loads(response_stripped)
-                    if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
-                        return True
-            except json.JSONDecodeError:
-                pass
-                        
-        except Exception:
-            pass
-            
-        return False
-        
-    def _parse_mlx_tool_calls(self, response: str) -> List[ToolCall]:
-        """Parse MLX native tool call format with robust error handling."""
-        import json
-        import re
-        
-        tool_calls = []
-        
-        def clean_json_string(json_str: str) -> str:
-            """Clean and fix common JSON formatting issues."""
-            # Remove comments and extra text
-            json_str = re.sub(r'//.*$', '', json_str, flags=re.MULTILINE)  # Remove // comments
-            json_str = re.sub(r'/\*.*?\*/', '', json_str, flags=re.DOTALL)  # Remove /* */ comments
-            
-            # Fix missing colons
-            json_str = re.sub(r'"arguments"\s*\{', '"arguments": {', json_str)
-            json_str = re.sub(r'"name"\s*"', '"name": "', json_str)
-            
-            # Remove trailing commas
-            json_str = re.sub(r',\s*}', '}', json_str)
-            json_str = re.sub(r',\s*]', ']', json_str)
-            
-            # Fix null values
-            json_str = re.sub(r':\s*null(?=\s*[,}])', ': null', json_str)
-            
-            # Remove question marks and other invalid characters
-            json_str = re.sub(r'\?', '', json_str)
-            
-            return json_str.strip()
-        
-        def try_parse_json(json_str: str) -> dict:
-            """Try to parse JSON with multiple fallback strategies."""
-            # Strategy 1: Direct parsing
-            try:
-                return json.loads(json_str)
-            except json.JSONDecodeError:
-                pass
-            
-            # Strategy 2: Clean and try again
-            try:
-                cleaned = clean_json_string(json_str)
-                return json.loads(cleaned)
-            except json.JSONDecodeError:
-                pass
-            
-            # Strategy 3: Extract just the JSON part using regex
-            try:
-                json_match = re.search(r'\{.*\}', json_str, re.DOTALL)
-                if json_match:
-                    return json.loads(clean_json_string(json_match.group()))
-            except json.JSONDecodeError:
-                pass
-            
-            # Strategy 4: Manual parsing for simple cases
-            try:
-                # Extract name and arguments manually
-                name_match = re.search(r'"name"\s*:\s*"([^"]+)"', json_str)
-                if name_match:
-                    name = name_match.group(1)
-                    
-                    # Extract arguments - look for file_path specifically
-                    args = {}
-                    file_path_match = re.search(r'"file_path"\s*:\s*"([^"]+)"', json_str)
-                    if file_path_match:
-                        args["file_path"] = file_path_match.group(1)
-                    
-                    # Look for should_read_entire_file
-                    read_entire_match = re.search(r'"should_read_entire_file"\s*:\s*(true|false)', json_str)
-                    if read_entire_match:
-                        args["should_read_entire_file"] = read_entire_match.group(1) == "true"
-                    
-                    return {"name": name, "arguments": args}
-            except Exception:
-                pass
-            
-            raise json.JSONDecodeError("All parsing strategies failed", json_str, 0)
-        
-        # First try XML format: <tool_call>{"name": "tool_name", "arguments": {...}}</tool_call>
-        pattern = r'<tool_call>(.*?)</tool_call>'
-        matches = re.findall(pattern, response, re.DOTALL)
-        
-        for i, match in enumerate(matches):
-            try:
-                tool_data = try_parse_json(match.strip())
-                if isinstance(tool_data, dict) and "name" in tool_data:
-                    tool_call = ToolCall(
-                        id=f"call_{i}",
-                        name=tool_data.get("name"),
-                        arguments=tool_data.get("arguments", {})
-                    )
-                    tool_calls.append(tool_call)
-                    logger.info(f"Successfully parsed XML-wrapped tool call: {tool_data}")
-            except Exception as e:
-                logger.warning(f"Failed to parse XML-wrapped tool call: {match}. Error: {e}")
-                continue
-        
-        # If no XML matches found, try to find JSON blocks (including multi-line)
-        if not tool_calls:
-            # Look for JSON blocks that might span multiple lines
-            json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
-            json_matches = re.findall(json_pattern, response, re.DOTALL)
-            
-            call_id = 0
-            for match in json_matches:
-                try:
-                    tool_data = try_parse_json(match)
-                    if isinstance(tool_data, dict) and "name" in tool_data:
-                        tool_call = ToolCall(
-                            id=f"call_{call_id}",
-                            name=tool_data.get("name"),
-                            arguments=tool_data.get("arguments", {})
-                        )
-                        tool_calls.append(tool_call)
-                        call_id += 1
-                        logger.info(f"Successfully parsed multi-line JSON tool call: {tool_data}")
-                except Exception as e:
-                    logger.warning(f"Failed to parse multi-line JSON tool call: {match}. Error: {e}")
-                    continue
-        
-        # If still no matches, try line-by-line parsing for single-line JSON
-        if not tool_calls:
-            # Check if the entire response is a single JSON tool call
-            response_stripped = response.strip()
-            if response_stripped.startswith('{') and response_stripped.endswith('}'):
-                try:
-                    tool_data = try_parse_json(response_stripped)
-                    if isinstance(tool_data, dict) and "name" in tool_data:
-                        tool_call = ToolCall(
-                            id="call_0",
-                            name=tool_data.get("name"),
-                            arguments=tool_data.get("arguments", {})
-                        )
-                        tool_calls.append(tool_call)
-                        logger.info(f"Successfully parsed single JSON tool call: {tool_data}")
-                        return tool_calls
-                except Exception as e:
-                    logger.warning(f"Failed to parse single JSON tool call: {e}")
-            
-            # Try line-by-line parsing for multiple JSON tool calls
-            lines = response.strip().split('\n')
-            call_id = 0
-            for line in lines:
-                line = line.strip()
-                if line.startswith('{') and (line.endswith('}') or '}' in line):
-                    try:
-                        tool_data = try_parse_json(line)
-                        if isinstance(tool_data, dict) and "name" in tool_data:
-                            tool_call = ToolCall(
-                                id=f"call_{call_id}",
-                                name=tool_data.get("name"),
-                                arguments=tool_data.get("arguments", {})
-                            )
-                            tool_calls.append(tool_call)
-                            call_id += 1
-                            logger.info(f"Successfully parsed line JSON tool call: {tool_data}")
-                    except Exception as e:
-                        logger.warning(f"Failed to parse line JSON tool call: {line}. Error: {e}")
-                        continue
-                        
-        return tool_calls
 
     def _generate_text_stream(self, prompt: str, system_prompt: Optional[str] = None, tools: Optional[List[Any]] = None, messages: Optional[List[Dict[str, Any]]] = None, **kwargs) -> Generator[GenerateResponse, None, None]:
-        """Stream text generation using MLX with native tool calling support."""
+        """Stream text generation using MLX with architecture-based tool calling support."""
         
         # Make sure model is loaded
         if not self._is_loaded:
@@ -1283,7 +1233,8 @@ You are an action-taking agent, not just an advisor."""
                     chat_messages.append({"role": "system", "content": system_prompt})
                 chat_messages.append({"role": "user", "content": prompt})
             
-            # Convert AbstractLLM tools to MLX format
+            # Convert AbstractLLM tools to MLX format and get model name for architecture detection
+            model_name = self.config_manager.get_param(ModelParameter.MODEL)
             mlx_tools = None
             if tools:
                 mlx_tools = []
@@ -1300,36 +1251,28 @@ You are an action-taking agent, not just an advisor."""
                             }
                         }
                         mlx_tools.append(mlx_tool)
-                    
-            logger.info(f"Converted {len(tools)} tools to MLX format")
+                    elif callable(tool):
+                        # Convert function to MLX tool format
+                        mlx_tool = {
+                            "type": "function", 
+                            "function": {
+                                "name": tool.__name__,
+                                "description": tool.__doc__ or "",
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {},
+                                    "required": []
+                                }
+                            }
+                        }
+                        mlx_tools.append(mlx_tool)
+                        
+                logger.info(f"Converted {len(tools)} tools to MLX format")
             
-            # Apply chat template with tools
+            # Apply chat template with tools using architecture-based formatting
             if mlx_tools:
-                # For MLX, use simplified approach without native tool calling
-                # Just add tool descriptions to the system prompt
-                tool_descriptions = []
-                for tool in mlx_tools:
-                    func_info = tool["function"]
-                    # Get parameter names from the schema
-                    params = func_info.get("parameters", {}).get("properties", {})
-                    param_names = list(params.keys())
-                    param_desc = ", ".join(param_names) if param_names else "no parameters"
-                    tool_descriptions.append(f"- {func_info['name']}({param_desc}): {func_info['description']}")
-                
-                tool_system_prompt = f"""When the user asks you to follow instructions from a document, you should EXECUTE those instructions step by step, not just summarize them. If you read a document containing step-by-step procedures with tool calls, perform those tool calls in the order specified.
-
-You have access to these tools:
-{chr(10).join(tool_descriptions)}
-
-To use a tool: <tool_call>{{"name": "tool_name", "arguments": {{"param_name": "value"}}}}</tool_call>
-
-When following multi-step procedures:
-1. Read the instructions first 
-2. Execute each step that requires a tool call
-3. Continue to the next step based on the results
-4. Complete the entire procedure unless instructed otherwise
-
-You are an action-taking agent, not just an advisor."""
+                # Use architecture-based tool formatting
+                tool_system_prompt = format_tools_for_prompt(mlx_tools, model_name)
                 
                 # Add tool instructions to system prompt
                 if system_prompt:
@@ -1341,10 +1284,14 @@ You are an action-taking agent, not just an advisor."""
                 if messages is not None:
                     # When using conversation history, preserve it but enhance system prompt
                     formatted_messages = []
+                    system_added = False
                     for msg in chat_messages:
                         if msg["role"] == "system":
-                            # Replace system prompt with enhanced version
-                            formatted_messages.append({"role": "system", "content": enhanced_system_prompt})
+                            if not system_added:
+                                # Replace first system prompt with enhanced version
+                                formatted_messages.append({"role": "system", "content": enhanced_system_prompt})
+                                system_added = True
+                            # Skip additional system messages (they'll be merged by compatibility fix)
                         elif msg["role"] == "tool":
                             # Convert tool messages to assistant messages with clear formatting
                             tool_name = msg.get("name", "unknown_tool")
@@ -1355,25 +1302,40 @@ You are an action-taking agent, not just an advisor."""
                             })
                         else:
                             formatted_messages.append(msg)
+                    
+                    # If no system message was found, add enhanced system prompt at the beginning
+                    if not system_added:
+                        formatted_messages.insert(0, {"role": "system", "content": enhanced_system_prompt})
                 else:
                     # For new conversations, just use enhanced system prompt
                     formatted_messages = []
                     formatted_messages.append({"role": "system", "content": enhanced_system_prompt})
                     formatted_messages.append({"role": "user", "content": prompt})
-                
-                # Use standard chat template without tools parameter
-                formatted_prompt = self._processor.apply_chat_template(
-                    formatted_messages,
-                    add_generation_prompt=True,
-                    tokenize=False
-                )
             else:
                 # Standard chat template without tools - use chat_messages directly
+                formatted_messages = chat_messages
+            
+            # Apply chat template compatibility fixes for Gemma/Llama models
+            compatible_messages = self._ensure_chat_template_compatibility(formatted_messages, model_name)
+            
+            # Try to apply chat template with fallback mechanism
+            try:
                 formatted_prompt = self._processor.apply_chat_template(
-                    chat_messages,
+                    compatible_messages,
                     add_generation_prompt=True,
                     tokenize=False
                 )
+            except Exception as template_error:
+                logger.warning(f"Chat template failed: {template_error}")
+                
+                # Use architecture-based fallback template handling
+                logger.info(f"Using architecture-based fallback template")
+                try:
+                    # Apply the architecture-specific template
+                    formatted_prompt = apply_chat_template(compatible_messages, model_name, template_type="default")
+                except Exception as arch_error:
+                    logger.warning(f"Architecture template failed: {arch_error}, using simple fallback")
+                    formatted_prompt = apply_simple_fallback_template(compatible_messages, model_name)
             
             # Stream tokens from the model using stream_generate
             stream_kwargs = {
@@ -1384,16 +1346,21 @@ You are an action-taking agent, not just an advisor."""
                 **generation_params
             }
             
+            # For Gemma models, ensure proper EOS token configuration  
+            if "gemma" in model_name.lower():
+                # Gemma models need proper repetition penalty to avoid looping
+                # Note: MLX-LM handles repetition penalty through the model config, not generation parameters
+                logger.info(f"Using Gemma model - repetition penalty handled by model config")
+            
             current_text = ""
-            model_name = self.config_manager.get_param(ModelParameter.MODEL)
             
             # Stream tokens from the model using stream_generate
             for response in stream_generate(**stream_kwargs):
                 current_text = response.text  # stream_generate yields response objects with .text attribute
                 
                 # Calculate token usage
-                prompt_tokens = TokenCounter.count_tokens(formatted_prompt, self.config_manager.get_param(ModelParameter.MODEL))
-                completion_tokens = TokenCounter.count_tokens(current_text, self.config_manager.get_param(ModelParameter.MODEL))
+                prompt_tokens = TokenCounter.count_tokens(formatted_prompt, model_name)
+                completion_tokens = TokenCounter.count_tokens(current_text, model_name)
                 
                 yield GenerateResponse(
                     content=current_text,
@@ -1417,8 +1384,8 @@ You are an action-taking agent, not just an advisor."""
             ModelCapability.MAX_TOKENS: self.config_manager.get_param(ModelParameter.MAX_TOKENS, 4096),
             ModelCapability.SYSTEM_PROMPT: True,
             ModelCapability.ASYNC: True,
-            ModelCapability.FUNCTION_CALLING: True,  # Now uses native MLX tool calling
-            ModelCapability.TOOL_USE: True,  # Now uses native MLX tool calling
+            ModelCapability.FUNCTION_CALLING: True,  # Now uses architecture-based tool calling
+            ModelCapability.TOOL_USE: True,  # Now uses architecture-based tool calling
             ModelCapability.VISION: self._is_vision_model and MLXVLM_AVAILABLE,
         }
         
