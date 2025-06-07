@@ -36,6 +36,16 @@ The providers module is the heart of AbstractLLM, implementing adapters for diff
   - Solution: Changed to "prompted" tool support for MLX-specific model variants
   - Key insight: Provider capabilities can differ from model capabilities - same model may need different approaches in different providers
 
+#### Messages Parameter Support (2025-01-07)
+- **Issue**: Ollama provider ignored `messages` parameter, breaking Session's ReAct loops
+- **Cause**: No handling of conversation history passed via kwargs
+- **Fix**: 
+  - Extract messages from kwargs in generate methods
+  - Use chat endpoint when messages provided
+  - Preserve enhanced system prompts with tool instructions
+  - Update _prepare_request_for_chat to handle provided messages
+- **Result**: Ollama now maintains conversation context across tool iterations
+
 ## Component Mindmap
 ```
 Providers System

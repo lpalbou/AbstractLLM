@@ -219,6 +219,17 @@ class MetricsHandler(UniversalToolHandler):
 - **Fix**: Updated to match content between tags or use balanced brace matching
 - **Result**: Tool calls with nested arguments now parse correctly
 
+### Duplicate Tool Call Support
+**Issue**: Parser was incorrectly deduplicating identical tool calls.
+- **Cause**: Used set-based deduplication that prevented multiple identical calls
+- **Fix**: Removed deduplication; now uses position-based overlap detection
+- **Result**: Models can now call the same tool multiple times with identical arguments
+
+### Robust Missing Tag Handling
+**Issue**: Models sometimes forget closing tags but still produce valid JSON.
+- **Fix**: All parsers now try closed tags first, then fallback to opening tag + JSON
+- **Result**: Tool calls are parsed even when `</|tool_call|>` or `</function_call>` is missing
+
 ## Conclusion
 
 The AbstractLLM tool system demonstrates solid engineering with excellent architecture integration and universal model support. However, it falls short of industry best practices in areas like security, monitoring, and advanced features. The 7.5/10 rating reflects a well-designed foundation that needs enhancement to match the sophistication of established frameworks.

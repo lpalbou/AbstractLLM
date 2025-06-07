@@ -201,7 +201,13 @@ def supports_tool_calls(model_name: str) -> bool:
     Returns:
         True if the model supports tool calling
     """
-    return has_capability(model_name, "tool_calling")
+    # Import here to avoid circular import
+    from abstractllm.architectures.detection import get_model_capabilities as get_arch_capabilities
+    
+    # Check if model has any tool support (not just "none")
+    capabilities = get_arch_capabilities(model_name)
+    tool_support = capabilities.get("tool_support", "none")
+    return tool_support in ["native", "prompted"]
 
 def supports_vision(model_name: str) -> bool:
     """

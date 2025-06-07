@@ -186,7 +186,8 @@ class OllamaProvider(BaseProvider):
                                  processed_tools: Optional[List[Dict[str, Any]]],
                                  temperature: float,
                                  max_tokens: int,
-                                 stream: bool) -> Dict[str, Any]:
+                                 stream: bool,
+                                 provided_messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Prepare request data for the Ollama chat API endpoint.
         
@@ -214,30 +215,44 @@ class OllamaProvider(BaseProvider):
         }
         
         # Prepare messages
-        messages = []
-        
-        # Add system prompt if provided
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        elif processed_tools:
-            # If tools are provided but no system prompt, add a tool-encouraging system prompt
-            messages.append({
-                "role": "system", 
-                "content": "You are a helpful assistant. When you need to access information or perform operations, use the available tools."
-            })
+        if provided_messages:
+            # Use provided messages - convert Message objects to dicts if needed
+            messages = []
+            for msg in provided_messages:
+                if isinstance(msg, dict):
+                    messages.append(msg)
+                else:
+                    # Handle Message objects
+                    messages.append({
+                        "role": getattr(msg, 'role', 'user'),
+                        "content": getattr(msg, 'content', str(msg))
+                    })
+        else:
+            # Create new messages from prompt/system_prompt
+            messages = []
             
-        # Prepare user message content
-        images = []
-        for media_input in processed_files:
-            if isinstance(media_input, ImageInput):
-                images.append(media_input.to_provider_format("ollama"))
+            # Add system prompt if provided
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            elif processed_tools:
+                # If tools are provided but no system prompt, add a tool-encouraging system prompt
+                messages.append({
+                    "role": "system", 
+                    "content": "You are a helpful assistant. When you need to access information or perform operations, use the available tools."
+                })
                 
-        # Create user message
-        user_message = {"role": "user", "content": prompt}
-        if images:
-            user_message["images"] = images
-            
-        messages.append(user_message)
+            # Prepare user message content
+            images = []
+            for media_input in processed_files:
+                if isinstance(media_input, ImageInput):
+                    images.append(media_input.to_provider_format("ollama"))
+                    
+            # Create user message
+            user_message = {"role": "user", "content": prompt}
+            if images:
+                user_message["images"] = images
+                
+            messages.append(user_message)
         
         # Add messages to request data
         request_data["messages"] = messages
@@ -330,7 +345,10 @@ class OllamaProvider(BaseProvider):
         Raises:
             Exception: If the generation fails
         """
-        # Update config with any provided kwargs
+        # Extract messages if provided (for conversation history)
+        messages = kwargs.pop('messages', None)
+        
+        # Update config with any remaining kwargs
         if kwargs:
             self.config_manager.update_config(kwargs)
         
@@ -399,7 +417,8 @@ class OllamaProvider(BaseProvider):
                     formatted_tools = tool_defs  # Already in correct format
         
         # Determine if we should use the chat endpoint
-        use_chat_endpoint = formatted_tools is not None
+        # Use chat endpoint if we have tools (either native or prompted) or messages
+        use_chat_endpoint = (formatted_tools is not None) or (tools and tool_mode in ["native", "prompted"]) or messages is not None
 
         # Select endpoint and prepare request
         if use_chat_endpoint:
@@ -412,7 +431,8 @@ class OllamaProvider(BaseProvider):
                 processed_tools=formatted_tools,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                stream=stream
+                stream=stream,
+                provided_messages=messages
             )
         else:
             endpoint = f"{base_url.rstrip('/')}/api/generate"
@@ -428,6 +448,7 @@ class OllamaProvider(BaseProvider):
         
         # Log API request URL
         log_request_url("ollama", endpoint)
+        
         
         # Make API call
         try:
@@ -578,7 +599,10 @@ class OllamaProvider(BaseProvider):
         if not AIOHTTP_AVAILABLE:
             raise ImportError("The 'aiohttp' package is required for async operations. Install with: pip install abstractllm[ollama]")
             
-        # Update config with any provided kwargs
+        # Extract messages if provided (for conversation history)
+        messages = kwargs.pop('messages', None)
+        
+        # Update config with any remaining kwargs
         if kwargs:
             self.config_manager.update_config(kwargs)
         
@@ -647,7 +671,8 @@ class OllamaProvider(BaseProvider):
                     formatted_tools = tool_defs  # Already in correct format
         
         # Determine if we should use the chat endpoint
-        use_chat_endpoint = formatted_tools is not None
+        # Use chat endpoint if we have tools (either native or prompted) or messages
+        use_chat_endpoint = (formatted_tools is not None) or (tools and tool_mode in ["native", "prompted"]) or messages is not None
 
         # Select endpoint and prepare request
         if use_chat_endpoint:
@@ -660,7 +685,8 @@ class OllamaProvider(BaseProvider):
                 processed_tools=formatted_tools,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                stream=stream
+                stream=stream,
+                provided_messages=messages
             )
         else:
             endpoint = f"{base_url.rstrip('/')}/api/generate"
@@ -676,6 +702,7 @@ class OllamaProvider(BaseProvider):
         
         # Log API request URL
         log_request_url("ollama", endpoint)
+        
         
         try:
             async with aiohttp.ClientSession() as session:

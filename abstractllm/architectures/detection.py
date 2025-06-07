@@ -58,6 +58,14 @@ def _normalize_model_name(model_name: str) -> str:
         if name.startswith(prefix):
             name = name[len(prefix):]
     
+    # Handle Ollama format: convert colon to hyphen for consistency
+    # e.g., "qwen3:30b" -> "qwen3-30b"
+    if ":" in name:
+        # Split on colon and rejoin with hyphen
+        parts = name.split(":", 1)
+        if len(parts) == 2:
+            name = f"{parts[0]}-{parts[1]}"
+    
     # Remove file extensions and quantization suffixes ONLY
     # Keep version numbers like 3.5
     if name.endswith((".gguf", ".bin", ".safetensors")):

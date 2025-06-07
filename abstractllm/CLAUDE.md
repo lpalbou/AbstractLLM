@@ -274,3 +274,90 @@ The tool system now provides clean, universal support for all models through a m
 3. Session executes the tool
 4. Results are returned to the model
 5. Model presents formatted results to the user
+
+## Session Update (2025-01-06) - Part 2
+
+### Ollama Provider Tool Support
+**Problem**: Ollama was rejecting tools for the same Qwen model that worked in MLX.
+
+**Root Causes**:
+1. Legacy function `supports_tool_calls` was checking for "tool_calling" capability, but JSON uses "tool_support"
+2. Ollama model names use `:` format (e.g., `qwen3:30b-a3b-q4_K_M`) which wasn't normalized properly
+
+**Fixes Applied**:
+1. Updated `supports_tool_calls` to use the correct architecture detection function
+2. Enhanced model name normalization to convert Ollama's `:` format to standard `-` format
+3. Now both `mlx-community/Qwen3-30B-A3B-4bit` and `qwen3:30b-a3b-q4_K_M` normalize to `qwen3-30b-a3b`
+
+### Robust Tool Parsing
+**Problem**: Models sometimes forget closing tags but still produce valid JSON tool calls.
+
+**Example**:
+```
+<|tool_call|>
+{"name": "read_file", "arguments": {"file_path": "..."}}
+<|tool_call|>
+{"name": "read_file", "arguments": {"file_path": "..."}}
+```
+(Missing `</|tool_call|>` closing tags)
+
+**Fix Applied**: Enhanced all parser functions to:
+1. First try to find properly closed tags
+2. Fallback to finding opening tags followed by valid JSON
+3. Use duplicate detection to avoid parsing the same call twice
+4. Made detection more lenient - only requires opening tags
+
+**Result**: Tool parsing now gracefully handles edge cases where models forget closing tags, ensuring tool calls are still executed correctly across all providers.
+
+### Duplicate Tool Call Parsing
+**Problem**: Parser was deduplicating identical tool calls, preventing models from intentionally calling the same tool multiple times.
+
+**Example**:
+```
+<|tool_call|>
+{"name": "read_file", "arguments": {"file_path": "...", "should_read_entire_file": true}}
+<|tool_call|>
+{"name": "read_file", "arguments": {"file_path": "...", "should_read_entire_file": true}}
+```
+Only one call was being parsed instead of two.
+
+**Fix Applied**: Removed deduplication logic from all parser functions. Now uses position-based overlap detection to avoid parsing the same text twice while allowing multiple identical tool calls.
+
+**Note on Tool Call Limits**: The session has a `max_tool_calls` parameter (default 10, but alma-minimal.py sets it to 25) to prevent infinite loops. If a model repeatedly calls tools, it may hit this limit and stop executing further calls.
+
+### Ollama Provider System Prompt Issue
+**Problem**: User reported that Ollama was not receiving the system prompt, while MLX was.
+
+**Investigation**: 
+1. Fixed undefined `messages` variable in use_chat_endpoint check
+2. Added request interception to verify actual API calls
+3. Tested with explicit BANANAS system prompt requirement
+
+**Findings**:
+- The system prompt IS being sent correctly to Ollama:
+  - Without tools: Uses `/api/generate` with `"system"` field
+  - With tools: Uses `/api/chat` with system message in messages array
+- The confusion arose from the logging system:
+  - `log_request` only logs metadata (`has_system_prompt: true`)
+  - The actual system prompt content is not included in the interaction logs
+  - This makes it appear that no system prompt was sent, but it actually is
+- Models DO follow the system prompt correctly when sent through Ollama
+
+**Resolution**: The real issue was that Ollama provider didn't support the `messages` parameter that Session uses for conversation history in ReAct loops.
+
+### Ollama Messages Parameter Support (Fixed)
+**Problem**: Session's ReAct loop passes conversation history via `messages` parameter, but Ollama ignored it.
+
+**Root Cause**: 
+- Session passes `messages` with tool results to maintain conversation context
+- Ollama's generate() method ignored the `messages` parameter completely
+- Each iteration only saw the original prompt with no tool results
+- Model kept trying the same tools repeatedly until hitting the 25 iteration limit
+
+**Fix Applied**:
+1. Extract `messages` from kwargs in both sync and async generate methods
+2. Use chat endpoint when messages are provided
+3. Update `_prepare_request_for_chat` to accept and use provided messages
+4. Ensure enhanced system prompt (with tool instructions) is preserved when using messages
+
+**Result**: Ollama now maintains conversation context across tool iterations, enabling proper ReAct loop execution.

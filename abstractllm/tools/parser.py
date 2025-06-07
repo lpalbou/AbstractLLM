@@ -50,16 +50,17 @@ def detect_tool_calls(response: str, model_name: Optional[str] = None) -> bool:
     tool_format = _get_tool_format(model_name)
     
     # Check format-specific patterns
+    # Be lenient - only check for opening tags since models may forget closing tags
     if tool_format == ToolFormat.TOOL_CODE:
         return "```tool_code" in response
     elif tool_format == ToolFormat.SPECIAL_TOKEN:
-        return "<|tool_call|>" in response
+        return "<|tool_call|>" in response  # Just check opening tag
     elif tool_format == ToolFormat.FUNCTION_CALL:
         return "<function_call" in response or _has_json_tool_pattern(response)
     elif tool_format == ToolFormat.XML_WRAPPED:
-        return "<tool_call>" in response and "</tool_call>" in response
+        return "<tool_call>" in response  # Just check opening tag
     else:
-        # Try common patterns
+        # Try common patterns - be lenient with any opening tag
         return any([
             "```tool_code" in response,
             "<|tool_call|>" in response,
@@ -203,22 +204,33 @@ def _parse_tool_code(response: str) -> List[ToolCall]:
 
 
 def _parse_special_token(response: str) -> List[ToolCall]:
-    """Parse <|tool_call|> format."""
+    """Parse <|tool_call|> format with robust fallback."""
     tool_calls = []
     
-    # First try with closing tag (most specific)
+    # First, find all tool call positions to avoid duplicates from overlapping patterns
+    all_matches = []
+    
+    # Strategy 1: Look for properly closed tags
     pattern_with_close = r'<\|tool_call\|>\s*(.*?)\s*</\|tool_call\|>'
-    matches = re.findall(pattern_with_close, response, re.DOTALL)
+    for match in re.finditer(pattern_with_close, response, re.DOTALL):
+        all_matches.append((match.start(), match.end(), match.group(1).strip()))
     
-    if not matches:
-        # Fallback to without closing tag
-        pattern_no_close = r'<\|tool_call\|>\s*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})'
-        matches = re.findall(pattern_no_close, response, re.DOTALL)
+    # Strategy 2: Look for opening tags followed by valid JSON (no closing tag)
+    pattern_no_close = r'<\|tool_call\|>\s*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})'
+    for match in re.finditer(pattern_no_close, response, re.DOTALL):
+        # Check if this match overlaps with any closed tag match
+        overlaps = False
+        for closed_start, closed_end, _ in all_matches:
+            if match.start() >= closed_start and match.start() < closed_end:
+                overlaps = True
+                break
+        if not overlaps:
+            all_matches.append((match.start(), match.end(), match.group(1).strip()))
     
-    for match in matches:
+    # Sort by position and parse each match
+    all_matches.sort(key=lambda x: x[0])
+    for _, _, json_str in all_matches:
         try:
-            # Clean up the match
-            json_str = match.strip()
             data = json.loads(json_str)
             if isinstance(data, dict) and "name" in data:
                 tool_calls.append(ToolCall(
@@ -232,14 +244,32 @@ def _parse_special_token(response: str) -> List[ToolCall]:
 
 
 def _parse_function_call(response: str) -> List[ToolCall]:
-    """Parse <function_call> format."""
+    """Parse <function_call> format with robust fallback."""
     tool_calls = []
+    all_matches = []
     
-    # Pattern 1: <function_call>{...}</function_call>
-    pattern1 = r'<function_call>(.*?)</function_call>'
-    for match in re.findall(pattern1, response, re.DOTALL):
+    # Strategy 1: Look for properly closed tags
+    pattern_closed = r'<function_call>(.*?)</function_call>'
+    for match in re.finditer(pattern_closed, response, re.DOTALL):
+        all_matches.append((match.start(), match.end(), match.group(1).strip()))
+    
+    # Strategy 2: Look for opening tag followed by valid JSON (no closing tag)
+    pattern_open = r'<function_call>\s*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})'
+    for match in re.finditer(pattern_open, response, re.DOTALL):
+        # Check if this match overlaps with any closed tag match
+        overlaps = False
+        for closed_start, closed_end, _ in all_matches:
+            if match.start() >= closed_start and match.start() < closed_end:
+                overlaps = True
+                break
+        if not overlaps:
+            all_matches.append((match.start(), match.end(), match.group(1).strip()))
+    
+    # Sort by position and parse each match
+    all_matches.sort(key=lambda x: x[0])
+    for _, _, json_str in all_matches:
         try:
-            data = json.loads(match.strip())
+            data = json.loads(json_str)
             if isinstance(data, dict) and "name" in data:
                 tool_calls.append(ToolCall(
                     name=data["name"],
@@ -248,7 +278,7 @@ def _parse_function_call(response: str) -> List[ToolCall]:
         except json.JSONDecodeError:
             continue
     
-    # Pattern 2: Raw JSON with name/arguments
+    # Strategy 3: Try raw JSON as last resort
     if not tool_calls:
         tool_calls.extend(_parse_raw_json(response))
     
@@ -256,13 +286,32 @@ def _parse_function_call(response: str) -> List[ToolCall]:
 
 
 def _parse_xml_wrapped(response: str) -> List[ToolCall]:
-    """Parse <tool_call> XML format."""
+    """Parse <tool_call> XML format with robust fallback."""
     tool_calls = []
-    pattern = r'<tool_call>(.*?)</tool_call>'
+    all_matches = []
     
-    for match in re.findall(pattern, response, re.DOTALL):
+    # Strategy 1: Look for properly closed tags
+    pattern_closed = r'<tool_call>(.*?)</tool_call>'
+    for match in re.finditer(pattern_closed, response, re.DOTALL):
+        all_matches.append((match.start(), match.end(), match.group(1).strip()))
+    
+    # Strategy 2: Look for opening tag followed by valid JSON (no closing tag)
+    pattern_open = r'<tool_call>\s*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})'
+    for match in re.finditer(pattern_open, response, re.DOTALL):
+        # Check if this match overlaps with any closed tag match
+        overlaps = False
+        for closed_start, closed_end, _ in all_matches:
+            if match.start() >= closed_start and match.start() < closed_end:
+                overlaps = True
+                break
+        if not overlaps:
+            all_matches.append((match.start(), match.end(), match.group(1).strip()))
+    
+    # Sort by position and parse each match
+    all_matches.sort(key=lambda x: x[0])
+    for _, _, json_str in all_matches:
         try:
-            data = json.loads(match.strip())
+            data = json.loads(json_str)
             if isinstance(data, dict) and "name" in data:
                 tool_calls.append(ToolCall(
                     name=data["name"],
