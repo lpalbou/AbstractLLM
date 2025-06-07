@@ -28,7 +28,7 @@ def _load_capabilities() -> Dict[str, List[str]]:
     
     try:
         # Get the path to the JSON file relative to this module
-        json_path = Path(__file__).parent.parent / "model_capabilities.json"
+        json_path = Path(__file__).parent.parent / "assets" / "model_capabilities.json"
         
         with open(json_path, 'r') as f:
             _capabilities_cache = json.load(f)
