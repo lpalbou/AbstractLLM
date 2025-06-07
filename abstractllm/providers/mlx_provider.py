@@ -35,7 +35,6 @@ from abstractllm.exceptions import (
 )
 from abstractllm.providers.mlx_model_configs import ModelConfigFactory, MLXModelConfig
 from abstractllm.media.factory import MediaFactory
-from abstractllm.providers.tensor_type_patch import apply_all_patches as apply_tensor_patches
 from abstractllm.tools.types import ToolCallRequest, ToolCall
 from abstractllm.tools.architecture_tools import detect_tool_calls, parse_tool_calls, format_tools_for_prompt, create_tool_call_request
 from abstractllm.utils.utilities import TokenCounter, is_apple_silicon
@@ -106,9 +105,6 @@ class MLXProvider(AbstractLLMInterface):
         if not is_apple_silicon():
             logger.error("MLX requires Apple Silicon hardware")
             raise EnvironmentError("MLX requires Apple Silicon hardware (M1/M2/M3/M4)")
-        
-        # Apply tensor type and vision patches
-        apply_tensor_patches()
         
         # Set default configuration
         default_config = {
