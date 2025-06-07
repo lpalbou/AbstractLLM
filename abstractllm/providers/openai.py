@@ -9,7 +9,9 @@ import asyncio
 import json
 from pathlib import Path
 
-from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability
+from abstractllm.interface import ModelParameter, ModelCapability
+from abstractllm.providers.base import BaseProvider
+from abstractllm.types import GenerateResponse
 from abstractllm.utils.logging import (
     log_request, 
     log_response, 
@@ -64,7 +66,7 @@ VISION_CAPABLE_MODELS = [
     "gpt-4o-mini"
 ]
 
-class OpenAIProvider(AbstractLLMInterface):
+class OpenAIProvider(BaseProvider):
     """
     OpenAI API implementation.
     """
@@ -99,69 +101,55 @@ class OpenAIProvider(AbstractLLMInterface):
         model = self.config_manager.get_param(ModelParameter.MODEL)
         logger.info(f"Initialized OpenAI provider with model: {model}")
     
-    def _process_tools(self, tools: List[Any]) -> List[Dict[str, Any]]:
+    
+    def _format_tools_for_provider(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Convert AbstractLLM tool definitions to OpenAI function format.
+        Format tools for OpenAI's specific API requirements.
         
-        Args:
-            tools: List of tool definitions or callables
-            
-        Returns:
-            List of OpenAI-formatted function definitions
+        OpenAI expects tools in the format:
+        {
+            "type": "function",
+            "function": {
+                "name": "...",
+                "description": "...",
+                "parameters": {...}
+            }
+        }
         """
-        if not TOOLS_AVAILABLE:
-            raise ValueError("Tool support is not available. Install the required dependencies.")
-            
-        processed_tools = []
-        
+        formatted_tools = []
         for tool in tools:
-            # If it's a callable, convert it to a tool definition
-            if callable(tool):
-                tool = function_to_tool_definition(tool)
-                
-            # If it's already a ToolDefinition, convert to dict format
-            if isinstance(tool, ToolDefinition):
-                tool = tool.to_dict()
-                
-            # If it's a dictionary, convert to OpenAI format
-            if isinstance(tool, dict):
-                # Validate that required fields are present
-                if not all(k in tool for k in ['name', 'description', 'input_schema']):
-                    logger.warning(f"Skipping invalid tool definition: {tool}")
-                    continue
-                    
-                # Convert to OpenAI format
-                openai_tool = {
-                    "type": "function",
-                    "function": {
-                        "name": tool['name'],
-                        "description": tool['description'],
-                        "parameters": tool['input_schema']
-                    }
-                }
-                processed_tools.append(openai_tool)
-            else:
-                raise ValueError(f"Unsupported tool type: {type(tool)}")
-                
-        return processed_tools
+            formatted_tools.append({
+                "type": "function",
+                "function": tool
+            })
+        return formatted_tools
     
     def _check_for_tool_calls(self, response: Any) -> bool:
         """
         Check if a provider response contains tool calls.
         
+        For OpenAI, this checks the message object for tool_calls or function_call attributes.
+        
         Args:
-            response: The raw response from the provider
+            response: OpenAI message object or ChatCompletion response
             
         Returns:
             True if the response contains tool calls, False otherwise
         """
-        if not hasattr(response, "choices") or not response.choices:
-            return False
+        # Check if it's a message object directly
+        if hasattr(response, 'tool_calls') and response.tool_calls:
+            return True
+        if hasattr(response, 'function_call') and response.function_call:
+            return True
             
-        if not hasattr(response.choices[0], "message"):
-            return False
-            
-        return hasattr(response.choices[0].message, "tool_calls") and response.choices[0].message.tool_calls
+        # Check if it's a completion response with choices
+        if hasattr(response, "choices") and response.choices:
+            if hasattr(response.choices[0], "message"):
+                message = response.choices[0].message
+                return (hasattr(message, "tool_calls") and message.tool_calls) or \
+                       (hasattr(message, "function_call") and message.function_call)
+        
+        return False
     
     def _extract_tool_calls(self, response: Any) -> Optional["ToolCallRequest"]:
         """
@@ -287,13 +275,27 @@ class OpenAIProvider(AbstractLLMInterface):
                 provider="openai"
             )
         
+        # Handle tools using base class methods
+        enhanced_system_prompt = system_prompt or self.config_manager.get_param(ModelParameter.SYSTEM_PROMPT)
+        formatted_tools = None
+        tool_mode = "none"
+        
+        if tools:
+            # Use base class method to prepare tool context
+            enhanced_system_prompt, tool_defs, tool_mode = self._prepare_tool_context(tools, enhanced_system_prompt)
+            
+            # If native mode, format tools for OpenAI API
+            if tool_mode == "native" and tool_defs:
+                handler = self._get_tool_handler()
+                if handler:
+                    formatted_tools = tool_defs  # Tool defs are already formatted by _prepare_tool_context
+        
         # Prepare messages
         messages = []
         
-        # Add system message if provided (either from config or parameter)
-        system_prompt = system_prompt or self.config_manager.get_param(ModelParameter.SYSTEM_PROMPT)
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
+        # Add system message if provided
+        if enhanced_system_prompt:
+            messages.append({"role": "system", "content": enhanced_system_prompt})
         
         # Prepare user message with files if any
         if processed_files:
@@ -312,16 +314,12 @@ class OpenAIProvider(AbstractLLMInterface):
             "model": model,
             "temperature": temperature,
             "max_tokens": max_tokens,
-            "has_system_prompt": system_prompt is not None,
+            "has_system_prompt": enhanced_system_prompt is not None,
             "stream": stream,
             "has_files": bool(files),
-            "has_tools": bool(tools)
+            "has_tools": bool(tools),
+            "tool_mode": tool_mode
         })
-        
-        # Process tools if provided
-        processed_tools = None
-        if tools:
-            processed_tools = self._process_tools(tools)
         
         # Make API call
         try:
@@ -335,8 +333,8 @@ class OpenAIProvider(AbstractLLMInterface):
             }
             
             # Add tools if available
-            if processed_tools:
-                api_params["tools"] = processed_tools
+            if formatted_tools:
+                api_params["tools"] = formatted_tools
             
             # Make the API call
             completion = client.chat.completions.create(**api_params)
@@ -417,12 +415,45 @@ class OpenAIProvider(AbstractLLMInterface):
                 return response_generator()
             else:
                 # For non-streaming responses
-                response_text = completion.choices[0].message.content
+                message = completion.choices[0].message
+                response_text = message.content
                 
-                # Check if response has tool calls
-                if self._check_for_tool_calls(completion):
-                    # Return the ToolCallRequest object directly
-                    return self._extract_tool_calls(completion)
+                # Extract tool calls based on mode
+                # Note: tool_mode is not defined in async method, need to check if we have tools
+                if formatted_tools:
+                    # Extract tool calls using handler
+                    handler = self._get_tool_handler()
+                    if handler and self._check_for_tool_calls(completion):
+                        # For OpenAI, pass the message object to parse_response
+                        tool_response = handler.parse_response({
+                            "content": response_text,
+                            "tool_calls": [
+                                {
+                                    "id": tc.id,
+                                    "name": tc.function.name,
+                                    "arguments": json.loads(tc.function.arguments) if isinstance(tc.function.arguments, str) else tc.function.arguments
+                                }
+                                for tc in (message.tool_calls or [])
+                            ] if message.tool_calls else []
+                        }, mode="native")
+                    else:
+                        tool_response = None
+                else:
+                    # Use prompted extraction
+                    handler = self._get_tool_handler()
+                    if handler:
+                        tool_response = handler.parse_response(response_text, mode="prompted")
+                    else:
+                        tool_response = None
+                
+                # Return appropriate response
+                if tool_response and tool_response.has_tool_calls():
+                    return GenerateResponse(
+                        content=response_text,
+                        tool_calls=tool_response,
+                        model=model,
+                        usage=completion.usage.model_dump() if hasattr(completion, 'usage') else None
+                    )
                 else:
                     log_response("openai", response_text)
                     return response_text
@@ -563,8 +594,8 @@ class OpenAIProvider(AbstractLLMInterface):
             }
             
             # Add tools if available
-            if processed_tools:
-                api_params["tools"] = processed_tools
+            if formatted_tools:
+                api_params["tools"] = formatted_tools
             
             # Make the API call
             completion = await client.chat.completions.create(**api_params)
@@ -645,12 +676,45 @@ class OpenAIProvider(AbstractLLMInterface):
                 return async_generator()
             else:
                 # For non-streaming responses
-                response_text = completion.choices[0].message.content
+                message = completion.choices[0].message
+                response_text = message.content
                 
-                # Check if response has tool calls
-                if self._check_for_tool_calls(completion):
-                    # Return the ToolCallRequest object directly
-                    return self._extract_tool_calls(completion)
+                # Extract tool calls based on mode
+                # Note: tool_mode is not defined in async method, need to check if we have tools
+                if formatted_tools:
+                    # Extract tool calls using handler
+                    handler = self._get_tool_handler()
+                    if handler and self._check_for_tool_calls(completion):
+                        # For OpenAI, pass the message object to parse_response
+                        tool_response = handler.parse_response({
+                            "content": response_text,
+                            "tool_calls": [
+                                {
+                                    "id": tc.id,
+                                    "name": tc.function.name,
+                                    "arguments": json.loads(tc.function.arguments) if isinstance(tc.function.arguments, str) else tc.function.arguments
+                                }
+                                for tc in (message.tool_calls or [])
+                            ] if message.tool_calls else []
+                        }, mode="native")
+                    else:
+                        tool_response = None
+                else:
+                    # Use prompted extraction
+                    handler = self._get_tool_handler()
+                    if handler:
+                        tool_response = handler.parse_response(response_text, mode="prompted")
+                    else:
+                        tool_response = None
+                
+                # Return appropriate response
+                if tool_response and tool_response.has_tool_calls():
+                    return GenerateResponse(
+                        content=response_text,
+                        tool_calls=tool_response,
+                        model=model,
+                        usage=completion.usage.model_dump() if hasattr(completion, 'usage') else None
+                    )
                 else:
                     log_response("openai", response_text)
                     return response_text

@@ -50,7 +50,8 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
 
-from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability
+from abstractllm.interface import ModelParameter, ModelCapability
+from abstractllm.providers.base import BaseProvider
 from abstractllm.utils.logging import log_request, log_response, log_request_url
 from abstractllm.media.factory import MediaFactory
 from abstractllm.exceptions import (
@@ -98,7 +99,7 @@ QUANTIZATION_VARIANTS = {
     "8bit": ["Q8_0"]
 }
 
-class HuggingFaceProvider(AbstractLLMInterface):
+class HuggingFaceProvider(BaseProvider):
     """
     HuggingFace implementation using Transformers.
     """
@@ -916,7 +917,8 @@ class HuggingFaceProvider(AbstractLLMInterface):
                 prompt: str, 
                 system_prompt: Optional[str] = None, 
                 files: Optional[List[Union[str, Path]]] = None,
-                stream: bool = False, 
+                stream: bool = False,
+                tools: Optional[List[Any]] = None,
                 **kwargs) -> Union[str, Generator[str, None, None]]:
         """Generate text based on the prompt and optional files."""
         logger.debug("Starting generation with prompt: %s", prompt)
@@ -927,6 +929,13 @@ class HuggingFaceProvider(AbstractLLMInterface):
         # Get device from config
         device = self.config_manager.get_param("device", "cpu")
         logger.debug("Using device: %s", device)
+        
+        # Handle tools using base class methods
+        enhanced_system_prompt = system_prompt
+        if tools:
+            logger.debug(f"Processing {len(tools)} tools for prompted mode")
+            enhanced_system_prompt, _, mode = self._prepare_tool_context(tools, system_prompt)
+            logger.debug(f"Tool mode: {mode}, enhanced prompt: {enhanced_system_prompt[:100]}...")
         
         # Process files if provided
         processed_inputs = []
@@ -949,9 +958,9 @@ class HuggingFaceProvider(AbstractLLMInterface):
             # Verify model state
             self._verify_model_state()
             
-            # Format prompt using model-specific formatting
+            # Format prompt using model-specific formatting with enhanced system prompt
             logger.debug("Formatting prompt...")
-            formatted_prompt = self._format_prompt(prompt, system_prompt)
+            formatted_prompt = self._format_prompt(prompt, enhanced_system_prompt)
             logger.debug("Formatted prompt: %s", formatted_prompt)
             
             # Get model name and temperature for logging
@@ -993,6 +1002,19 @@ class HuggingFaceProvider(AbstractLLMInterface):
                     return response_generator()
                 else:
                     result = completion['choices'][0]['text']
+                    
+                    # Check for tool calls if tools were provided
+                    if tools:
+                        tool_response = self._extract_tool_calls(result)
+                        if tool_response and tool_response.has_tool_calls():
+                            # Return a GenerateResponse with tool calls
+                            from abstractllm.types import GenerateResponse
+                            return GenerateResponse(
+                                content=result,
+                                tool_calls=tool_response,
+                                model=model
+                            )
+                    
                     log_response("huggingface", result)
                     return result
             else:
@@ -1047,6 +1069,18 @@ class HuggingFaceProvider(AbstractLLMInterface):
                 # Return first sequence if only one was requested
                 result = generated_text[0] if params["num_return_sequences"] == 1 else generated_text
                 
+                # Check for tool calls if tools were provided
+                if tools:
+                    tool_response = self._extract_tool_calls(result)
+                    if tool_response and tool_response.has_tool_calls():
+                        # Return a GenerateResponse with tool calls
+                        from abstractllm.types import GenerateResponse
+                        return GenerateResponse(
+                            content=result,
+                            tool_calls=tool_response,
+                            model=model
+                        )
+                
                 # Log the response
                 logger.debug("Generation successful. Result: %s", result)
                 log_response("huggingface", result)
@@ -1081,7 +1115,8 @@ class HuggingFaceProvider(AbstractLLMInterface):
             ModelCapability.MAX_TOKENS: None,  # Varies by model
             ModelCapability.SYSTEM_PROMPT: True,
             ModelCapability.ASYNC: True,
-            ModelCapability.FUNCTION_CALLING: False,
+            ModelCapability.FUNCTION_CALLING: False,  # No native support
+            ModelCapability.TOOL_USE: True,  # Supports prompted tools
             ModelCapability.VISION: is_vision_capable
         }
     

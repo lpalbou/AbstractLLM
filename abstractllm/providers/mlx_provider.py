@@ -20,11 +20,11 @@ from datetime import datetime
 
 # Import the interface class
 from abstractllm.interface import (
-    AbstractLLMInterface, 
     ModelParameter, 
     ModelCapability,
     GenerateResponse
 )
+from abstractllm.providers.base import BaseProvider
 from abstractllm.exceptions import (
     ModelLoadingError,
     GenerationError,
@@ -35,13 +35,11 @@ from abstractllm.exceptions import (
 )
 from abstractllm.providers.mlx_model_configs import ModelConfigFactory, MLXModelConfig
 from abstractllm.media.factory import MediaFactory
-from abstractllm.tools.types import ToolCallRequest, ToolCall
-from abstractllm.tools.architecture_tools import detect_tool_calls, parse_tool_calls, format_tools_for_prompt, create_tool_call_request
+from abstractllm.tools import ToolCall, ToolCallResponse
 from abstractllm.utils.utilities import TokenCounter, is_apple_silicon
 from abstractllm.utils.logging import log_request, log_response
 from abstractllm.architectures.detection import detect_architecture
-from abstractllm.architectures.capabilities import get_capabilities
-from abstractllm.architectures.templates import get_template_manager, apply_chat_template, apply_simple_fallback_template
+# Architecture capabilities and templates removed during refactoring
 
 # Set up logging
 logger = logging.getLogger("abstractllm.providers.mlx_provider")
@@ -81,7 +79,7 @@ except ImportError as e:
 if not MLX_AVAILABLE or not MLXLM_AVAILABLE:
     logging.warning("MLX provider disabled due to missing dependencies.")
 
-class MLXProvider(AbstractLLMInterface):
+class MLXProvider(BaseProvider):
     """
     MLX implementation for AbstractLLM.
     
@@ -865,12 +863,10 @@ class MLXProvider(AbstractLLMInterface):
             
         # Use architecture detection to determine if strict alternation is needed
         architecture = detect_architecture(model_name)
-        capabilities = get_capabilities(architecture)
         
         # Check if this architecture requires strict role alternation
         requires_strict_alternation = False
-        if capabilities and hasattr(capabilities, 'notes'):
-            requires_strict_alternation = "strict_alternation" in capabilities.notes.lower()
+        # TODO: Add proper capability checking when architecture capabilities are restored
         
         # Fallback check for known problematic models
         if not requires_strict_alternation:
@@ -993,52 +989,19 @@ class MLXProvider(AbstractLLMInterface):
                     chat_messages.append({"role": "system", "content": system_prompt})
                 chat_messages.append({"role": "user", "content": prompt})
             
-            # Convert AbstractLLM tools to MLX format and get model name for architecture detection
+            # Get model name for architecture detection
             model_name = self.config_manager.get_param(ModelParameter.MODEL)
+            
+            # Use base class method to prepare tool context
+            enhanced_system_prompt = system_prompt
             mlx_tools = None
             if tools:
-                mlx_tools = []
-                for tool in tools:
-                    if hasattr(tool, 'to_dict'):
-                        # ToolDefinition object from Session
-                        tool_dict = tool.to_dict()
-                        mlx_tool = {
-                            "type": "function",
-                            "function": {
-                                "name": tool_dict.get("name"),
-                                "description": tool_dict.get("description", ""),
-                                "parameters": tool_dict.get("input_schema", {})
-                            }
-                        }
-                        mlx_tools.append(mlx_tool)
-                    elif callable(tool):
-                        # Convert function to MLX tool format
-                        mlx_tool = {
-                            "type": "function", 
-                            "function": {
-                                "name": tool.__name__,
-                                "description": tool.__doc__ or "",
-                                "parameters": {
-                                    "type": "object",
-                                    "properties": {},
-                                    "required": []
-                                }
-                            }
-                        }
-                        mlx_tools.append(mlx_tool)
-                        
-                logger.info(f"Converted {len(tools)} tools to MLX format")
-            
-            # Apply chat template with tools using architecture-based formatting
-            if mlx_tools:
-                # Use architecture-based tool formatting
-                tool_system_prompt = format_tools_for_prompt(mlx_tools, model_name)
+                # Use base class method for tool preparation
+                enhanced_system_prompt, tool_defs, mode = self._prepare_tool_context(tools, system_prompt)
+                logger.info(f"Prepared {len(tools)} tools in {mode} mode")
                 
-                # Add tool instructions to system prompt
-                if system_prompt:
-                    enhanced_system_prompt = f"{system_prompt}\n\n{tool_system_prompt}"
-                else:
-                    enhanced_system_prompt = tool_system_prompt
+                # MLX uses prompted mode, so mlx_tools is mainly for tracking
+                mlx_tools = tool_defs if mode == "native" else tools
                 
                 # Update messages with enhanced system prompt
                 if messages is not None:
@@ -1090,12 +1053,13 @@ class MLXProvider(AbstractLLMInterface):
                 
                 # Use architecture-based fallback template handling
                 logger.info(f"Using architecture-based fallback template")
-                try:
-                    # Apply the architecture-specific template
-                    formatted_prompt = apply_chat_template(compatible_messages, model_name, template_type="default")
-                except Exception as arch_error:
-                    logger.warning(f"Architecture template failed: {arch_error}, using simple fallback")
-                    formatted_prompt = apply_simple_fallback_template(compatible_messages, model_name)
+                # Simple fallback template
+                formatted_prompt = "\n".join([
+                    f"{msg['role']}: {msg['content']}"
+                    for msg in compatible_messages
+                ])
+                if compatible_messages and compatible_messages[-1]['role'] != 'assistant':
+                    formatted_prompt += "\nassistant:"
             
             # LOG THE EXACT REQUEST PAYLOAD
             request_params = {
@@ -1162,15 +1126,21 @@ class MLXProvider(AbstractLLMInterface):
             
             logger.info(f"MLX generation completed - response length: {len(output)} chars")
             
-            # Use architecture-based tool call detection and parsing
+            # Use base class tool extraction method
             if mlx_tools:
-                # Use the create_tool_call_request function which properly handles tool call detection and parsing
-                from abstractllm.tools.architecture_tools import create_tool_call_request
-                result = create_tool_call_request(output, model_name)
-                
-                # If it's a ToolCallRequest, return it directly
-                if hasattr(result, 'tool_calls'):
-                    return result
+                tool_response = self._extract_tool_calls(output)
+                if tool_response and tool_response.has_tool_calls():
+                    # Return a GenerateResponse with tool calls
+                    return GenerateResponse(
+                        content=output,
+                        tool_calls=tool_response,
+                        model=model_name,
+                        usage={
+                            "prompt_tokens": len(self._processor.encode(formatted_prompt)),
+                            "completion_tokens": len(self._processor.encode(output)),
+                            "total_tokens": len(self._processor.encode(formatted_prompt)) + len(self._processor.encode(output))
+                        }
+                    )
             
             # Calculate token usage
             prompt_tokens = TokenCounter.count_tokens(formatted_prompt, model_name)
@@ -1229,52 +1199,19 @@ class MLXProvider(AbstractLLMInterface):
                     chat_messages.append({"role": "system", "content": system_prompt})
                 chat_messages.append({"role": "user", "content": prompt})
             
-            # Convert AbstractLLM tools to MLX format and get model name for architecture detection
+            # Get model name for architecture detection
             model_name = self.config_manager.get_param(ModelParameter.MODEL)
+            
+            # Use base class method to prepare tool context
+            enhanced_system_prompt = system_prompt
             mlx_tools = None
             if tools:
-                mlx_tools = []
-                for tool in tools:
-                    if hasattr(tool, 'to_dict'):
-                        # ToolDefinition object from Session
-                        tool_dict = tool.to_dict()
-                        mlx_tool = {
-                            "type": "function",
-                            "function": {
-                                "name": tool_dict.get("name"),
-                                "description": tool_dict.get("description", ""),
-                                "parameters": tool_dict.get("input_schema", {})
-                            }
-                        }
-                        mlx_tools.append(mlx_tool)
-                    elif callable(tool):
-                        # Convert function to MLX tool format
-                        mlx_tool = {
-                            "type": "function", 
-                            "function": {
-                                "name": tool.__name__,
-                                "description": tool.__doc__ or "",
-                                "parameters": {
-                                    "type": "object",
-                                    "properties": {},
-                                    "required": []
-                                }
-                            }
-                        }
-                        mlx_tools.append(mlx_tool)
-                        
-                logger.info(f"Converted {len(tools)} tools to MLX format")
-            
-            # Apply chat template with tools using architecture-based formatting
-            if mlx_tools:
-                # Use architecture-based tool formatting
-                tool_system_prompt = format_tools_for_prompt(mlx_tools, model_name)
+                # Use base class method for tool preparation
+                enhanced_system_prompt, tool_defs, mode = self._prepare_tool_context(tools, system_prompt)
+                logger.info(f"Prepared {len(tools)} tools in {mode} mode")
                 
-                # Add tool instructions to system prompt
-                if system_prompt:
-                    enhanced_system_prompt = f"{system_prompt}\n\n{tool_system_prompt}"
-                else:
-                    enhanced_system_prompt = tool_system_prompt
+                # MLX uses prompted mode, so mlx_tools is mainly for tracking
+                mlx_tools = tool_defs if mode == "native" else tools
                 
                 # Update messages with enhanced system prompt
                 if messages is not None:
@@ -1326,12 +1263,13 @@ class MLXProvider(AbstractLLMInterface):
                 
                 # Use architecture-based fallback template handling
                 logger.info(f"Using architecture-based fallback template")
-                try:
-                    # Apply the architecture-specific template
-                    formatted_prompt = apply_chat_template(compatible_messages, model_name, template_type="default")
-                except Exception as arch_error:
-                    logger.warning(f"Architecture template failed: {arch_error}, using simple fallback")
-                    formatted_prompt = apply_simple_fallback_template(compatible_messages, model_name)
+                # Simple fallback template
+                formatted_prompt = "\n".join([
+                    f"{msg['role']}: {msg['content']}"
+                    for msg in compatible_messages
+                ])
+                if compatible_messages and compatible_messages[-1]['role'] != 'assistant':
+                    formatted_prompt += "\nassistant:"
             
             # Stream tokens from the model using stream_generate
             stream_kwargs = {

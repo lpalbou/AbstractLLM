@@ -10,7 +10,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability
+from abstractllm.interface import ModelParameter, ModelCapability
+from abstractllm.providers.base import BaseProvider
 from abstractllm.utils.logging import (
     log_request, 
     log_response, 
@@ -74,7 +75,7 @@ VISION_CAPABLE_MODELS = [
     "claude-3-7-sonnet-20250219"
 ]
 
-class AnthropicProvider(AbstractLLMInterface):
+class AnthropicProvider(BaseProvider):
     """
     Anthropic API implementation.
     """
@@ -109,62 +110,26 @@ class AnthropicProvider(AbstractLLMInterface):
         model = self.config_manager.get_param(ModelParameter.MODEL)
         logger.info(f"Initialized Anthropic provider with model: {model}")
     
-    def _process_tools(self, tools: List[Any]) -> List[Dict[str, Any]]:
+    
+    def _format_tools_for_provider(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Convert AbstractLLM tool definitions to Anthropic tool format.
+        Format tools for Anthropic's specific API requirements.
         
-        Args:
-            tools: List of tool definitions or callables
-            
-        Returns:
-            List of Anthropic-formatted tool definitions
+        Anthropic expects tools in the format:
+        {
+            "name": "...",
+            "description": "...",
+            "input_schema": {...}  # parameters with JSON schema
+        }
         """
-        if not TOOLS_AVAILABLE:
-            raise ValueError("Tool support is not available. Install the required dependencies.")
-            
-        processed_tools = []
-        logger.info(f"Processing {len(tools)} tools for Anthropic API")
-        
-        for idx, tool in enumerate(tools):
-            # Log the original tool
-            if callable(tool):
-                logger.info(f"Tool {idx+1}: Converting Python function '{tool.__name__}' to tool definition")
-            elif isinstance(tool, ToolDefinition):
-                logger.info(f"Tool {idx+1}: Using ToolDefinition '{tool.name}'")
-            elif isinstance(tool, dict) and 'name' in tool:
-                logger.info(f"Tool {idx+1}: Using dictionary tool '{tool['name']}'")
-            else:
-                logger.info(f"Tool {idx+1}: Unknown tool type: {type(tool)}")
-                
-            # If it's a callable, convert it to a tool definition
-            if callable(tool):
-                tool = function_to_tool_definition(tool)
-                
-            # If it's already a ToolDefinition, convert to dict format
-            if isinstance(tool, ToolDefinition):
-                tool = tool.to_dict()
-                
-            # If it's a dictionary, convert to Anthropic format
-            if isinstance(tool, dict):
-                # Validate that required fields are present
-                if not all(k in tool for k in ['name', 'description', 'input_schema']):
-                    logger.warning(f"Skipping invalid tool definition: {tool}")
-                    continue
-                    
-                # For Anthropic, the internal format is already compatible,
-                # but we need to ensure the structure is correct
-                anthropic_tool = {
-                    "name": tool['name'],
-                    "description": tool['description'],
-                    "input_schema": tool['input_schema']
-                }
-                processed_tools.append(anthropic_tool)
-                logger.debug(f"Processed tool '{tool['name']}' for Anthropic API: {anthropic_tool}")
-            else:
-                raise ValueError(f"Unsupported tool type: {type(tool)}")
-                
-        logger.info(f"Successfully processed {len(processed_tools)} tools for Anthropic API")
-        return processed_tools
+        formatted_tools = []
+        for tool in tools:
+            formatted_tools.append({
+                "name": tool["name"],
+                "description": tool["description"],
+                "input_schema": tool["parameters"]
+            })
+        return formatted_tools
     
     def _check_for_tool_calls(self, response: Any) -> bool:
         """
@@ -361,6 +326,21 @@ class AnthropicProvider(AbstractLLMInterface):
         # Initialize Anthropic client
         client = anthropic.Anthropic(api_key=api_key)
         
+        # Handle tools using base class methods
+        enhanced_system_prompt = system_prompt or self.config_manager.get_param(ModelParameter.SYSTEM_PROMPT)
+        formatted_tools = None
+        tool_mode = "none"
+        
+        if tools:
+            # Use base class method to prepare tool context
+            enhanced_system_prompt, tool_defs, tool_mode = self._prepare_tool_context(tools, enhanced_system_prompt)
+            
+            # If native mode, format tools for Anthropic API
+            if tool_mode == "native" and tool_defs:
+                handler = self._get_tool_handler()
+                if handler:
+                    formatted_tools = tool_defs  # Tool defs are already formatted by _prepare_tool_context
+        
         # Prepare messages
         messages = []
         
@@ -368,9 +348,6 @@ class AnthropicProvider(AbstractLLMInterface):
         if 'messages' in kwargs and kwargs['messages']:
             messages = kwargs['messages']
         else:
-            # Add system message if provided (either from config or parameter)
-            system_prompt = system_prompt or self.config_manager.get_param(ModelParameter.SYSTEM_PROMPT)
-            
             # Prepare user message content
             content = []
             
@@ -404,17 +381,12 @@ class AnthropicProvider(AbstractLLMInterface):
             "model": model,
             "temperature": temperature,
             "max_tokens": max_tokens,
-            "has_system_prompt": system_prompt is not None,
+            "has_system_prompt": enhanced_system_prompt is not None,
             "stream": stream,
             "has_files": bool(files),
-            "has_tools": bool(tools)
+            "has_tools": bool(tools),
+            "tool_mode": tool_mode
         })
-        
-        # Process tools if provided
-        processed_tools = None
-        if tools:
-            processed_tools = self._process_tools(tools)
-            logger.debug(f"Processed tools: {processed_tools}")
         
         # Sanitize messages to avoid trailing whitespace errors
         messages = self._sanitize_messages(messages)
@@ -430,13 +402,13 @@ class AnthropicProvider(AbstractLLMInterface):
                 "stream": stream
             }
             
-            if system_prompt:
-                message_params["system"] = system_prompt
+            if enhanced_system_prompt:
+                message_params["system"] = enhanced_system_prompt
                 
             # Add tools if available
-            if processed_tools:
-                logger.debug(f"Adding tools to message params: {processed_tools}")
-                message_params["tools"] = processed_tools
+            if formatted_tools:
+                logger.debug(f"Adding tools to message params: {formatted_tools}")
+                message_params["tools"] = formatted_tools
             
             if stream:
                 def response_generator():
@@ -528,20 +500,54 @@ class AnthropicProvider(AbstractLLMInterface):
             else:
                 response = client.messages.create(**message_params)
                 
-                # Check for tool calls
-                if self._check_for_tool_calls(response):
-                    # Return the ToolCallRequest object directly
-                    return self._extract_tool_calls(response)
+                # Extract content from response
+                if response.content and response.content[0].type == "text":
+                    content = response.content[0].text
                 else:
-                    # For normal text responses
-                    result = response.content[0].text
-                    log_response("anthropic", result)
-                    # Log the raw response for debugging
-                    logger.debug(f"Raw Anthropic response: {response}")
+                    content = ""
+                
+                # Extract tool calls based on mode
+                if tool_mode == "native":
+                    # Extract tool calls using handler for native mode
+                    handler = self._get_tool_handler()
+                    if handler and self._check_for_tool_calls(response):
+                        # For Anthropic, create a proper response structure
+                        tool_response = handler.parse_response({
+                            "content": content,
+                            "tool_calls": [
+                                {
+                                    "id": getattr(block, "id", f"call_{i}"),
+                                    "name": block.name,
+                                    "arguments": block.input
+                                }
+                                for i, block in enumerate(response.content)
+                                if hasattr(block, "type") and block.type == "tool_use"
+                            ] if hasattr(response, "content") else []
+                        }, mode="native")
+                    else:
+                        tool_response = None
+                else:
+                    # Use prompted extraction
+                    handler = self._get_tool_handler()
+                    if handler:
+                        tool_response = handler.parse_response(content, mode="prompted")
+                    else:
+                        tool_response = None
+                
+                # Return appropriate response
+                if tool_response and tool_response.has_tool_calls():
+                    return GenerateResponse(
+                        content=content,
+                        tool_calls=tool_response,
+                        model=model,
+                        usage=response.usage.model_dump() if hasattr(response, 'usage') else None
+                    )
+                else:
+                    log_response("anthropic", content)
                     # Return a GenerateResponse object for consistency
                     from abstractllm.types import GenerateResponse
                     return GenerateResponse(
-                        content=result,
+                        content=content,
                         raw_response=response,
                         model=model
                     )
@@ -801,20 +807,54 @@ class AnthropicProvider(AbstractLLMInterface):
             else:
                 response = await client.messages.create(**message_params)
                 
-                # Check for tool calls
-                if self._check_for_tool_calls(response):
-                    # Return the ToolCallRequest object directly
-                    return self._extract_tool_calls(response)
+                # Extract content from response
+                if response.content and response.content[0].type == "text":
+                    content = response.content[0].text
                 else:
-                    # For normal text responses
-                    result = response.content[0].text
-                    log_response("anthropic", result)
-                    # Log the raw response for debugging
-                    logger.debug(f"Raw Anthropic response: {response}")
+                    content = ""
+                
+                # Extract tool calls based on mode
+                if tool_mode == "native":
+                    # Extract tool calls using handler for native mode
+                    handler = self._get_tool_handler()
+                    if handler and self._check_for_tool_calls(response):
+                        # For Anthropic, create a proper response structure
+                        tool_response = handler.parse_response({
+                            "content": content,
+                            "tool_calls": [
+                                {
+                                    "id": getattr(block, "id", f"call_{i}"),
+                                    "name": block.name,
+                                    "arguments": block.input
+                                }
+                                for i, block in enumerate(response.content)
+                                if hasattr(block, "type") and block.type == "tool_use"
+                            ] if hasattr(response, "content") else []
+                        }, mode="native")
+                    else:
+                        tool_response = None
+                else:
+                    # Use prompted extraction
+                    handler = self._get_tool_handler()
+                    if handler:
+                        tool_response = handler.parse_response(content, mode="prompted")
+                    else:
+                        tool_response = None
+                
+                # Return appropriate response
+                if tool_response and tool_response.has_tool_calls():
+                    return GenerateResponse(
+                        content=content,
+                        tool_calls=tool_response,
+                        model=model,
+                        usage=response.usage.model_dump() if hasattr(response, 'usage') else None
+                    )
+                else:
+                    log_response("anthropic", content)
                     # Return a GenerateResponse object for consistency
                     from abstractllm.types import GenerateResponse
                     return GenerateResponse(
-                        content=result,
+                        content=content,
                         raw_response=response,
                         model=model
                     )

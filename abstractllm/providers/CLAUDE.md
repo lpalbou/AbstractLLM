@@ -21,6 +21,13 @@ The providers module is the heart of AbstractLLM, implementing adapters for diff
 - Some providers have complex streaming implementations
 - Registry could use better error messages
 
+### Recent Fixes (2025-01-06)
+- Fixed broken imports in mlx_provider.py after tool system refactoring:
+  - Changed `abstractllm.tools.types` to `abstractllm.tools` 
+  - Removed non-existent `abstractllm.architectures.capabilities` and `abstractllm.architectures.templates` imports
+  - Replaced missing template functions with simple fallback implementation
+- These modules were removed during refactoring but mlx_provider.py wasn't updated
+
 ## Component Mindmap
 ```
 Providers System

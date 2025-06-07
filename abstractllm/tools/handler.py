@@ -1,10 +1,12 @@
 """
 Universal tool handler for all models and providers.
 
-This module provides a unified interface for tool support that works
+This module provides a utility class for tool support that works
 across all models, whether they have native tool APIs or require prompting.
+It focuses on formatting and parsing without modifying request state.
 """
 
+import json
 import logging
 from typing import List, Dict, Any, Optional, Union, Callable
 
@@ -17,12 +19,15 @@ logger = logging.getLogger(__name__)
 
 class UniversalToolHandler:
     """
-    Unified tool handler that adapts to model capabilities.
+    Utility class for tool formatting and parsing based on model capabilities.
     
-    Features:
-    - Automatic detection of native vs prompted tool support
-    - Architecture-specific formatting and parsing
-    - Seamless fallback for models without tool support
+    This is a pure utility class that:
+    - Provides architecture-specific tool prompt formatting
+    - Parses tool calls from model responses
+    - Formats tool results for models
+    - Reports model capabilities
+    
+    It does NOT modify messages or maintain state.
     """
     
     def __init__(self, model_name: str):
@@ -43,34 +48,21 @@ class UniversalToolHandler:
         logger.debug(f"Initialized tool handler for {model_name}: "
                     f"native={self.supports_native}, prompted={self.supports_prompted}")
     
-    def prepare_request(
+    def format_tools_prompt(
         self,
-        tools: Optional[List[Union[ToolDefinition, Callable, Dict[str, Any]]]] = None,
-        messages: Optional[List[Dict[str, Any]]] = None,
-        force_native: Optional[bool] = None
-    ) -> Dict[str, Any]:
+        tools: List[Union[ToolDefinition, Callable, Dict[str, Any]]]
+    ) -> str:
         """
-        Prepare a request with tool support.
+        Format tools into a prompt based on model architecture.
         
         Args:
             tools: List of tools (ToolDefinition, callable, or dict)
-            messages: Conversation messages
-            force_native: Force native tool mode if True
             
         Returns:
-            Dict with:
-            - mode: "native", "prompted", or "none"
-            - tools: Processed tools for native mode
-            - system_prompt: Tool prompt for prompted mode
-            - messages: Updated messages if needed
+            Formatted tool prompt string for the model's architecture
         """
-        if not tools or not self.supports_prompted:
-            return {
-                "mode": "none",
-                "tools": None,
-                "system_prompt": None,
-                "messages": messages
-            }
+        if not tools:
+            return ""
         
         # Convert tools to ToolDefinition objects
         tool_defs = []
@@ -85,43 +77,40 @@ class UniversalToolHandler:
                 logger.warning(f"Skipping invalid tool: {tool}")
         
         if not tool_defs:
-            return {
-                "mode": "none",
-                "tools": None,
-                "system_prompt": None,
-                "messages": messages
-            }
+            return ""
         
-        # Determine mode
-        use_native = force_native if force_native is not None else self.supports_native
+        # Format based on architecture
+        return format_tool_prompt(tool_defs, self.model_name)
+    
+    def prepare_tools_for_native(
+        self,
+        tools: List[Union[ToolDefinition, Callable, Dict[str, Any]]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Convert tools to native API format.
         
-        if use_native and self.supports_native:
-            # Native mode
-            return {
-                "mode": "native",
-                "tools": [t.to_dict() for t in tool_defs],
-                "system_prompt": None,
-                "messages": messages
-            }
-        else:
-            # Prompted mode
-            system_prompt = format_tool_prompt(tool_defs, self.model_name)
+        Args:
+            tools: List of tools
             
-            # Inject system prompt
-            updated_messages = messages.copy() if messages else []
-            if updated_messages and updated_messages[0].get("role") == "system":
-                # Append to existing system message
-                updated_messages[0]["content"] += f"\n\n{system_prompt}"
+        Returns:
+            List of tool dictionaries for native API
+        """
+        if not tools or not self.supports_native:
+            return []
+        
+        # Convert tools to ToolDefinition objects
+        tool_defs = []
+        for tool in tools:
+            if isinstance(tool, ToolDefinition):
+                tool_defs.append(tool)
+            elif callable(tool):
+                tool_defs.append(ToolDefinition.from_function(tool))
+            elif isinstance(tool, dict) and "name" in tool and "description" in tool:
+                tool_defs.append(ToolDefinition(**tool))
             else:
-                # Add new system message
-                updated_messages.insert(0, {"role": "system", "content": system_prompt})
-            
-            return {
-                "mode": "prompted",
-                "tools": None,
-                "system_prompt": system_prompt,
-                "messages": updated_messages
-            }
+                logger.warning(f"Skipping invalid tool: {tool}")
+        
+        return [t.to_dict() for t in tool_defs]
     
     def parse_response(
         self,
@@ -227,5 +216,3 @@ def create_handler(model_name: str) -> UniversalToolHandler:
     return UniversalToolHandler(model_name)
 
 
-# Import json for native response parsing
-import json

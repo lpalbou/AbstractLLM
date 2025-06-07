@@ -225,3 +225,24 @@ AbstractLLM demonstrates mature software engineering with a well-architected, ex
 ✅ Updated documentation
 
 The tool system now provides clean, universal support for all models through a minimal set of well-designed components.
+
+## Session Update (2025-01-06)
+
+### Issue: Tool Support Rejection for Qwen3 Model
+**Problem**: MLX provider was rejecting tool calls for `mlx-community/Qwen3-30B-A3B-4bit` even though Qwen3 models have native tool support.
+
+**Root Cause**: Model name normalization mismatch
+- The model name `mlx-community/Qwen3-30B-A3B-4bit` was normalized to `qwen3-30b-a3b` (removing the `-4bit` suffix)
+- But the model_capabilities.json had the key as `qwen3-30B-A3B-4bit` (with the suffix)
+- This caused the capability lookup to fail, defaulting to "no tool support"
+
+**Fix Applied**:
+1. Fixed import errors in mlx_provider.py from the previous refactoring
+2. Changed the model key in model_capabilities.json from `qwen3-30B-A3B-4bit` to `qwen3-30b-a3b` to match the normalized name
+
+**Lessons Learned**:
+- Model capability keys in JSON should match the normalized form
+- The normalization strips quantization suffixes like `-4bit`, `-8bit`, etc.
+- ALL models can support tools through prompting - the framework should never completely reject tools
+
+**Principle Violated**: The framework incorrectly assumed some models can't use tools at all. In reality, ANY model can support tools through careful prompting, even if they don't have native tool APIs.

@@ -54,35 +54,44 @@ def main():
             print(f"Tool support: {'Native' if caps['native_tools'] else 'Prompted'}")
             print(f"Tool format: {caps['tool_format']}")
             
-            # Prepare request with tools
+            # Prepare messages
             messages = [
                 {"role": "user", "content": "What's the weather in Paris and what's 25 * 4?"}
             ]
             
-            request = handler.prepare_request(
-                tools=[get_weather, calculate],
-                messages=messages
-            )
-            
-            print(f"Mode: {request['mode']}")
+            # Determine mode and prepare tools
+            mode = "native" if handler.supports_native else "prompted" if handler.supports_prompted else "none"
+            print(f"Mode: {mode}")
             
             # Generate response
-            if request['mode'] == 'native':
+            if mode == 'native':
                 # Native tool mode
+                native_tools = handler.prepare_tools_for_native([get_weather, calculate])
                 response = llm.generate(
-                    messages=request['messages'],
-                    tools=request['tools']
+                    messages=messages,
+                    tools=native_tools
+                )
+            elif mode == 'prompted':
+                # Prompted tool mode - inject tool prompt into system message
+                tool_prompt = handler.format_tools_prompt([get_weather, calculate])
+                if messages and messages[0].get("role") == "system":
+                    messages[0]["content"] += f"\n\n{tool_prompt}"
+                else:
+                    messages.insert(0, {"role": "system", "content": tool_prompt})
+                
+                response = llm.generate(
+                    messages=messages
                 )
             else:
-                # Prompted tool mode
+                # No tool support
                 response = llm.generate(
-                    messages=request['messages']
+                    messages=messages
                 )
             
             # Parse response for tool calls
             parsed = handler.parse_response(
                 response.content if hasattr(response, 'content') else response,
-                mode=request['mode']
+                mode=mode
             )
             
             print(f"\nResponse: {parsed.content[:100]}...")
@@ -97,7 +106,7 @@ def main():
                     print(f"  - {tc.name}({tc.arguments}) -> {result.output}")
                 
                 # Format results back
-                formatted = handler.format_tool_results(results, mode=request['mode'])
+                formatted = handler.format_tool_results(results, mode=mode)
                 print(f"\nFormatted results: {formatted}")
             else:
                 print("No tool calls detected")

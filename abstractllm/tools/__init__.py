@@ -23,21 +23,21 @@ def search_web(query: str) -> str:
 # Create handler for a model
 handler = create_handler("gpt-4")
 
-# Prepare request with tools
-request = handler.prepare_request(
-    tools=[search_web],
-    messages=[{"role": "user", "content": "What's the weather?"}]
-)
+# Get tool prompt for prompted models
+tool_prompt = handler.format_tools_prompt([search_web])
+
+# Or prepare tools for native API
+native_tools = handler.prepare_tools_for_native([search_web])
 
 # Parse response for tool calls
 response = "I'll search for weather information. <function_call>{"name": "search_web", "arguments": {"query": "current weather"}}</function_call>"
-parsed = handler.parse_response(response, mode=request["mode"])
+parsed = handler.parse_response(response, mode="prompted")
 
 # Execute tools if needed
 if parsed.has_tool_calls():
     from abstractllm.tools import execute_tools
     results = execute_tools(parsed.tool_calls)
-    formatted = handler.format_tool_results(results, mode=request["mode"])
+    formatted = handler.format_tool_results(results, mode="prompted")
 ```
 """
 

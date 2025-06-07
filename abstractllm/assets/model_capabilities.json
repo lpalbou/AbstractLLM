@@ -381,6 +381,17 @@
       "notes": "MCP support, thinking modes",
       "source": "Alibaba official docs"
     },
+    "qwen3-30b-a3b": {
+      "context_length": 131072,
+      "max_output_tokens": 8192,
+      "tool_support": "native",
+      "structured_output": "native",
+      "parallel_tools": true,
+      "vision_support": false,
+      "audio_support": false,
+      "notes": "4-bit precision, optimized for efficiency",
+      "source": "Alibaba official docs"
+    },
     "qwen2-vl": {
       "context_length": 32768,
       "max_output_tokens": 8192,

@@ -6,7 +6,8 @@ import pytest
 import os
 from typing import Dict, Any
 
-from abstractllm import create_llm, AbstractLLMInterface, ModelParameter, ConfigurationManager
+from abstractllm import create_llm, AbstractLLMInterface, ModelParameter
+from abstractllm.utils.config import ConfigurationManager
 from abstractllm.providers.openai import OpenAIProvider
 from abstractllm.providers.anthropic import AnthropicProvider
 from abstractllm.providers.ollama import OllamaProvider

@@ -20,7 +20,7 @@ from abstractllm.enums import MessageRole
 
 # Handle circular imports with TYPE_CHECKING
 if TYPE_CHECKING:
-    from abstractllm.tools.types import ToolDefinition, ToolCall, ToolCallRequest, ToolResult
+    from abstractllm.tools import ToolDefinition, ToolCall, ToolResult, ToolCallResponse
     from abstractllm.types import GenerateResponse
 
 # Try importing tools package directly
@@ -28,11 +28,13 @@ try:
     from abstractllm.tools import (
         ToolDefinition,
         ToolCall,
-        ToolCallRequest,
         ToolResult,
-        function_to_tool_definition,
+        ToolCallResponse,
+        register
     )
     from abstractllm.types import GenerateResponse
+    # For backwards compatibility
+    ToolCallRequest = ToolCallResponse  # Alias for old code
     TOOLS_AVAILABLE = True
 except ImportError as e:
     TOOLS_AVAILABLE = False
@@ -51,10 +53,11 @@ except ImportError as e:
             pass
         class ToolCall:
             pass
-        class ToolCallRequest:
-            pass
         class ToolResult:
             pass
+        class ToolCallResponse:
+            pass
+        ToolCallRequest = ToolCallResponse  # Alias
         class GenerateResponse:
             pass
 
@@ -731,8 +734,8 @@ class Session:
             func_name = tool.__name__
             self._tool_implementations[func_name] = tool
             
-            # Convert function to tool definition
-            tool_def = function_to_tool_definition(tool)
+            # Convert function to tool definition using new method
+            tool_def = ToolDefinition.from_function(tool)
         elif isinstance(tool, dict):
             # Convert dictionary to tool definition
             tool_def = ToolDefinition(**tool)
@@ -1112,6 +1115,35 @@ class Session:
                 logger.debug(f"Session: Created placeholder function for tool '{tool_name}'")
             
         return tool_functions
+    
+    def _process_tool_response(self, response: Any) -> Optional[Any]:
+        """
+        Compatibility layer to handle both old and new tool response formats.
+        
+        Args:
+            response: Either ToolCallResponse (new) or response with tool_calls attribute (old)
+            
+        Returns:
+            Tool calls in a normalized format, or None if no tools
+        """
+        # New format: ToolCallResponse object
+        if hasattr(response, 'has_tool_calls') and callable(response.has_tool_calls):
+            if response.has_tool_calls():
+                return response
+            return None
+            
+        # Old format: Direct tool_calls attribute
+        if hasattr(response, 'tool_calls') and response.tool_calls:
+            # Wrap in ToolCallResponse for compatibility
+            if TOOLS_AVAILABLE:
+                return ToolCallResponse(
+                    content=getattr(response, 'content', ''),
+                    tool_calls=response.tool_calls
+                )
+            return response
+            
+        # No tool calls
+        return None
         
     def generate_with_tools(
         self,

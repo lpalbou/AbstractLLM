@@ -4,7 +4,17 @@
       "Bash(grep:*)",
       "Bash(python:*)",
       "Bash(rm:*)",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "Bash(rg:*)",
+      "Bash(/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/arm64-darwin/rg -A 5 -B 5 \"yield.*ToolCall\" /Users/albou/projects/abstractllm/abstractllm/providers/openai.py)",
+      "Bash(/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/arm64-darwin/rg -A 10 \"test.*async.*ollama\" /Users/albou/projects/abstractllm/tests/providers/test_tool_calls.py)",
+      "Bash(/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/arm64-darwin/rg -B 5 -A 20 \"test_ollama_uses_base_methods\" /Users/albou/projects/abstractllm/tests/providers/test_tool_integration.py)",
+      "Bash(/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/arm64-darwin/rg \"class.*Provider.*BaseProvider.*AbstractLLMInterface|class.*Provider.*AbstractLLMInterface.*BaseProvider\" /Users/albou/projects/abstractllm/abstractllm/providers/ -A 2)",
+      "Bash(/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/arm64-darwin/rg \"class OpenAIProvider\\(\" /Users/albou/projects/abstractllm/abstractllm/providers/openai.py)",
+      "Bash(/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/arm64-darwin/rg \"_prepare_tool_context\" /Users/albou/projects/abstractllm/abstractllm/providers/openai.py -A 2 -B 2)",
+      "Bash(/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/arm64-darwin/rg -n \"get_capabilities|get_template_manager|apply_chat_template|apply_simple_fallback_template\" abstractllm/providers/mlx_provider.py)",
+      "Bash(/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/arm64-darwin/rg -A 10 \"def _get_tool_handler\" abstractllm/providers/base.py)",
+      "Bash(/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/arm64-darwin/rg -A 20 \"def _normalize_model_name\" abstractllm/architectures/detection.py)"
     ],
     "deny": []
   }

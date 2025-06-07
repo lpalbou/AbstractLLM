@@ -23,7 +23,8 @@ try:
 except ImportError:
     AIOHTTP_AVAILABLE = False
 
-from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability
+from abstractllm.interface import ModelParameter, ModelCapability
+from abstractllm.providers.base import BaseProvider
 from abstractllm.utils.logging import (
     log_request, 
     log_response,
@@ -46,6 +47,7 @@ try:
         ToolDefinition,
         ToolCallRequest,
         ToolCall,
+        ToolCallResponse,
         function_to_tool_definition,
     )
     TOOLS_AVAILABLE = True
@@ -58,11 +60,13 @@ except ImportError:
             pass
         class ToolCall:
             pass
+        class ToolCallResponse:
+            pass
 
 # Configure logger
 logger = logging.getLogger("abstractllm.providers.ollama.OllamaProvider")
 
-class OllamaProvider(AbstractLLMInterface):
+class OllamaProvider(BaseProvider):
     """
     Ollama API implementation.
     """
@@ -96,51 +100,6 @@ class OllamaProvider(AbstractLLMInterface):
         base_url = self.config_manager.get_param(ModelParameter.BASE_URL)
         logger.info(f"Initialized Ollama provider with model: {model}, base URL: {base_url}")
     
-    def _process_tools(self, tools: List[Any]) -> List[Dict[str, Any]]:
-        """
-        Convert AbstractLLM tool definitions to Ollama tool format.
-        
-        Args:
-            tools: List of tool definitions or callables
-            
-        Returns:
-            List of Ollama-formatted tool definitions (OpenAI-like format)
-        """
-        if not TOOLS_AVAILABLE:
-            raise ValueError("Tool support is not available. Install the required dependencies.")
-            
-        processed_tools = []
-        
-        for tool in tools:
-            # If it's a callable, convert it to a tool definition
-            if callable(tool):
-                tool = function_to_tool_definition(tool)
-                
-            # If it's already a ToolDefinition, convert to dict format
-            if isinstance(tool, ToolDefinition):
-                tool = tool.to_dict()
-                
-            # If it's a dictionary, convert to Ollama format (which is OpenAI-like)
-            if isinstance(tool, dict):
-                # Validate that required fields are present
-                if not all(k in tool for k in ['name', 'description', 'input_schema']):
-                    logger.warning(f"Skipping invalid tool definition: {tool}")
-                    continue
-                    
-                # Convert to OpenAI/Ollama format
-                ollama_tool = {
-                    "type": "function",
-                    "function": {
-                        "name": tool['name'],
-                        "description": tool['description'],
-                        "parameters": tool['input_schema']
-                    }
-                }
-                processed_tools.append(ollama_tool)
-            else:
-                raise ValueError(f"Unsupported tool type: {type(tool)}")
-                
-        return processed_tools
         
     def _check_for_tool_calls(self, response: Dict[str, Any]) -> bool:
         """
@@ -423,13 +382,24 @@ class OllamaProvider(AbstractLLMInterface):
             "has_tools": bool(tools)
         })
         
-        # Process tools if provided
-        processed_tools = None
+        # Handle tools using base class methods
+        enhanced_system_prompt = system_prompt
+        formatted_tools = None
+        tool_mode = "none"
+        
         if tools:
-            processed_tools = self._process_tools(tools)
+            # Use base class method to prepare tool context
+            enhanced_system_prompt, tool_defs, tool_mode = self._prepare_tool_context(tools, system_prompt)
+            
+            # For Ollama, we check if the model supports native tools
+            # Tool defs are already formatted by _prepare_tool_context
+            if tool_mode == "native" and tool_defs:
+                handler = self._get_tool_handler()
+                if handler:
+                    formatted_tools = tool_defs  # Already in correct format
         
         # Determine if we should use the chat endpoint
-        use_chat_endpoint = processed_tools is not None
+        use_chat_endpoint = formatted_tools is not None
 
         # Select endpoint and prepare request
         if use_chat_endpoint:
@@ -437,9 +407,9 @@ class OllamaProvider(AbstractLLMInterface):
             request_data = self._prepare_request_for_chat(
                 model=model,
                 prompt=prompt,
-                system_prompt=system_prompt,
+                system_prompt=enhanced_system_prompt,
                 processed_files=processed_files,
-                processed_tools=processed_tools,
+                processed_tools=formatted_tools,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 stream=stream
@@ -449,7 +419,7 @@ class OllamaProvider(AbstractLLMInterface):
             request_data = self._prepare_request_for_generate(
                 model=model,
                 prompt=prompt,
-                system_prompt=system_prompt,
+                system_prompt=enhanced_system_prompt,
                 processed_files=processed_files,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -536,22 +506,39 @@ class OllamaProvider(AbstractLLMInterface):
                 
                 data = response.json()
                 
-                # Check for tool calls from chat endpoint
-                if processed_tools and self._check_for_tool_calls(data):
-                    # Return the ToolCallRequest object directly
-                    return self._extract_tool_calls(data)
-                # Handle normal text response
-                elif "response" in data:
-                    result = data["response"]
-                    log_response("ollama", result)
-                    return result
+                # Extract content from response
+                content = None
+                if "response" in data:
+                    content = data["response"]
                 elif "message" in data and isinstance(data["message"], dict) and "content" in data["message"]:
-                    result = data["message"]["content"]
-                    log_response("ollama", result)
-                    return result
+                    content = data["message"]["content"]
                 else:
                     logger.error(f"Unexpected response format: {data}")
                     raise ValueError("Unexpected response format from Ollama API")
+                
+                # Extract tool calls using the handler
+                handler = self._get_tool_handler()
+                if handler:
+                    if tool_mode == "native" and formatted_tools and self._check_for_tool_calls(data):
+                        # For native mode, parse the response
+                        tool_response = handler.parse_response(data, mode="native")
+                    else:
+                        # Use prompted extraction
+                        tool_response = handler.parse_response(content, mode="prompted") if content else None
+                else:
+                    tool_response = None
+                
+                # Return appropriate response
+                if tool_response and tool_response.has_tool_calls():
+                    from abstractllm.types import GenerateResponse
+                    return GenerateResponse(
+                        content=content,
+                        tool_calls=tool_response,
+                        model=model
+                    )
+                else:
+                    log_response("ollama", content)
+                    return content
                     
         except requests.RequestException as e:
             logger.error(f"Network error during Ollama API request: {str(e)}")
@@ -643,13 +630,24 @@ class OllamaProvider(AbstractLLMInterface):
             "has_tools": bool(tools)
         })
         
-        # Process tools if provided
-        processed_tools = None
+        # Handle tools using base class methods
+        enhanced_system_prompt = system_prompt
+        formatted_tools = None
+        tool_mode = "none"
+        
         if tools:
-            processed_tools = self._process_tools(tools)
+            # Use base class method to prepare tool context
+            enhanced_system_prompt, tool_defs, tool_mode = self._prepare_tool_context(tools, system_prompt)
+            
+            # For Ollama, we check if the model supports native tools
+            # Tool defs are already formatted by _prepare_tool_context
+            if tool_mode == "native" and tool_defs:
+                handler = self._get_tool_handler()
+                if handler:
+                    formatted_tools = tool_defs  # Already in correct format
         
         # Determine if we should use the chat endpoint
-        use_chat_endpoint = processed_tools is not None
+        use_chat_endpoint = formatted_tools is not None
 
         # Select endpoint and prepare request
         if use_chat_endpoint:
@@ -657,9 +655,9 @@ class OllamaProvider(AbstractLLMInterface):
             request_data = self._prepare_request_for_chat(
                 model=model,
                 prompt=prompt,
-                system_prompt=system_prompt,
+                system_prompt=enhanced_system_prompt,
                 processed_files=processed_files,
-                processed_tools=processed_tools,
+                processed_tools=formatted_tools,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 stream=stream
@@ -669,7 +667,7 @@ class OllamaProvider(AbstractLLMInterface):
             request_data = self._prepare_request_for_generate(
                 model=model,
                 prompt=prompt,
-                system_prompt=system_prompt,
+                system_prompt=enhanced_system_prompt,
                 processed_files=processed_files,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -755,22 +753,48 @@ class OllamaProvider(AbstractLLMInterface):
                         response.raise_for_status()
                         data = await response.json()
                         
-                        # Check for tool calls from chat endpoint
-                        if processed_tools and self._check_for_tool_calls(data):
-                            # Return the ToolCallRequest object directly
-                            return self._extract_tool_calls(data)
-                        # Handle normal text response
-                        elif "response" in data:
-                            result = data["response"]
-                            log_response("ollama", result)
-                            return result
+                        # Extract content from response
+                        content = None
+                        if "response" in data:
+                            content = data["response"]
                         elif "message" in data and isinstance(data["message"], dict) and "content" in data["message"]:
-                            result = data["message"]["content"]
-                            log_response("ollama", result)
-                            return result
+                            content = data["message"]["content"]
                         else:
                             logger.error(f"Unexpected response format: {data}")
                             raise ValueError("Unexpected response format from Ollama API")
+                        
+                        # Extract tool calls based on mode
+                        if tool_mode == "native" and formatted_tools:
+                            # For native mode, check if response has tool calls
+                            if self._check_for_tool_calls(data):
+                                # Use the existing _extract_tool_calls which returns ToolCallRequest
+                                tool_response_old = self._extract_tool_calls(data)
+                                if tool_response_old:
+                                    # Convert to new format
+                                    from abstractllm.tools import ToolCallResponse
+                                    tool_response = ToolCallResponse(
+                                        content=tool_response_old.content,
+                                        tool_calls=tool_response_old.tool_calls
+                                    )
+                                else:
+                                    tool_response = None
+                            else:
+                                tool_response = None
+                        else:
+                            # Use prompted extraction
+                            tool_response = self._extract_tool_calls(content) if content else None
+                        
+                        # Return appropriate response
+                        if tool_response and tool_response.has_tool_calls():
+                            from abstractllm.types import GenerateResponse
+                            return GenerateResponse(
+                                content=content,
+                                tool_calls=tool_response,
+                                model=model
+                            )
+                        else:
+                            log_response("ollama", content)
+                            return content
 
         except aiohttp.ClientError as e:
             logger.error(f"Network error during Ollama API request: {str(e)}")
