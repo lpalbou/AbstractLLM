@@ -246,3 +246,31 @@ The tool system now provides clean, universal support for all models through a m
 - ALL models can support tools through prompting - the framework should never completely reject tools
 
 **Principle Violated**: The framework incorrectly assumed some models can't use tools at all. In reality, ANY model can support tools through careful prompting, even if they don't have native tool APIs.
+
+### Tool Format Issue for Qwen3 in MLX
+**Problem**: Qwen3 model wasn't outputting tool calls in the correct format - it was using plain function syntax instead of `<|tool_call|>` format.
+
+**Root Causes**:
+1. Model was marked as having "native" tool support, but MLX provider doesn't support native tool APIs
+2. alma-minimal.py was manually describing tools in the system prompt, conflicting with framework's tool formatting
+
+**Fixes Applied**:
+1. Changed `qwen3-30b-a3b` in model_capabilities.json from "native" to "prompted" tool support
+2. Removed manual tool descriptions from alma-minimal.py system prompt
+3. Now the framework properly adds Qwen-specific tool formatting instructions
+
+**Key Learning**: Provider-specific capabilities matter - a model might support native tools through its official API but need prompted tools when running through MLX or other local providers.
+
+### Tool Parsing Bug for Qwen Format
+**Problem**: Tool calls were being detected but not parsed correctly - the regex pattern couldn't handle nested JSON in the `<|tool_call|>` format.
+
+**Root Cause**: The regex `r'<\|tool_call\|>\s*(\{.*?\})'` was using non-greedy matching that stopped at the first `}`, breaking on nested JSON like `{"arguments": {"recursive": true}}`.
+
+**Fix Applied**: Updated the pattern to match content between `<|tool_call|>` tags properly, handling both with and without closing tags.
+
+**Final Result**: Complete tool execution flow now works:
+1. Model emits: `<|tool_call|>{"name": "list_files", "arguments": {"recursive": true}}</|tool_call|>`
+2. Parser extracts the tool call
+3. Session executes the tool
+4. Results are returned to the model
+5. Model presents formatted results to the user

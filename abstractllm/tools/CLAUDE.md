@@ -211,6 +211,14 @@ class MetricsHandler(UniversalToolHandler):
 - [ ] Performance benchmarks
 - [ ] Accuracy measurements
 
+## Recent Fixes (2025-01-06)
+
+### Regex Pattern for Nested JSON
+**Issue**: The `_parse_special_token` function couldn't handle nested JSON in Qwen's `<|tool_call|>` format.
+- **Cause**: Non-greedy regex `(\{.*?\})` stopped at first `}` 
+- **Fix**: Updated to match content between tags or use balanced brace matching
+- **Result**: Tool calls with nested arguments now parse correctly
+
 ## Conclusion
 
 The AbstractLLM tool system demonstrates solid engineering with excellent architecture integration and universal model support. However, it falls short of industry best practices in areas like security, monitoring, and advanced features. The 7.5/10 rating reflects a well-designed foundation that needs enhancement to match the sophistication of established frameworks.

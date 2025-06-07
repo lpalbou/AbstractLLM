@@ -205,11 +205,21 @@ def _parse_tool_code(response: str) -> List[ToolCall]:
 def _parse_special_token(response: str) -> List[ToolCall]:
     """Parse <|tool_call|> format."""
     tool_calls = []
-    pattern = r'<\|tool_call\|>\s*(\{.*?\})'
     
-    for match in re.findall(pattern, response, re.DOTALL):
+    # First try with closing tag (most specific)
+    pattern_with_close = r'<\|tool_call\|>\s*(.*?)\s*</\|tool_call\|>'
+    matches = re.findall(pattern_with_close, response, re.DOTALL)
+    
+    if not matches:
+        # Fallback to without closing tag
+        pattern_no_close = r'<\|tool_call\|>\s*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})'
+        matches = re.findall(pattern_no_close, response, re.DOTALL)
+    
+    for match in matches:
         try:
-            data = json.loads(match)
+            # Clean up the match
+            json_str = match.strip()
+            data = json.loads(json_str)
             if isinstance(data, dict) and "name" in data:
                 tool_calls.append(ToolCall(
                     name=data["name"],

@@ -66,20 +66,10 @@ def start_session(provider_name, model_name, max_tokens = 4096):
     session = Session(
         system_prompt="""You are a capable agent that EXECUTES tools and follows instructions directly. When a user asks you to follow instructions from a document, you should READ the document and then EXECUTE the steps as written, not just summarize them.
 
-CRITICAL: When you need to read a file, you MUST actually call the read_file tool. Do NOT show code examples or pseudo-code. EXECUTE the tool call immediately.
-
-For example, if you need to read a file, you should:
-- Actually call read_file(file_path="path/to/file", should_read_entire_file=True)
-- NOT show: ```python read_file(...)``` 
-- NOT explain what you would do
-- JUST DO IT
-
-You have access to these tools:
-- read_file(file_path, should_read_entire_file=True, start_line_one_indexed=1, end_line_one_indexed_inclusive=None)
-- list_files(directory_path=".", pattern="*", recursive=False)
+CRITICAL: When you need to perform an action, you MUST actually call the appropriate tool. Do NOT show code examples or pseudo-code. EXECUTE the tool call immediately.
 
 When following multi-step procedures:
-1. Read the instructions first by CALLING read_file
+1. Read the instructions first if needed
 2. Execute each step that requires a tool call by CALLING the tools
 3. Continue to the next step based on the results
 4. Complete the entire procedure unless instructed otherwise
