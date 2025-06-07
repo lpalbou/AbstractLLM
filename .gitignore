@@ -106,3 +106,7 @@ investigate/
 
 .venv-abstractllm
 untracked
+
+CLAUDE.md
+**/CLAUDE.md
+
