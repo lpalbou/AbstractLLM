@@ -1,204 +1,207 @@
-# Tools Component
+# Tools Module Status
+
+**Module Rating: 7.5/10** 📊
 
 ## Overview
-The tools module provides a sophisticated system for enabling LLMs to call functions and interact with external systems. It handles tool definition, validation, conversion, and execution across multiple provider formats while maintaining type safety and security.
+Complete rewrite of the tool support system to provide a clean, unified interface for tool calling across all models and providers. While architecturally sound, critical analysis reveals opportunities for improvement to match industry best practices.
 
-## Code Quality Assessment
-**Rating: 9/10**
+## Architecture
 
-### Strengths
-- Excellent type safety with Pydantic models
-- Comprehensive validation using JSON Schema
-- Smart docstring parsing for automatic tool creation
-- Security-focused with execution sandboxing
-- Provider-agnostic design with format conversion
-- Extensive library of common tools
-- Well-documented with clear examples
+### Core Design Principles
+1. **Simplicity**: Minimal set of files with clear responsibilities
+2. **Universality**: Works with all models, native or prompted
+3. **Architecture-aware**: Leverages the architecture detection system
+4. **Type-safe**: Clean type definitions without circular imports
 
-### Issues
-- Complex regex parsing could be simplified
-- Some functions are quite large (50+ lines)
-- Architecture detection has some duplication
-- Missing visual architecture documentation
-
-## Component Mindmap
+### File Structure
 ```
-Tools System
-├── Core Types (types.py)
-│   ├── ToolDefinition (Pydantic model)
-│   │   ├── name, description
-│   │   ├── parameters (JSON Schema)
-│   │   └── function reference
-│   │
-│   ├── ToolCall & ToolCallRequest
-│   │   ├── Tool invocation details
-│   │   └── Parameter validation
-│   │
-│   └── ToolResult
-│       ├── Success/error status
-│       └── Result data or error info
-│
-├── Validation (validation.py)
-│   ├── JSON Schema validation
-│   ├── Custom error types
-│   │   ├── ToolNotFoundError
-│   │   ├── InvalidToolParametersError
-│   │   └── ToolExecutionError
-│   └── Security checks
-│
-├── Conversion (conversion.py)
-│   ├── Function → ToolDefinition
-│   ├── Docstring parsing
-│   │   ├── Google style
-│   │   ├── NumPy style
-│   │   └── REST style
-│   ├── Type mapping
-│   └── Provider format conversion
-│
-├── Architecture Tools (architecture_tools.py)
-│   ├── Tool call detection
-│   │   ├── XML format (<tool_call>)
-│   │   ├── JSON format
-│   │   └── Special tokens
-│   ├── Response parsing
-│   └── Format generation
-│
-├── Common Tools (common_tools.py)
-│   ├── File Operations
-│   │   ├── read_file, write_file
-│   │   ├── list_directory
-│   │   └── file_stats
-│   ├── Data Processing
-│   │   ├── parse_json, parse_csv
-│   │   └── Data analysis
-│   ├── Search & Query
-│   │   ├── search_web
-│   │   └── query_database
-│   ├── System Info
-│   │   └── get_system_info
-│   └── 20+ more tools
-│
-└── Modular Prompts (modular_prompts.py)
-    ├── Context-aware prompting
-    ├── Model-specific formatting
-    ├── Tool instruction injection
-    └── Response format guidance
+tools/
+├── core.py      # Core types (ToolDefinition, ToolCall, ToolResult)
+├── handler.py   # Universal tool handler for all models
+├── parser.py    # Architecture-based parsing and formatting
+├── registry.py  # Tool registry and execution utilities
+└── __init__.py  # Clean public API
 ```
 
-## Design Patterns
-1. **Builder Pattern**: ToolDefinition construction from functions
-2. **Strategy Pattern**: Different parsing strategies for docstrings
-3. **Adapter Pattern**: Provider format conversion
-4. **Validation Pattern**: Schema-based parameter validation
-5. **Factory Pattern**: Tool creation from various sources
+## Critical Assessment
 
-## Tool Definition Flow
+### Strengths ✅
+
+#### 1. Architecture Integration
+- Excellent mapping of model architectures to tool formats
+- Intelligent fallback to RAW_JSON for unknown models
+- Architecture-specific prompt generation that matches training patterns
+
+#### 2. Universal Support
+- Successfully abstracts native vs prompted tool calling
+- Consistent API across all providers
+- Clean mode switching based on capabilities
+
+#### 3. Format Coverage
+- Comprehensive support for different tool formats:
+  - Gemma: Python-style `tool_code` blocks
+  - Qwen: `<|tool_call|>` special tokens
+  - Llama: `<function_call>` XML-like format
+  - Phi: `<tool_call>` XML wrapper
+  - Generic: Raw JSON fallback
+
+#### 4. Error Handling
+- Robust error propagation through ToolResult
+- Timeout support for tool execution
+- Graceful degradation when parsing fails
+
+### Weaknesses ❌
+
+#### 1. Configuration Rigidity
+- Architecture-to-format mapping hardcoded in parser.py
+- Should leverage JSON configuration files more
+- No runtime format customization
+
+#### 2. Parsing Complexity
+- Heavy regex reliance (brittle for edge cases)
+- Manual argument parsing in `_parse_tool_code()`
+- No confidence scoring for detected calls
+- Limited error recovery
+
+#### 3. Missing Industry Features
+Compared to OpenAI/Anthropic/LangChain:
+- No `tool_choice` parameter to force specific tools
+- No JSON Schema validation (only basic checks)
+- No retry logic or fallback strategies
+- No state management between tool calls
+- No few-shot prompting examples
+- No monitoring/telemetry hooks
+
+#### 4. Security Gaps
+- Limited input sanitization
+- No rate limiting
+- Basic parameter validation only
+- No sandboxing for execution
+
+## Performance Analysis
+
+### Detection Accuracy
+- **Strong**: Multi-pattern detection with fallbacks
+- **Weak**: No statistical validation or benchmarks
+- **Risk**: Regex patterns may miss edge cases
+
+### Execution Flow
 ```
-1. Function Definition
-   def my_function(param: str) -> dict:
-       """Description..."""
-       
-2. Automatic Conversion
-   tool = function_to_tool(my_function)
-   
-3. Validation
-   - Parameter types checked
-   - Schema generated
-   - Security validated
-   
-4. Provider Formatting
-   - OpenAI: {"type": "function", "function": {...}}
-   - Anthropic: {"name": ..., "input_schema": {...}}
-   - Others: Architecture-specific
+User Input → Handler.prepare_request() → Model Generation
+    ↓                                           ↓
+Tool Registry ← Parser.parse_tool_calls() ← Response
+    ↓
+Execute Tools → Format Results → Continue
 ```
 
-## Security Features
-- **Sandboxed Execution**: Tools run in controlled environment
-- **Parameter Validation**: All inputs validated against schema
-- **Error Isolation**: Exceptions caught and wrapped
-- **No Code Injection**: String inputs sanitized
-- **Capability Limits**: Tools can declare required permissions
+### Bottlenecks
+1. Sequential parsing of multiple formats
+2. No caching for repeated tool calls
+3. Thread pool overhead for single tools
 
-## Common Tools Library
+## Comparison with Best Practices
+
+| Feature | AbstractLLM | OpenAI | Anthropic | LangChain |
+|---------|------------|---------|-----------|-----------|
+| Native Support | ✅ | ✅ | ✅ | ✅ |
+| Prompted Support | ✅ | ❌ | ❌ | ✅ |
+| Multiple Formats | ✅ | ❌ | ❌ | ✅ |
+| Tool Choice | ❌ | ✅ | ✅ | ✅ |
+| JSON Schema | ❌ | ✅ | ✅ | ✅ |
+| Retry Logic | ❌ | ✅ | ✅ | ✅ |
+| State Management | ❌ | ❌ | ❌ | ✅ |
+| Monitoring | ❌ | ✅ | ✅ | ✅ |
+
+## Recommendations for Improvement
+
+### 1. Configuration-Driven Design
 ```python
-# File Operations
-read_file(filepath: str, encoding: str = "utf-8")
-write_file(filepath: str, content: str, mode: str = "w")
-list_directory(path: str = ".")
-
-# Data Processing
-parse_json(json_string: str)
-parse_csv(csv_string: str, delimiter: str = ",")
-
-# Search and Query
-search_web(query: str, max_results: int = 5)
-get_current_datetime(timezone: str = "UTC")
-
-# System Information
-get_system_info()
-execute_python_code(code: str)  # Sandboxed
+# Move to assets/tool_formats.json
+{
+  "architectures": {
+    "gemma": {
+      "format": "tool_code",
+      "template": "def {name}({params}):\n    \"\"\"{description}\"\"\""
+    }
+  }
+}
 ```
 
-## Provider Integration
-- **OpenAI/Anthropic**: Native tool/function calling
-- **Ollama/MLX**: Architecture-based detection
-- **HuggingFace**: Prompt engineering approach
+### 2. Enhanced Parsing
+- Replace regex with proper parsers (AST for Python-style)
+- Add confidence scoring: `ToolCall(confidence=0.95)`
+- Implement fuzzy matching for partial calls
 
-## Dependencies
-- **Required**: 
-  - `pydantic`: Type definitions
-  - `jsonschema`: Validation
-- **Optional**:
-  - `docstring-parser`: Advanced parsing
-
-## Recommendations
-1. **Simplify parsing**: Consider using AST over regex
-2. **Split large functions**: Refactor 50+ line functions
-3. **Add tool registry**: Central tool management
-4. **Implement rate limiting**: For external API tools
-5. **Add tool composition**: Chain multiple tools
-
-## Technical Debt
-- Regex complexity in docstring parsing
-- Some duplication in architecture detection
-- Missing async tool support
-- No tool versioning system
-- Limited tool dependency management
-
-## Performance Notes
-- Validation cached per tool definition
-- Lazy loading of optional parsers
-- Efficient JSON Schema validation
-- Could benefit from compiled patterns
-
-## Future Enhancements
-1. **Visual tool builder**: GUI for creating tools
-2. **Tool marketplace**: Share tools between projects
-3. **Tool composition**: Build complex tools from simple ones
-4. **Async tools**: Support for async function calls
-5. **Tool monitoring**: Usage analytics and debugging
-
-## Usage Example
+### 3. Security Hardening
 ```python
-from abstractllm.tools import function_to_tool
-from abstractllm import Session
-
-# Define a tool
-def get_weather(location: str, units: str = "celsius") -> dict:
-    """Get weather for a location.
-    
-    Args:
-        location: City name or coordinates
-        units: Temperature units (celsius/fahrenheit)
-        
-    Returns:
-        Weather data dictionary
-    """
-    # Implementation...
-    return {"temp": 22, "conditions": "sunny"}
-
-# Use in session
-session = Session(provider=llm, tools=[get_weather])
-response = session.generate("What's the weather in Paris?")
-# LLM calls get_weather("Paris") automatically
+class SecureToolRegistry(ToolRegistry):
+    def execute(self, tool_call, sandbox=True, rate_limit=10):
+        # Input sanitization
+        # Rate limiting check
+        # Sandbox execution
+        pass
 ```
+
+### 4. Industry-Standard Features
+```python
+# Tool choice forcing
+handler.prepare_request(
+    tools=[search, calculate],
+    tool_choice="search"  # Force specific tool
+)
+
+# Retry logic
+@retry(max_attempts=3, backoff="exponential")
+def execute_with_retry(tool_call):
+    return registry.execute(tool_call)
+```
+
+### 5. Monitoring & Observability
+```python
+# Add metrics collection
+class MetricsHandler(UniversalToolHandler):
+    def parse_response(self, response, mode):
+        start = time.time()
+        result = super().parse_response(response, mode)
+        metrics.record("tool_parse_duration", time.time() - start)
+        metrics.record("tools_detected", len(result.tool_calls))
+        return result
+```
+
+## Future Roadmap
+
+### Phase 1: Core Improvements
+- [ ] Move format mappings to JSON configuration
+- [ ] Add JSON Schema validation
+- [ ] Implement confidence scoring
+- [ ] Add basic retry logic
+
+### Phase 2: Security & Reliability
+- [ ] Input sanitization framework
+- [ ] Rate limiting per tool
+- [ ] Sandboxed execution option
+- [ ] Circuit breaker pattern
+
+### Phase 3: Advanced Features
+- [ ] Tool choice forcing
+- [ ] Few-shot example generation
+- [ ] State management between calls
+- [ ] Streaming tool execution
+
+### Phase 4: Observability
+- [ ] Prometheus metrics
+- [ ] OpenTelemetry tracing
+- [ ] Performance benchmarks
+- [ ] Accuracy measurements
+
+## Conclusion
+
+The AbstractLLM tool system demonstrates solid engineering with excellent architecture integration and universal model support. However, it falls short of industry best practices in areas like security, monitoring, and advanced features. The 7.5/10 rating reflects a well-designed foundation that needs enhancement to match the sophistication of established frameworks.
+
+The system successfully achieves its core goal of universal tool support across all models, but would benefit from:
+1. Configuration-driven behavior
+2. Enhanced security and validation
+3. Industry-standard features (tool choice, retries)
+4. Better observability and monitoring
+
+With these improvements, the system could achieve a 9.5/10 rating and surpass existing solutions in flexibility while matching their robustness.

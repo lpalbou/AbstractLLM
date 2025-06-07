@@ -1,48 +1,46 @@
 """
-Architecture detection and configuration system.
+Architecture detection for message formatting and communication patterns.
 
-This module provides unified architecture detection and configuration
-for different model families across all providers.
+Architecture = HOW to communicate with a model family (templates, tokens, formats).
+Capabilities = WHAT a specific model can do (tools, context, vision).
 """
 
 from .detection import (
-    detect_architecture, 
-    get_tool_call_format,
-    get_supported_architectures,
-    normalize_model_name
-)
-from .capabilities import (
-    get_capabilities,
-    get_supported_architectures as get_supported_capability_architectures,
-    detect_model_vision_capability,
-    detect_model_audio_capability,
+    detect_architecture,
+    detect_model_type,
+    get_architecture_format,
     get_model_capabilities,
-    detect_model_tool_capability,
-    detect_model_reasoning_capability,
-    detect_model_type
+    format_messages,
+    # Convenience functions
+    supports_tools,
+    supports_vision,
+    supports_audio,
+    supports_embeddings,
+    get_context_limits,
+    is_instruct_model,
 )
-from .configs import get_config
-from .templates import get_template
+
+from .enums import (
+    ToolCallFormat,
+    ModelType,
+    ArchitectureFamily,
+)
 
 __all__ = [
-    # Architecture detection
-    'detect_architecture',
-    'get_tool_call_format', 
-    'get_supported_architectures',
-    'normalize_model_name',
-    
-    # Architecture capabilities (family-level)
-    'get_capabilities',
-    
-    # Model capabilities (instance-level)
-    'detect_model_vision_capability',
-    'detect_model_audio_capability', 
-    'get_model_capabilities',
-    'detect_model_tool_capability',
-    'detect_model_reasoning_capability', 
-    'detect_model_type',
-    
-    # Configuration and templates
-    'get_config',
-    'get_template'
-] 
+    "detect_architecture",
+    "detect_model_type",
+    "get_architecture_format", 
+    "get_model_capabilities",
+    "format_messages",
+    # Convenience functions
+    "supports_tools",
+    "supports_vision", 
+    "supports_audio",
+    "supports_embeddings",
+    "get_context_limits",
+    "is_instruct_model",
+    # Enums
+    "ToolCallFormat",
+    "ModelType",
+    "ArchitectureFamily",
+]

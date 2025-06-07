@@ -9,24 +9,24 @@ from abstractllm.enums import MessageRole
 
 # Handle circular imports with TYPE_CHECKING
 if TYPE_CHECKING:
-    from abstractllm.tools.types import ToolCallRequest
+    from abstractllm.tools.core import ToolCallResponse
 
-# Import ToolCallRequest after it's defined in tools package
-# This is done conditionally to avoid circular imports
+# Import ToolCallResponse from new location
 try:
-    from abstractllm.tools.types import ToolCallRequest
+    from abstractllm.tools.core import ToolCallResponse
 except ImportError as e:
     # Fallback if tools package is not available
     if not TYPE_CHECKING:
-        # Provide a user-friendly class to avoid failures in basic usage
-        class ToolCallRequest:
-            """Placeholder for actual ToolCallRequest when tools not available."""
+        # Provide a placeholder to avoid failures in basic usage
+        class ToolCallResponse:
+            """Placeholder when tools not available."""
             def __init__(self, *args, **kwargs):
-                pass
+                self.content = kwargs.get("content", "")
+                self.tool_calls = kwargs.get("tool_calls", [])
                 
             def has_tool_calls(self) -> bool:
-                """Always returns False since tools are not available."""
-                return False
+                """Check if has tool calls."""
+                return bool(self.tool_calls)
                 
         # Store the original error for introspection
         TOOL_IMPORT_ERROR = str(e)
@@ -43,7 +43,7 @@ class GenerateResponse:
     finish_reason: Optional[str] = None
     
     # Field for tool calls
-    tool_calls: Optional["ToolCallRequest"] = None
+    tool_calls: Optional["ToolCallResponse"] = None
     
     # Field for image paths used in vision models
     image_paths: Optional[List[str]] = None
@@ -53,18 +53,12 @@ class GenerateResponse:
         if self.tool_calls is None:
             return False
         
-        # Handle both direct and nested tool_calls structures
+        # Use the has_tool_calls method if available
         if hasattr(self.tool_calls, 'has_tool_calls'):
-            # Use the has_tool_calls method if available (ToolCallRequest object)
             return self.tool_calls.has_tool_calls()
-        elif hasattr(self.tool_calls, 'tool_calls'):
-            # Old format compatibility: tool_calls has a tool_calls attribute
-            return bool(getattr(self.tool_calls, 'tool_calls', []))
-        elif isinstance(self.tool_calls, list):
-            # Direct list of tool calls
-            return bool(self.tool_calls)
         
-        return False
+        # Fallback for other structures
+        return bool(getattr(self.tool_calls, 'tool_calls', []))
 
 
 @dataclass
@@ -91,4 +85,4 @@ class Message:
         if self.tool_results is not None:
             message_dict["tool_results"] = self.tool_results
             
-        return message_dict 
+        return message_dict

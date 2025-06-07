@@ -1,98 +1,167 @@
 # Assets Component
 
 ## Overview
-The assets folder contains static data files used by AbstractLLM, currently housing the `model_capabilities.json` file which serves as a curated database of model-specific capabilities across different providers.
+The assets folder contains critical configuration data for AbstractLLM's architecture detection and model capability system. It houses two essential JSON files that enable the framework to understand how to communicate with different model architectures and what capabilities specific models possess.
 
 ## Code Quality Assessment
-**Rating: 7/10**
+**Rating: 8.5/10**
 
 ### Strengths
-- Clean JSON structure with clear categorization
-- Comprehensive coverage of popular models
-- Easy to update and maintain
+- Clean separation between architecture formats (HOW) and model capabilities (WHAT)
+- Comprehensive coverage of major model families and architectures
+- Well-structured JSON with clear field definitions
+- Easy to update and extend for new models
 - Version-control friendly format
+- Detailed capability specifications from official sources
 
 ### Issues
-- No schema validation for the JSON structure
-- No documentation on how to add new models
-- Mixing of model families and specific versions (inconsistent granularity)
-- No automated validation against actual model capabilities
+- No schema validation for the JSON structures
+- Some redundancy between the two JSON files
+- Missing automated validation against actual model behavior
+- Could benefit from a contribution guide
 
 ## Component Mindmap
 ```
-model_capabilities.json
-├── Capability Categories
-│   ├── tool_calling (38 models)
-│   │   ├── Open source: llama, mistral, qwen, phi4, granite
-│   │   └── Proprietary: claude-3*, gpt-4*
+Assets/
+├── architecture_formats.json
+│   ├── Architecture Definitions (HOW to communicate)
+│   │   ├── llama (Llama family message format)
+│   │   ├── qwen (ChatML-based format)
+│   │   ├── mistral (Instruction format)
+│   │   ├── phi (Microsoft's format)
+│   │   ├── claude (Human/Assistant format)
+│   │   ├── gpt (OpenAI chat format)
+│   │   └── generic (Fallback format)
 │   │
-│   ├── structured_output (17 models)
-│   │   └── Subset of tool-calling models
-│   │
-│   ├── reasoning (8 models)
-│   │   ├── deepseek-r1
-│   │   ├── qwq, cogito
-│   │   └── claude-3-opus, claude-3-*-sonnet
-│   │
-│   ├── vision (14 models)
-│   │   ├── Specialized: llama3.2-vision, qwen2-vl, paligemma
-│   │   └── Multimodal: claude-3*, molmo, cogvlm
-│   │
-│   └── audio (2 models)
-│       ├── whisper
-│       └── gemini-audio
+│   └── Each Architecture Contains:
+│       ├── patterns: Model name patterns to match
+│       ├── message_format: Format type identifier
+│       ├── prefixes/suffixes: Role-specific tags
+│       └── tool_format: How tools are formatted
 │
-└── Usage Pattern
-    └── Loaded by utils/model_capabilities.py
-        └── Used by providers for capability detection
+└── model_capabilities.json
+    ├── Model-Specific Capabilities (WHAT models can do)
+    │   ├── OpenAI Models (gpt-4*, o1, o3)
+    │   ├── Anthropic Models (claude-3*)
+    │   ├── Meta Models (llama-3*, llama-4)
+    │   ├── Alibaba Models (qwen2*, qwen3*)
+    │   ├── Microsoft Models (phi-*)
+    │   ├── Mistral Models (mistral-*, mixtral-*)
+    │   └── Google Models (gemma*, paligemma)
+    │
+    └── Capability Fields:
+        ├── context_length: Input token limit
+        ├── max_output_tokens: Output token limit
+        ├── tool_support: native/prompted/none
+        ├── structured_output: native/prompted/none
+        ├── parallel_tools: Boolean
+        ├── max_tools: Integer (-1 for unlimited)
+        ├── vision_support: Boolean
+        ├── image_resolutions: Array of supported sizes
+        ├── audio_support: Boolean
+        └── source: Data source reference
 ```
 
-## Data Structure
+## Data Structures
+
+### architecture_formats.json
 ```json
 {
-  "capability_name": [
-    "model_pattern_1",
-    "model_pattern_2",
-    ...
-  ]
+  "architectures": {
+    "architecture_name": {
+      "patterns": ["model_pattern1", "model_pattern2"],
+      "message_format": "format_type",
+      "system_prefix": "<tag>",
+      "user_prefix": "<tag>",
+      "assistant_prefix": "<tag>",
+      "tool_format": "json|xml|pythonic"
+    }
+  }
+}
+```
+
+### model_capabilities.json
+```json
+{
+  "models": {
+    "model_name": {
+      "context_length": 128000,
+      "max_output_tokens": 4096,
+      "tool_support": "native|prompted|none",
+      "structured_output": "native|prompted|none",
+      "parallel_tools": true,
+      "max_tools": -1,
+      "vision_support": false,
+      "audio_support": false,
+      "source": "Official docs"
+    }
+  },
+  "default_capabilities": { ... }
 }
 ```
 
 ## Integration Points
-- **Primary Consumer**: `utils/model_capabilities.py`
-- **Usage**: Supplements architecture-based capability detection
-- **Providers**: All providers query this for model-specific overrides
+- **Primary Consumer**: `architectures/detection.py`
+- **Architecture Detection**: Maps model names to communication formats
+- **Capability Lookup**: Provides detailed model specifications
+- **Provider Usage**: All providers use this for capability queries
+- **Session Management**: Informs tool availability and context limits
 
 ## Model Coverage Analysis
-- **Most Capable**: Claude-3 family (tool_calling, structured_output, reasoning, vision)
-- **Tool Specialists**: llama3.x, mistral, qwen, granite families
-- **Vision Specialists**: qwen2-vl, llava, moondream, paligemma
-- **Reasoning Specialists**: deepseek-r1, qwq, cogito
-- **Audio**: Limited to whisper and gemini-audio
+
+### By Architecture
+- **llama**: Llama 3.x, 4, DeepSeek, Yi models
+- **qwen**: Qwen 2.5, 3, and vision variants
+- **mistral**: Mistral 7B through Large, Mixtral MoE
+- **phi**: Phi-2 through Phi-4, including vision
+- **claude**: All Claude 3 variants
+- **gpt**: GPT-3.5, 4, o1, o3 families
+- **gemma**: Gemma, CodeGemma, PaliGemma
+
+### By Capabilities
+- **Native Tools**: GPT-4*, Claude-3*, Llama-3.1+, Qwen3, Mistral Large
+- **Vision Support**: GPT-4o, Claude-3*, Llama-3.2-vision, Qwen-VL, PaliGemma
+- **Audio Support**: GPT-4o, Llama-4 (multimodal)
+- **Extended Context**: Claude (200K), GPT-4 (128K), Llama (128K)
+- **Large Output**: GPT-4o-long (64K), Claude-3.7 (128K), Mistral Large (128K)
 
 ## Recommendations
-1. **Add JSON Schema**: Create schema validation for the structure
+1. **Add JSON Schema**: Create schema validation for both JSON files
 2. **Version the data**: Add version field for tracking changes
-3. **Document patterns**: Explain model naming conventions
+3. **Unify patterns**: Consider merging pattern definitions
 4. **Automate validation**: Script to verify capabilities against providers
-5. **Add metadata**: Include last updated date, sources
+5. **Add embeddings models**: Expand coverage for RAG use cases
+6. **Document sources**: Link to official documentation for each model
 
 ## Technical Debt
-- No clear distinction between model families and specific versions
+- Some pattern duplication between the two JSON files
 - Manual maintenance without validation tooling
-- No capability inheritance system
-- Missing many newer models
+- No capability inheritance for model families
+- Missing dedicated embeddings model section
+- Could benefit from automated updates from model cards
 
 ## Maintenance Guidelines
-When adding new models:
-1. Use consistent naming (family vs specific version)
-2. Verify capability with actual testing
-3. Add to most specific category that applies
-4. Document the source of capability information
+
+### Adding a New Architecture
+1. Add entry to `architecture_formats.json` with:
+   - Unique patterns that identify the architecture
+   - Message format specification (prefixes/suffixes)
+   - Tool format type (json/xml/pythonic)
+2. Test with example models using that architecture
+
+### Adding a New Model
+1. Add entry to `model_capabilities.json` with:
+   - Exact model name as key
+   - All capability fields (use defaults if unknown)
+   - Source citation for the information
+2. Verify capabilities with actual testing when possible
+3. Consider if architecture detection needs updating
 
 ## Future Enhancements
-1. Move to a more structured format (YAML with schemas)
-2. Add capability versions (e.g., tool_calling_v1, tool_calling_v2)
-3. Include capability parameters (e.g., max tools, vision resolution)
-4. Automated capability discovery from model cards
-5. Provider-specific capability overrides
+1. **Schema validation**: JSON Schema for both files
+2. **Capability evolution**: Track capability versions over time
+3. **Embeddings section**: Dedicated configuration for embedding models
+4. **Auto-discovery**: Parse HuggingFace model cards automatically
+5. **Provider overrides**: Allow providers to override capabilities
+6. **Performance data**: Add latency/throughput benchmarks
+7. **Cost information**: Include pricing data for commercial models
