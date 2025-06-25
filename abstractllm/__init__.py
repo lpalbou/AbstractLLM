@@ -9,7 +9,7 @@ from abstractllm.interface import (
     ModelParameter,
     ModelCapability
 )
-from abstractllm.factory import create_llm
+from abstractllm.factory import create_llm, create_session
 from abstractllm.session import (
     Session,
     SessionManager
@@ -18,6 +18,7 @@ from abstractllm.utils.logging import configure_logging
 
 __all__ = [
     "create_llm",
+    "create_session",
     "AbstractLLMInterface",
     "ModelParameter",
     "ModelCapability",

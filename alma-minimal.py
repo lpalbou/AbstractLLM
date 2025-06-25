@@ -1,36 +1,12 @@
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 ALMA Minimal - A simple command-line interface for AbstractLLM
-
 This script provides a minimal implementation of the ALMA agent using AbstractLLM.
 It supports text generation and tool usage in a simple REPL interface.
-
-# Adding More Tools
-To add more tools from the common_tools module, simply import and add them:
-
-from abstractllm.tools.common_tools import (
-    list_files, search_files, write_file, update_file,
-    execute_command, search_internet, fetch_url, 
-    fetch_and_parse_html, ask_user_multiple_choice
-)
-
-Then add them to the tools list:
-    session = Session(
-        system_prompt="...",
-        provider=provider,
-        tools=[read_file, list_files, search_files, write_file, ...]  # Add more tools here
-    )
-
-# Command Line Usage
-Examples:
-    python alma-minimal.py --provider mlx --model "mlx-community/Qwen3-30B-A3B-4bit"
-    python alma-minimal.py --provider anthropic --model "claude-3-5-haiku-20241022"
-    python alma-minimal.py --prompt "List all Python files in the current directory"
-    python alma-minimal.py --provider mlx --model "mlx-community/Qwen3-30B-A3B-4bit" --prompt "Read the README.md file"
 """
 
-from abstractllm import create_llm
-from abstractllm.session import Session
+from abstractllm import create_llm, create_session
 from abstractllm.utils.logging import configure_logging, log_step
 from abstractllm.utils.formatting import (
     format_response_display, format_stats_display, format_last_interactions,
@@ -38,9 +14,7 @@ from abstractllm.utils.formatting import (
     format_provider_switch_result, format_provider_info
 )
 from abstractllm.tools.common_tools import (
-    read_file, list_files, search_files,
-    get_system_info, get_performance_stats, get_running_processes,
-    get_network_connections, get_disk_partitions, monitor_resource_usage
+    read_file, list_files, search_files
 )
 import os
 import logging
@@ -56,42 +30,6 @@ GREY_ITALIC = '\033[3m\033[90m'  # Grey italic
 RESET = '\033[0m'                # Reset formatting
 
 
-# Define available tools globally for access in all functions
-AVAILABLE_TOOLS = [
-    read_file,
-    list_files,
-    search_files,
-    get_system_info,
-    get_performance_stats
-]
-
-def start_session(provider_name, model_name, max_tokens = 4096):
-    provider = create_llm(provider_name, 
-                         model=model_name,
-                         max_tokens=max_tokens)
-
-    print(f"Connected to {provider_name} provider with model {model_name}")
-
-    # Create session with the provider and tool functions
-    # Use the standard Session class - no need to override it
-    
-    session = Session(
-        system_prompt="""You are a capable agent that EXECUTES tools and follows instructions directly. When a user asks you to follow instructions from a document, you should READ the document and then EXECUTE the steps as written, not just summarize them.
-
-CRITICAL: When you need to perform an action, you MUST actually call the appropriate tool. Do NOT show code examples or pseudo-code. EXECUTE the tool call immediately.
-
-When following multi-step procedures:
-1. Read the instructions first if needed
-2. Execute each step that requires a tool call by CALLING the tools
-3. Continue to the next step based on the results
-4. Complete the entire procedure unless instructed otherwise
-
-You are an ACTION-TAKING agent, not just an advisor. Take action immediately when requested.""",
-        provider=provider,
-        tools=AVAILABLE_TOOLS  # Register all available tools
-    )
-    return session
-
 
 def execute_single_prompt(session, prompt: str):
     """Execute a single prompt and display the result without starting REPL."""
@@ -106,7 +44,7 @@ def execute_single_prompt(session, prompt: str):
         log_step(2, "AGENT→LLM", "Sending query to LLM with tool support enabled")
         response = session.generate(
             prompt=prompt,
-            tools=AVAILABLE_TOOLS,  # Directly pass the tool functions
+            tools=[read_file, list_files, search_files],  # Directly pass the tool functions
             max_tool_calls=25  # Limit tool calls to avoid infinite loops
         )
         
@@ -202,6 +140,7 @@ def start_repl(session):
                     
                     try:
                         # Load session - provider will be restored automatically from saved state
+                        from abstractllm.session import Session
                         new_session = Session.load(filename)
                         
                         # Transfer tools from current session to loaded session
@@ -261,7 +200,7 @@ def start_repl(session):
                 
                 else:
                     print(f"{RED_BOLD}Unknown command: {command}{RESET}")
-                    print("Available commands: /stats, /save <filename>, /load <filename>, /model [provider:model], /system [prompt], /last [count], /tools, /help, /exit")
+                    show_help()
                     continue
             
             # Generate response with tool support
@@ -272,7 +211,7 @@ def start_repl(session):
             log_step(2, "AGENT→LLM", "Sending query to LLM with tool support enabled")
             response = session.generate(
                 prompt=user_input,
-                tools=AVAILABLE_TOOLS,  # Directly pass the tool functions
+                tools=[read_file, list_files, search_files],  # Directly pass the tool functions
                 max_tool_calls=25  # Limit tool calls to avoid infinite loops
             )
             
@@ -297,7 +236,6 @@ def start_repl(session):
             traceback.print_exc()
 
 
-
 def set_logging():
     configure_logging(
         log_dir="logs", 
@@ -309,15 +247,15 @@ def set_logging():
 def show_help():
     print(f"\n{BLUE_ITALIC}💡 ALMA Session Management Help{RESET}")
     print(f"\nAvailable Commands:")
-    print(f"  /stats                  - Show session statistics")
-    print(f"  /save <filename>        - Save current session to file")
-    print(f"  /load <filename>        - Load session from file")
-    print(f"  /model [provider:model] - Show current model or switch to new model")
-    print(f"  /system [prompt]        - Show current system prompt or set new one")
-    print(f"  /last [count]           - Show last X interactions (default: 1)")
-    print(f"  /tools                  - List all available tools")
-    print(f"  /help                   - Show this help message")
-    print(f"  /exit, /quit, /q        - Exit ALMA")
+    print(f"  /stats                            - Show session statistics")
+    print(f"  /save <filename>                  - Save current session to file")
+    print(f"  /load <filename>                  - Load session from file")
+    print(f"  /model <model_name:optional>      - Show current model or switch to new model")
+    print(f"  /system <system_prompt:optional>  - Show current system prompt or set new one (optional)")
+    print(f"  /last <count:optional>            - Show last X interactions (default: 1)")
+    print(f"  /tools                            - List all available tools")
+    print(f"  /help                             - Show this help message")
+    print(f"  /exit, /quit, /q                  - Exit ALMA")
 
 
 def parse_arguments():
@@ -383,15 +321,12 @@ def main():
     # Set logging
     set_logging()
 
-    # Use command line arguments or defaults
-    provider_name = args.provider
-    model_name = args.model
-    max_tokens = args.max_tokens
+    print(f"{BLUE_ITALIC}🚀 Starting ALMA with {args.provider}:{args.model}{RESET}")
 
-    print(f"{BLUE_ITALIC}🚀 Starting ALMA with {provider_name}:{model_name}{RESET}")
-
-    # Create session
-    session = start_session(provider_name, model_name, max_tokens)
+    session = create_session(args.provider, 
+                         model=args.model,
+                         max_tokens=args.max_tokens,
+                         tools=[read_file, list_files, search_files])
 
     # If prompt is provided, execute it and exit
     if args.prompt:
@@ -406,4 +341,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main() 
+    main()

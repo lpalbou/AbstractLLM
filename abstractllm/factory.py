@@ -2,7 +2,7 @@
 Factory function for creating LLM provider instances.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Union, Callable
 import importlib
 import logging
 import platform
@@ -10,6 +10,7 @@ from abstractllm.interface import AbstractLLMInterface, ModelParameter
 import os
 import importlib.util
 from abstractllm.providers.registry import get_provider_class, get_available_providers
+from abstractllm.session import Session
 
 # Configure logger
 logger = logging.getLogger("abstractllm.factory")
@@ -182,6 +183,83 @@ def create_llm(provider: str, **config) -> AbstractLLMInterface:
             raise ValueError(
                 f"{provider} API key not provided. Use --api-key or set {env_var} environment variable."
             )
-    
+
+    # Set up logging for provider creation
+    logger.info(f"Creating provider {provider} with config: {config}")
+
     # Create provider instance with config
     return provider_class(config) 
+
+
+def create_session(provider: str, **config) -> Session :
+    """
+    Create a Session with an LLM provider instance.
+    
+    This function follows the same design pattern as create_llm, using the same configuration
+    system but creating a Session object instead of a direct provider instance.
+    
+    Args:
+        provider: The provider name ('openai', 'anthropic', 'ollama', 'huggingface', 'mlx')
+        **config: Provider and session configuration parameters, including:
+            - ModelParameter.MODEL: Model name to use
+            - ModelParameter.SYSTEM_PROMPT: System prompt for the session
+            - ModelParameter.TEMPERATURE: Temperature for generation
+            - ModelParameter.MAX_TOKENS: Maximum tokens for generation
+            - "tools": List of tools to register with the session
+            - Additional provider-specific configuration parameters
+        
+    Returns:
+        An initialized Session ready for use
+        
+    Raises:
+        ValueError: If the provider is not supported
+        ImportError: If the provider module cannot be imported
+        
+    Example:
+        ```python
+        from abstractllm.factory import create_session
+        from abstractllm.interface import ModelParameter
+        from abstractllm.tools.common_tools import list_files, read_file
+        
+        # Create a session with OpenAI
+        session = create_session(
+            provider="openai",
+            **{
+                ModelParameter.MODEL: "gpt-4",
+                ModelParameter.SYSTEM_PROMPT: "You are a helpful assistant",
+                ModelParameter.TEMPERATURE: 0.7,
+                "tools": [list_files, read_file]
+            }
+        )
+        
+        # Generate a response
+        response = session.generate("What files are in the current directory?")
+        ```
+    """
+    # Import here to avoid circular imports
+    from abstractllm.interface import ModelParameter
+    
+    # Extract session-specific parameters from config
+    system_prompt = config.pop(ModelParameter.SYSTEM_PROMPT, None)
+    if system_prompt is None:
+        # Also check for string key for backward compatibility
+        system_prompt = config.pop("system_prompt", None)
+        
+    # Extract tools parameter
+    tools = config.pop("tools", None)
+    
+    # Create provider metadata dictionary
+    provider_metadata = config.pop("metadata", {})
+    
+    # Create the LLM provider with remaining config
+    provider_instance = create_llm(provider, **config)
+    
+    # Create the session
+    session = Session(
+        system_prompt=system_prompt,
+        provider=provider_instance,
+        metadata=provider_metadata,
+        tools=tools
+    )
+    
+    return session

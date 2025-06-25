@@ -14,7 +14,6 @@ import uuid
 import logging
 
 from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability
-from abstractllm.factory import create_llm
 from abstractllm.exceptions import UnsupportedFeatureError
 from abstractllm.enums import MessageRole
 
@@ -211,6 +210,7 @@ class Session:
         self._provider: Optional[AbstractLLMInterface] = None
         if provider is not None:
             if isinstance(provider, str):
+                from abstractllm import create_llm
                 self._provider = create_llm(provider, **(provider_config or {}))
             else:
                 self._provider = provider
@@ -240,6 +240,7 @@ class Session:
         if value is None:
             self._provider = None
         elif isinstance(value, str):
+            from abstractllm import create_llm
             self._provider = create_llm(value)
         else:
             self._provider = value
@@ -582,9 +583,7 @@ class Session:
             saved_config = saved_provider_state.get("provider_config", {})
             
             if saved_provider_name and saved_model_name:
-                try:
-                    from abstractllm import create_llm
-                    
+                try:                    
                     # Convert string keys back to ModelParameter enums where applicable
                     restored_config = {}
                     for key, value in saved_config.items():
@@ -600,6 +599,7 @@ class Session:
                     # Add the model to config
                     restored_config[ModelParameter.MODEL] = saved_model_name
                     
+                    from abstractllm import create_llm
                     provider_to_use = create_llm(saved_provider_name, **restored_config)
                     config_to_use = restored_config
                     
@@ -673,6 +673,7 @@ class Session:
         """
         if provider is not None:
             if isinstance(provider, str):
+                from abstractllm import create_llm
                 return create_llm(provider)
             return provider
         
@@ -1862,7 +1863,7 @@ class Session:
             # Add tools to session temporarily if not already there
             for tool in tools:
                 if tool not in self.tools:
-                    self.tools.append(tool)
+                    self.add_tool(tool)  # Use add_tool to ensure proper conversion
                     
             use_tools = True
             logger.info(f"Tool support enabled with {len(tools)} provided tools")
