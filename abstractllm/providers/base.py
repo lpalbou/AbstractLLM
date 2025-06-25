@@ -436,8 +436,12 @@ class BaseProvider(AbstractLLMInterface):
             
         logger.debug(f"Response preview: {content[:200]}..." if len(content) > 200 else f"Response: {content}")
         
+        # Remove model from kwargs to avoid duplicate parameter error
+        log_kwargs = kwargs.copy()
+        log_kwargs.pop("model", None)
+        
         # Log to file with additional metadata
-        log_response(self.provider_name, content, model=model, **kwargs)
+        log_response(self.provider_name, content, model=model, **log_kwargs)
     
     def _process_response(self, 
                          response: Any, 

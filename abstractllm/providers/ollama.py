@@ -271,6 +271,37 @@ class OllamaProvider(BaseProvider):
                     user_message["images"] = images
                     
                 messages.append(user_message)
+            
+            # OLLAMA FIX: Handle consecutive assistant messages properly
+            # The issue is that tool calls create two consecutive assistant messages:
+            # 1. Assistant message with tool call
+            # 2. Assistant message with tool output (formatted as "TOOL OUTPUT [tool_name]: ...")
+            # 
+            # The model gets confused by consecutive assistant messages. The fix is to convert
+            # tool output messages to user messages, since tool outputs are information
+            # being provided TO the assistant, not FROM the assistant.
+            fixed_messages = []
+            for msg in messages:
+                if (fixed_messages and 
+                    fixed_messages[-1]["role"] == "assistant" and 
+                    msg["role"] == "assistant" and
+                    msg["content"].startswith("TOOL OUTPUT [")):
+                    # Convert tool output to user message
+                    tool_output_msg = {
+                        "role": "user",
+                        "content": f"Tool result: {msg['content'][msg['content'].find(']:') + 2:].strip()}"
+                    }
+                    fixed_messages.append(tool_output_msg)
+                    logger.info(f"[OLLAMA FIX] Converted tool output to user message: {len(tool_output_msg['content'])} chars")
+                else:
+                    fixed_messages.append(msg)
+            
+            # Log the final message structure for debugging
+            logger.debug(f"[OLLAMA FIX] Final message count: {len(fixed_messages)}")
+            for i, msg in enumerate(fixed_messages):
+                logger.debug(f"[OLLAMA FIX] Message {i}: role={msg['role']}, content_length={len(msg['content'])}")
+            
+            messages = fixed_messages
         else:
             # Create new messages from prompt/system_prompt
             messages = []
@@ -469,8 +500,37 @@ class OllamaProvider(BaseProvider):
             # Use base class method to prepare tool context
             enhanced_system_prompt, tool_defs, tool_mode = self._prepare_tool_context(tools, system_prompt)
             
+            # Ollama-specific override: Some models claim native tool support but work better with prompted mode
+            # This is because while the model supports native tools, Ollama's implementation may not be optimal
+            model_name = self.config_manager.get_param(ModelParameter.MODEL, "").lower()
+            
+            # List of models that should use prompted mode despite claiming native support
+            force_prompted_models = [
+                "qwen3:4b", "qwen3-4b", "qwen3:7b", "qwen3-7b",  # Qwen3 models
+                "qwen2.5:7b", "qwen2.5-7b", "qwen2.5:14b", "qwen2.5-14b",  # Some Qwen2.5 models
+            ]
+            
+            if tool_mode == "native" and any(model_pattern in model_name for model_pattern in force_prompted_models):
+                logger.info(f"[OLLAMA OVERRIDE] Model {model_name} claims native tool support but forcing prompted mode for better compatibility")
+                # Re-prepare with forced prompted mode
+                handler = self._get_tool_handler()
+                if handler and handler.supports_prompted:
+                    # Force prompted mode by preparing tools for prompted format
+                    processed_tools = self._process_tools(tools)
+                    tool_prompt = handler.format_tools_prompt(processed_tools)
+                    
+                    # Combine with existing system prompt
+                    if system_prompt:
+                        enhanced_system_prompt = f"{system_prompt}\n\n{tool_prompt}"
+                    else:
+                        enhanced_system_prompt = tool_prompt
+                    
+                    tool_mode = "prompted"
+                    tool_defs = None  # No native tool definitions needed for prompted mode
+                    logger.info(f"[OLLAMA OVERRIDE] Successfully switched to prompted mode, enhanced system prompt length: {len(enhanced_system_prompt)}")
+            
             # Log the tool preparation results
-            logger.info(f"Tool context prepared: mode={tool_mode}, tools={len(tool_defs) if tool_defs else 0}")
+            logger.info(f"Tool context prepared: mode={tool_mode}, tools={len(tool_defs) if tool_defs else len(tools)}")
             if tool_mode == "prompted":
                 logger.info(f"[TOOL SETUP] Using PROMPTED mode for tools")
                 logger.info(f"[TOOL SETUP] Enhanced system prompt length: {len(enhanced_system_prompt) if enhanced_system_prompt else 0}")
@@ -651,19 +711,23 @@ class OllamaProvider(BaseProvider):
                     logger.error(f"Unexpected response format: {data}")
                     raise ValueError("Unexpected response format from Ollama API")
                 
-                # Extract tool calls using the handler
-                handler = self._get_tool_handler()
+                # Extract tool calls using the appropriate method
                 tool_response = None
                 
-                if handler and content:
-                    # First try native parsing if in native mode
-                    if tool_mode == "native" and formatted_tools and self._check_for_tool_calls(data):
-                        logger.debug(f"Parsing native tool response: {data}")
-                        tool_response = handler.parse_response(data, mode="native")
-                    
-                    # If no tool calls found (or not in native mode), try prompted parsing
-                    # This handles cases where models output tool calls in text even when using native API
-                    if not tool_response or not tool_response.has_tool_calls():
+                # First try native tool call extraction if in native mode
+                if tool_mode == "native" and formatted_tools and self._check_for_tool_calls(data):
+                    logger.debug(f"Parsing native tool response: {data}")
+                    tool_response = self._extract_tool_calls(data)
+                    if tool_response and tool_response.has_tool_calls():
+                        logger.info(f"[NATIVE TOOL PARSING] SUCCESS: Found {len(tool_response.tool_calls)} tool calls")
+                        for tc in tool_response.tool_calls:
+                            logger.info(f"[NATIVE TOOL PARSING] Tool call: {tc.name}({tc.arguments})")
+                
+                # If no tool calls found in native mode, try prompted parsing
+                # This handles cases where models output tool calls in text even when using native API
+                if not tool_response or not tool_response.has_tool_calls():
+                    handler = self._get_tool_handler()
+                    if handler and content:
                         logger.info(f"[TOOL PARSING] Checking content for prompted tool calls")
                         logger.debug(f"[TOOL PARSING] Full content to parse: {content}")
                         prompted_response = handler.parse_response(content, mode="prompted")
@@ -674,9 +738,8 @@ class OllamaProvider(BaseProvider):
                             tool_response = prompted_response
                         else:
                             logger.info("[TOOL PARSING] NO TOOL CALLS FOUND in content")
-                else:
-                    logger.debug(f"No tool parsing: handler={bool(handler)}, has_content={bool(content)}")
-                    tool_response = None
+                    else:
+                        logger.debug(f"No prompted tool parsing: handler={bool(handler)}, has_content={bool(content)}")
                 
                 # Return appropriate response
                 if tool_response and tool_response.has_tool_calls():
@@ -819,8 +882,37 @@ class OllamaProvider(BaseProvider):
             # Use base class method to prepare tool context
             enhanced_system_prompt, tool_defs, tool_mode = self._prepare_tool_context(tools, system_prompt)
             
+            # Ollama-specific override: Some models claim native tool support but work better with prompted mode
+            # This is because while the model supports native tools, Ollama's implementation may not be optimal
+            model_name = self.config_manager.get_param(ModelParameter.MODEL, "").lower()
+            
+            # List of models that should use prompted mode despite claiming native support
+            force_prompted_models = [
+                "qwen3:4b", "qwen3-4b", "qwen3:7b", "qwen3-7b",  # Qwen3 models
+                "qwen2.5:7b", "qwen2.5-7b", "qwen2.5:14b", "qwen2.5-14b",  # Some Qwen2.5 models
+            ]
+            
+            if tool_mode == "native" and any(model_pattern in model_name for model_pattern in force_prompted_models):
+                logger.info(f"[OLLAMA OVERRIDE] Model {model_name} claims native tool support but forcing prompted mode for better compatibility")
+                # Re-prepare with forced prompted mode
+                handler = self._get_tool_handler()
+                if handler and handler.supports_prompted:
+                    # Force prompted mode by preparing tools for prompted format
+                    processed_tools = self._process_tools(tools)
+                    tool_prompt = handler.format_tools_prompt(processed_tools)
+                    
+                    # Combine with existing system prompt
+                    if system_prompt:
+                        enhanced_system_prompt = f"{system_prompt}\n\n{tool_prompt}"
+                    else:
+                        enhanced_system_prompt = tool_prompt
+                    
+                    tool_mode = "prompted"
+                    tool_defs = None  # No native tool definitions needed for prompted mode
+                    logger.info(f"[OLLAMA OVERRIDE] Successfully switched to prompted mode, enhanced system prompt length: {len(enhanced_system_prompt)}")
+            
             # Log the tool preparation results
-            logger.info(f"Tool context prepared: mode={tool_mode}, tools={len(tool_defs) if tool_defs else 0}")
+            logger.info(f"Tool context prepared: mode={tool_mode}, tools={len(tool_defs) if tool_defs else len(tools)}")
             if tool_mode == "prompted":
                 logger.info(f"[TOOL SETUP] Using PROMPTED mode for tools")
                 logger.info(f"[TOOL SETUP] Enhanced system prompt length: {len(enhanced_system_prompt) if enhanced_system_prompt else 0}")
