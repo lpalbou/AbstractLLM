@@ -465,19 +465,20 @@ class Session:
                 
                 # Add provider-specific handling here as needed
                 if provider_name == "openai":
-                    response = await llm.generate_async(messages=messages, stream=stream, **kwargs)
+                    response = await llm.generate_async(messages=messages, stream=stream, tools=self.tools, **kwargs)
                 elif provider_name == "anthropic":
-                    response = await llm.generate_async(messages=messages, stream=stream, **kwargs)
+                    response = await llm.generate_async(messages=messages, stream=stream, tools=self.tools, **kwargs)
                 else:
                     # Default approach for other providers that support chat
-                    response = await llm.generate_async(messages=messages, stream=stream, **kwargs)
+                    response = await llm.generate_async(messages=messages, stream=stream, tools=self.tools, **kwargs)
             else:
                 # For providers that don't support chat history, format a prompt
                 formatted_prompt = self.get_formatted_prompt()
                 response = await llm.generate_async(
                     formatted_prompt, 
                     system_prompt=self.system_prompt,
-                    stream=stream, 
+                    stream=stream,
+                    tools=self.tools,  # Pass tools to provider
                     **kwargs
                 )
             
@@ -1148,6 +1149,7 @@ class Session:
     def generate_with_tools(
         self,
         tool_functions: Optional[Dict[str, Callable[..., Any]]] = None,
+        tools: Optional[List[Union[Dict[str, Any], Callable]]] = None,  # Added for consistency
         prompt: Optional[str] = None,
         provider: Optional[Union[str, AbstractLLMInterface]] = None,
         temperature: Optional[float] = None,
@@ -1240,7 +1242,7 @@ class Session:
             top_p=top_p,
             frequency_penalty=frequency_penalty,
             presence_penalty=presence_penalty,
-            tools=self.tools,
+            tools=tools if tools is not None else self.tools,  # Use provided tools if available
             messages=provider_messages,
             files=files,
             **kwargs
@@ -1334,7 +1336,7 @@ class Session:
                 top_p=top_p,
                 frequency_penalty=frequency_penalty,
                 presence_penalty=presence_penalty,
-                tools=self.tools,
+                tools=tools if tools is not None else self.tools,  # Use provided tools if available
                 messages=updated_provider_messages,
                 files=files,
                 **kwargs
@@ -1378,7 +1380,7 @@ class Session:
                         top_p=top_p,
                         frequency_penalty=frequency_penalty,
                         presence_penalty=presence_penalty,
-                        tools=self.tools,
+                        tools=tools if tools is not None else self.tools,  # Use provided tools if available
                         messages=updated_provider_messages,
                         files=files,
                         **kwargs
@@ -1436,6 +1438,7 @@ class Session:
     def generate_with_tools_streaming(
         self,
         tool_functions: Optional[Dict[str, Callable[..., Any]]] = None,
+        tools: Optional[List[Union[Dict[str, Any], Callable]]] = None,  # Added for consistency
         prompt: Optional[str] = None,
         model: Optional[str] = None,
         provider: Optional[Union[str, AbstractLLMInterface]] = None,
@@ -1533,21 +1536,21 @@ class Session:
             )
             logger.debug(f"Session: Using initial phase system prompt for streaming")
         
-        # Start streaming generation
-        stream = provider_instance.generate(
-            prompt=original_prompt,  # Use original prompt consistently
-            system_prompt=current_system_prompt,
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
-            frequency_penalty=frequency_penalty,
-            presence_penalty=presence_penalty,
-            tools=self.tools,
-            messages=provider_messages,
-            stream=True,
-            **kwargs
-        )
+                    # Start streaming generation
+            stream = provider_instance.generate(
+                prompt=original_prompt,  # Use original prompt consistently
+                system_prompt=current_system_prompt,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                tools=tools if tools is not None else self.tools,  # Use provided tools if available
+                messages=provider_messages,
+                stream=True,
+                **kwargs
+            )
         
         # Process the stream chunks one by one
         for chunk in stream:
@@ -1677,7 +1680,7 @@ class Session:
                 top_p=top_p,
                 frequency_penalty=frequency_penalty,
                 presence_penalty=presence_penalty,
-                tools=self.tools,
+                tools=tools if tools is not None else self.tools,  # Use provided tools if available
                 messages=updated_provider_messages,
                 stream=True,
                 **kwargs
@@ -1790,6 +1793,7 @@ class Session:
         frequency_penalty: Optional[float] = None,
         presence_penalty: Optional[float] = None,
         tool_functions: Optional[Dict[str, Callable[..., Any]]] = None,
+        tools: Optional[List[Union[Dict[str, Any], Callable]]] = None,  # Added for consistency
         max_tool_calls: int = 10,
         adjust_system_prompt: bool = True,
         stream: bool = False,
@@ -1834,7 +1838,35 @@ class Session:
         
         # Determine if we should use tool functionality
         use_tools = False
-        if tool_functions is not None or self.tools:
+        
+        # Handle both tools and tool_functions parameters for consistency
+        if tools is not None:
+            # If tools parameter is provided, register them temporarily
+            if not TOOLS_AVAILABLE:
+                raise ValueError(TOOLS_ERROR_MESSAGE)
+            
+            # Create tool_functions from provided tools if needed
+            if tool_functions is None and tools:
+                tool_functions = {}
+                for tool in tools:
+                    if callable(tool):
+                        tool_functions[tool.__name__] = tool
+                    elif isinstance(tool, dict) and "name" in tool:
+                        # For dictionary tools, we need a callable implementation
+                        # This will be handled by _create_tool_functions_dict
+                        pass
+                    elif hasattr(tool, "name"):
+                        # For ToolDefinition objects
+                        tool_functions[tool.name] = tool
+            
+            # Add tools to session temporarily if not already there
+            for tool in tools:
+                if tool not in self.tools:
+                    self.tools.append(tool)
+                    
+            use_tools = True
+            logger.info(f"Tool support enabled with {len(tools)} provided tools")
+        elif tool_functions is not None or self.tools:
             if not TOOLS_AVAILABLE:
                 raise ValueError(TOOLS_ERROR_MESSAGE)
             use_tools = True
@@ -1845,6 +1877,7 @@ class Session:
             return self.generate_with_tools_streaming(
                 prompt=prompt,
                 tool_functions=tool_functions,
+                tools=tools,  # Pass tools parameter
                 temperature=temperature,
                 max_tokens=max_tokens,
                 top_p=top_p,
@@ -1877,6 +1910,7 @@ class Session:
                 frequency_penalty=frequency_penalty,
                 presence_penalty=presence_penalty,
                 stream=True,
+                tools=tools if tools is not None else self.tools,  # Pass tools to provider
                 files=files,
                 **kwargs
             )
@@ -1915,6 +1949,7 @@ class Session:
             return self.generate_with_tools(
                 prompt=prompt,
                 tool_functions=tool_functions,
+                tools=tools,  # Pass tools parameter
                 temperature=temperature,
                 max_tokens=max_tokens,
                 top_p=top_p,
@@ -1947,6 +1982,7 @@ class Session:
             top_p=top_p,
             frequency_penalty=frequency_penalty,
             presence_penalty=presence_penalty,
+            tools=tools if tools is not None else self.tools,  # Pass tools to provider
             files=files,
             **kwargs
         )

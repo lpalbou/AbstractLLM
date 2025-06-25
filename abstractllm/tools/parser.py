@@ -66,7 +66,11 @@ def detect_tool_calls(response: str, model_name: Optional[str] = None) -> bool:
             "<|tool_call|>" in response,
             "<function_call" in response,
             "<tool_call>" in response,
-            _has_json_tool_pattern(response)
+            _has_json_tool_pattern(response),
+            # Also check for Python code blocks with tool function calls
+            re.search(r'```(?:python|json)?\s*\n.*?list_files\(', response, re.DOTALL) is not None,
+            re.search(r'```(?:python|json)?\s*\n.*?read_file\(', response, re.DOTALL) is not None,
+            re.search(r'```(?:python|json)?\s*\n.*?search_files\(', response, re.DOTALL) is not None
         ])
 
 
@@ -227,6 +231,41 @@ def _parse_special_token(response: str) -> List[ToolCall]:
         if not overlaps:
             all_matches.append((match.start(), match.end(), match.group(1).strip()))
     
+    # Strategy 3: Look for Python code blocks that might contain JSON-like tool calls
+    # This is for models that misunderstand the format but still try to make tool calls
+    pattern_code_block = r'```(?:python|json)?\s*\n.*?list_files\(([^)]*)\).*?\n```'
+    for match in re.finditer(pattern_code_block, response, re.DOTALL):
+        # Extract arguments from function call
+        args_str = match.group(1).strip()
+        arguments = {}
+        
+        # Parse simple keyword arguments if any
+        if args_str:
+            arg_pattern = r'(\w+)\s*=\s*([^,]+)'
+            for arg_match in re.finditer(arg_pattern, args_str):
+                key = arg_match.group(1)
+                value = arg_match.group(2).strip()
+                
+                # Parse value
+                if value.startswith('"') and value.endswith('"'):
+                    value = value[1:-1]
+                elif value.startswith("'") and value.endswith("'"):
+                    value = value[1:-1]
+                elif value.lower() == 'true':
+                    value = True
+                elif value.lower() == 'false':
+                    value = False
+                elif value.isdigit():
+                    value = int(value)
+                
+                arguments[key] = value
+        
+        # Create a tool call for list_files
+        tool_calls.append(ToolCall(
+            name="list_files",
+            arguments=arguments
+        ))
+    
     # Sort by position and parse each match
     all_matches.sort(key=lambda x: x[0])
     for _, _, json_str in all_matches:
@@ -346,11 +385,53 @@ def _parse_raw_json(response: str) -> List[ToolCall]:
 
 def _parse_any_format(response: str) -> List[ToolCall]:
     """Try all parsing formats."""
+    # First check for Python code blocks with common tool names
+    tool_calls = []
+    
+    # Look for Python code blocks with list_files calls
+    list_files_pattern = r'```(?:python|json)?\s*\n.*?list_files\(([^)]*)\).*?\n```'
+    for match in re.finditer(list_files_pattern, response, re.DOTALL):
+        args_str = match.group(1).strip()
+        arguments = {}
+        
+        # Parse simple keyword arguments if any
+        if args_str:
+            arg_pattern = r'(\w+)\s*=\s*([^,]+)'
+            for arg_match in re.finditer(arg_pattern, args_str):
+                key = arg_match.group(1)
+                value = arg_match.group(2).strip()
+                
+                # Parse value
+                if value.startswith('"') and value.endswith('"'):
+                    value = value[1:-1]
+                elif value.startswith("'") and value.endswith("'"):
+                    value = value[1:-1]
+                elif value.lower() == 'true':
+                    value = True
+                elif value.lower() == 'false':
+                    value = False
+                elif value.isdigit():
+                    value = int(value)
+                
+                arguments[key] = value
+        
+        # Create a tool call for list_files
+        tool_calls.append(ToolCall(
+            name="list_files",
+            arguments=arguments
+        ))
+    
+    # If we found tool calls in code blocks, return them
+    if tool_calls:
+        return tool_calls
+    
+    # Otherwise try all standard parsers
     for parser in [_parse_tool_code, _parse_special_token, 
                    _parse_function_call, _parse_xml_wrapped, _parse_raw_json]:
         tool_calls = parser(response)
         if tool_calls:
             return tool_calls
+    
     return []
 
 
@@ -394,9 +475,17 @@ def _format_qwen_style(tools: List[ToolDefinition]) -> str:
 Available tools:
 {json.dumps(tool_list, indent=2)}
 
+IMPORTANT: When you need to use a tool, you MUST use the exact format below. DO NOT use Python code blocks or any other format.
+
 To use a tool:
 <|tool_call|>
-{{"name": "tool_name", "arguments": {{"param": "value"}}}}"""
+{{"name": "tool_name", "arguments": {{"param": "value"}}}}
+</|tool_call|>
+
+For example, to list files in the current directory:
+<|tool_call|>
+{{"name": "list_files", "arguments": {{}}}}
+</|tool_call|>"""
 
 
 def _format_llama_style(tools: List[ToolDefinition]) -> str:

@@ -1,7 +1,9 @@
-#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Minimal ALMA (AbstractLLM Agent) implementation with file reading capability.
-Uses the simplest approach to tool calling with an interactive REPL.
+ALMA Minimal - A simple command-line interface for AbstractLLM
+
+This script provides a minimal implementation of the ALMA agent using AbstractLLM.
+It supports text generation and tool usage in a simple REPL interface.
 
 # Adding More Tools
 To add more tools from the common_tools module, simply import and add them:
@@ -36,7 +38,7 @@ from abstractllm.utils.formatting import (
     format_provider_switch_result, format_provider_info
 )
 from abstractllm.tools.common_tools import (
-    read_file, list_files,
+    read_file, list_files, search_files,
     get_system_info, get_performance_stats, get_running_processes,
     get_network_connections, get_disk_partitions, monitor_resource_usage
 )
@@ -54,15 +56,25 @@ GREY_ITALIC = '\033[3m\033[90m'  # Grey italic
 RESET = '\033[0m'                # Reset formatting
 
 
+# Define available tools globally for access in all functions
+AVAILABLE_TOOLS = [
+    read_file,
+    list_files,
+    search_files,
+    get_system_info,
+    get_performance_stats
+]
+
 def start_session(provider_name, model_name, max_tokens = 4096):
     provider = create_llm(provider_name, 
                          model=model_name,
                          max_tokens=max_tokens)
 
-    print(f"✅ Connected to {provider_name} provider with model {model_name}")
+    print(f"Connected to {provider_name} provider with model {model_name}")
 
-    # Create session with the provider and tool function
+    # Create session with the provider and tool functions
     # Use the standard Session class - no need to override it
+    
     session = Session(
         system_prompt="""You are a capable agent that EXECUTES tools and follows instructions directly. When a user asks you to follow instructions from a document, you should READ the document and then EXECUTE the steps as written, not just summarize them.
 
@@ -76,7 +88,7 @@ When following multi-step procedures:
 
 You are an ACTION-TAKING agent, not just an advisor. Take action immediately when requested.""",
         provider=provider,
-        tools=[read_file, list_files]  # Functions are automatically registered
+        tools=AVAILABLE_TOOLS  # Register all available tools
     )
     return session
 
@@ -90,10 +102,11 @@ def execute_single_prompt(session, prompt: str):
         # Log the interaction steps for debugging
         log_step(1, "USER→AGENT", f"Received query: {prompt}")
         
-        # Use the unified generate method - trust AbstractLLM to handle everything
+        # Use the unified generate method with tools parameter
         log_step(2, "AGENT→LLM", "Sending query to LLM with tool support enabled")
         response = session.generate(
             prompt=prompt,
+            tools=AVAILABLE_TOOLS,  # Directly pass the tool functions
             max_tool_calls=25  # Limit tool calls to avoid infinite loops
         )
         
@@ -255,10 +268,11 @@ def start_repl(session):
             # Log the interaction steps for debugging
             log_step(1, "USER→AGENT", f"Received query: {user_input}")
             
-            # Use the unified generate method - trust AbstractLLM to handle everything
+            # Use the unified generate method with tools parameter
             log_step(2, "AGENT→LLM", "Sending query to LLM with tool support enabled")
             response = session.generate(
                 prompt=user_input,
+                tools=AVAILABLE_TOOLS,  # Directly pass the tool functions
                 max_tool_calls=25  # Limit tool calls to avoid infinite loops
             )
             

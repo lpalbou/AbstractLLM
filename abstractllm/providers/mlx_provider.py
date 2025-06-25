@@ -1059,6 +1059,37 @@ class MLXProvider(BaseProvider):
                 if compatible_messages and compatible_messages[-1]['role'] != 'assistant':
                     formatted_prompt += "\nassistant:"
             
+            # If tools are provided, modify the formatted prompt to include explicit examples
+            if tools:
+                # Add explicit tool usage examples for MLX models
+                tools_example = """
+IMPORTANT INSTRUCTIONS FOR TOOL USAGE:
+1. When you need to use a tool, you MUST use the EXACT format below:
+<|tool_call|>
+{"name": "tool_name", "arguments": {"param1": "value1"}}
+</|tool_call|>
+
+2. DO NOT use Python code blocks or any other format.
+3. For example, to list files in the current directory:
+<|tool_call|>
+{"name": "list_files", "arguments": {}}
+</|tool_call|>
+
+4. To read a file:
+<|tool_call|>
+{"name": "read_file", "arguments": {"file_path": "example.txt"}}
+</|tool_call|>
+"""
+                # Add the examples to the formatted prompt
+                if "<|im_start|>system" in formatted_prompt:
+                    # For Qwen models, insert after the system prompt
+                    formatted_prompt = formatted_prompt.replace("<|im_end|>\n<|im_start|>user", f"{tools_example}<|im_end|>\n<|im_start|>user")
+                else:
+                    # For other models, add at the beginning
+                    formatted_prompt = f"{tools_example}\n\n{formatted_prompt}"
+                
+                logger.info("Added explicit tool usage examples to prompt")
+            
             # Log the request using shared method with all details
             generation_params_log = {}
             for key, value in generation_params.items():
@@ -1124,8 +1155,18 @@ class MLXProvider(BaseProvider):
             
             # Use base class tool extraction method
             if mlx_tools:
+                # Log the output to help with debugging
+                logger.debug(f"Checking for tool calls in output: {output[:200]}...")
+                
+                # Try to extract tool calls from the response
                 tool_response = self._extract_tool_calls(output)
+                
+                # Log whether tool calls were found
                 if tool_response and tool_response.has_tool_calls():
+                    logger.info(f"Found {len(tool_response.tool_calls)} tool calls in response")
+                    for tc in tool_response.tool_calls:
+                        logger.info(f"Tool call: {tc.name} with args: {tc.arguments}")
+                    
                     # Return a GenerateResponse with tool calls
                     return GenerateResponse(
                         content=output,
@@ -1137,6 +1178,8 @@ class MLXProvider(BaseProvider):
                             "total_tokens": len(self._processor.encode(formatted_prompt)) + len(self._processor.encode(output))
                         }
                     )
+                else:
+                    logger.warning(f"No tool calls found in response despite tools being provided")
             
             # Calculate token usage
             prompt_tokens = TokenCounter.count_tokens(formatted_prompt, model_name)

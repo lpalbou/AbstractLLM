@@ -6,13 +6,12 @@ The AbstractLLM tool system is a comprehensive, well-architected framework for e
 
 ## Architecture Components
 
-### 1. Core Type System (`tools/types.py`)
+### 1. Core Type System (`tools/core.py`)
 
-The foundation of the tool system is built on Pydantic models that provide strong typing and validation:
+The foundation of the tool system is built on Python dataclasses that provide strong typing and validation:
 
 - **`ToolDefinition`**: Defines a tool's interface with:
-  - Name validation (alphanumeric + underscores only)
-  - Description for LLM understanding
+  - Name and description for LLM understanding
   - Input schema (JSON Schema format)
   - Optional output schema for result validation
 
@@ -27,36 +26,35 @@ The foundation of the tool system is built on Pydantic models that provide stron
   - Contains the actual result
   - Optional error message for failure cases
 
-- **`ToolCallRequest`/`ToolCallResponse`**: High-level wrappers for tool interactions
+- **`ToolCallResponse`**: High-level wrapper for tool interactions with:
+  - Optional content field for text response
+  - List of tool calls
+  - Method to check if response has tool calls
 
-### 2. Validation Layer (`tools/validation.py`)
+### 2. Validation Layer (distributed across files)
 
-Robust validation system with custom exceptions:
+Robust validation system with jsonschema:
 
 - **Schema Validation**: Uses jsonschema to validate tool definitions and arguments
-- **Safe Wrappers**: `create_safe_tool_wrapper()` adds validation layers to functions
-- **Error Hierarchy**: 
-  - `ValidationException` (base)
-  - `ToolDefinitionValidationError`
-  - `ToolArgumentValidationError`
-  - `ToolResultValidationError`
+- **Safe Execution**: Error handling for tool execution failures
+- **Result Validation**: Optional validation of tool results against schemas
 
-### 3. Conversion Utilities (`tools/conversion.py`)
+### 3. Conversion Utilities (`tools/core.py`)
 
 Intelligent conversion between Python functions and tool definitions:
 
 - **`function_to_tool_definition()`**: 
-  - Extracts function metadata using docstring parsing
+  - Extracts function metadata using introspection
   - Maps Python types to JSON Schema types
   - Handles optional parameters and default values
   - Preserves parameter descriptions from docstrings
 
-- **`standardize_tool_response()`**: 
+- **`_python_type_to_json()`**: 
   - Normalizes provider-specific responses
-  - Handles OpenAI, Anthropic, and Ollama formats
-  - Robust JSON parsing with fallback strategies
+  - Handles type conversions
+  - Supports Optional types
 
-### 4. Architecture-Based Tool Calling (`tools/architecture_tools.py`)
+### 4. Architecture-Based Tool Calling (`tools/parser.py`)
 
 Sophisticated architecture detection and format handling:
 
@@ -67,7 +65,6 @@ Sophisticated architecture detection and format handling:
   - Special token (`<|tool_call|>...`)
   - Markdown code blocks
   - Raw JSON
-  - Gemma-specific formats (Python-style and JSON)
   - Tool code format (`\`\`\`tool_code`)
 
 - **Robust JSON Parsing**: Multiple fallback strategies including:
@@ -75,16 +72,25 @@ Sophisticated architecture detection and format handling:
   - Pattern extraction
   - Safe evaluation as last resort
 
-### 5. Modular Prompt Generation (`tools/modular_prompts.py`)
+### 5. Universal Tool Handler (`tools/handler.py`)
 
-Context-aware prompt generation:
+Context-aware tool handling:
 
 - **Architecture-Specific Prompts**: Tailored instructions for each model family
 - **Tool Count Optimization**: Different wording for single vs. multiple tools
 - **Parameter Name Emphasis**: Ensures LLMs use exact parameter names
-- **Example Generation**: Creates realistic examples based on tool signatures
+- **Mode Detection**: Supports both "native" and "prompted" modes
 
-### 6. Common Tools Library (`tools/common_tools.py`)
+### 6. Tool Registry (`tools/registry.py`)
+
+Comprehensive tool management:
+
+- **Registration**: Simple decorator-based registration
+- **Execution**: Safe tool execution with error handling
+- **Parallel Execution**: Support for executing multiple tools in parallel
+- **Global Registry**: Centralized tool management
+
+### 7. Common Tools Library (`tools/common_tools.py`)
 
 Extensive collection of ready-to-use tools:
 
@@ -112,23 +118,14 @@ Extensive collection of ready-to-use tools:
 **User Interaction**:
 - `ask_user_multiple_choice()`: Interactive prompts
 
-### 7. Unified Architecture Detection (`architectures/unified_detection.py`)
+### 8. Unified Architecture Detection (`architectures/detection.py`)
 
 Centralized model capability detection:
 
-- **`UnifiedModelConfig`**: Comprehensive model configuration including:
-  - Token configurations (EOS/BOS)
-  - Generation parameters
-  - Tool support and format
-  - Vision capabilities
-  - Streaming support
-  - Provider preferences
-
-- **Architecture Patterns**: Detailed mappings for:
-  - Qwen/DeepSeek (special token format)
-  - Gemma/PaliGemma (tool_code format)
-  - Llama (function_call format)
-  - Mistral/Phi (XML-wrapped format)
+- **Architecture Detection**: Identifies model architecture from name
+- **Capability Lookup**: Retrieves model capabilities including tool support
+- **Format Retrieval**: Gets architecture-specific formatting details
+- **Normalization**: Normalizes model names for consistent matching
 
 ## Design Patterns and Best Practices
 
@@ -141,7 +138,7 @@ The system cleanly separates provider-specific logic from the core tool interfac
 - Security checks (e.g., dangerous command blocking)
 
 ### 3. **Type Safety**
-- Pydantic models for runtime validation
+- Python dataclasses for core types
 - Type hints throughout
 - JSON Schema for dynamic validation
 
@@ -161,15 +158,15 @@ The system cleanly separates provider-specific logic from the core tool interfac
 ### Strengths
 
 1. **Excellent Architecture**: Well-structured with clear boundaries between components
-2. **Robust Error Handling**: Comprehensive exception hierarchy and graceful fallbacks
+2. **Robust Error Handling**: Comprehensive exception handling and graceful fallbacks
 3. **Provider Flexibility**: Supports multiple LLM providers with tailored optimizations
 4. **Documentation**: Good inline documentation and docstrings
-5. **Type Safety**: Strong typing with Pydantic and type hints
+5. **Type Safety**: Strong typing with dataclasses and type hints
 6. **Security Consciousness**: Input validation and command execution safety
 
 ### Areas for Improvement
 
-1. **Complex Parsing Logic**: The architecture tools module has very complex parsing with many regex patterns
+1. **Complex Parsing Logic**: The parser module has very complex parsing with many regex patterns
 2. **Test Coverage**: While tests exist, some edge cases in parsing might benefit from more coverage
 3. **Performance**: Multiple parsing attempts could be optimized with early detection
 4. **Documentation**: Could benefit from more architecture diagrams and flow charts
@@ -212,3 +209,5 @@ The tool system implements several security measures:
 The AbstractLLM tool system is a mature, well-designed framework that successfully abstracts the complexity of multi-provider tool calling. Its architecture demonstrates excellent software engineering practices with strong typing, comprehensive error handling, and clear separation of concerns. While there are opportunities for optimization and simplification, particularly in the parsing logic, the overall design is robust and extensible.
 
 The system's ability to handle provider-specific formats while maintaining a unified interface is particularly impressive, as is the attention to security and error handling throughout the codebase.
+
+*Note: This documentation describes the current implementation which uses Python dataclasses for the core type system. There are references to Pydantic in the project dependencies, suggesting it may be used in some parts of the codebase or planned for future use.*

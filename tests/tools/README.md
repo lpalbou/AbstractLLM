@@ -5,7 +5,7 @@ This directory contains tests for the AbstractLLM tool calling implementation.
 ## Test Files
 
 - `test_foundation.py`: Tests the core tool functionality:
-  - ToolDefinition, ToolCall, and ToolResult Pydantic models
+  - ToolDefinition, ToolCall, and ToolResult dataclasses
   - function_to_tool_definition utility with various function signatures
   - Standardization utilities for tool responses
   - Validation utilities

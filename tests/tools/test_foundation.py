@@ -2,7 +2,7 @@
 Tests for the core tool functionality in AbstractLLM.
 
 This module tests the foundation of the tool calling implementation, including:
-- ToolDefinition, ToolCall, and ToolResult Pydantic models
+- ToolDefinition, ToolCall, and ToolResult dataclasses
 - function_to_tool_definition utility
 - Standardization utilities for tool responses
 - Validation utilities

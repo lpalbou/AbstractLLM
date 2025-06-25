@@ -80,7 +80,13 @@ class UniversalToolHandler:
             return ""
         
         # Format based on architecture
-        return format_tool_prompt(tool_defs, self.model_name)
+        formatted_prompt = format_tool_prompt(tool_defs, self.model_name)
+        
+        # Add extra emphasis for MLX models which often misunderstand tool formats
+        if "qwen" in self.model_name.lower():
+            formatted_prompt += "\n\nCRITICAL: When using tools, you MUST use the exact format shown above. DO NOT use Python code blocks or any other format. Use the <|tool_call|> format EXACTLY as shown."
+        
+        return formatted_prompt
     
     def prepare_tools_for_native(
         self,

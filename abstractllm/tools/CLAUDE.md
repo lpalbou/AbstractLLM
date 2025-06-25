@@ -17,7 +17,7 @@ The system now provides:
 2. **Architecture-aware** tool prompts for prompted mode
 3. **Native API support** for providers that offer it
 4. **Clean separation** of concerns with no circular dependencies
-5. **Type safety** throughout with Pydantic models
+5. **Type safety** throughout with Python dataclasses
 
 ## Overview
 Complete rewrite of the tool support system to provide a clean, unified interface for tool calling across all models and providers. While architecturally sound, critical analysis reveals opportunities for improvement to match industry best practices.

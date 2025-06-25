@@ -323,24 +323,39 @@ class BaseProvider(AbstractLLMInterface):
             for tool in tools:
                 if hasattr(tool, "name") and hasattr(tool, "description"):
                     # ToolDefinition object
-                    log_params["tools"].append({
+                    tool_info = {
                         "name": tool.name,
-                        "description": tool.description[:100] + "..." if len(tool.description) > 100 else tool.description
-                    })
+                        "description": tool.description[:100] + "..." if len(tool.description) > 100 else tool.description,
+                        "parameters": tool.parameters
+                    }
+                    log_params["tools"].append(tool_info)
                 elif isinstance(tool, dict):
                     # Dictionary tool definition
-                    log_params["tools"].append({
+                    tool_info = {
                         "name": tool.get("name", "unknown"),
                         "description": (tool.get("description", "")[:100] + "..." 
                                       if len(tool.get("description", "")) > 100 
-                                      else tool.get("description", ""))
-                    })
+                                      else tool.get("description", "")),
+                        "parameters": tool.get("parameters", {})
+                    }
+                    log_params["tools"].append(tool_info)
                 elif callable(tool):
-                    # Function tool
-                    log_params["tools"].append({
-                        "name": getattr(tool, "__name__", str(tool)),
-                        "description": getattr(tool, "__doc__", "")[:100] if getattr(tool, "__doc__", "") else ""
-                    })
+                    # Function tool - convert to ToolDefinition to get parameters
+                    from abstractllm.tools.core import ToolDefinition
+                    try:
+                        tool_def = ToolDefinition.from_function(tool)
+                        tool_info = {
+                            "name": tool_def.name,
+                            "description": tool_def.description[:100] + "..." if len(tool_def.description) > 100 else tool_def.description,
+                            "parameters": tool_def.parameters
+                        }
+                    except Exception as e:
+                        # Fallback if conversion fails
+                        tool_info = {
+                            "name": getattr(tool, "__name__", str(tool)),
+                            "description": getattr(tool, "__doc__", "")[:100] if getattr(tool, "__doc__", "") else ""
+                        }
+                    log_params["tools"].append(tool_info)
         else:
             log_params["has_tools"] = False
             log_params["tools_count"] = 0
