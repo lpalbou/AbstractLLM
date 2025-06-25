@@ -395,12 +395,12 @@
     "qwen3-30b-a3b": {
       "context_length": 40960,
       "max_output_tokens": 8192,
-      "tool_support": "prompted",
+      "tool_support": "native",
       "structured_output": "native",
       "parallel_tools": true,
       "vision_support": false,
       "audio_support": false,
-      "notes": "4-bit precision, optimized for efficiency. Use prompted tools in MLX.",
+      "notes": "4-bit precision, optimized for efficiency. Full native tool support.",
       "source": "Alibaba official docs"
     },
     "qwen2-vl": {
@@ -643,6 +643,28 @@
       "audio_support": false,
       "notes": "Vision-language model",
       "source": "Google docs"
+    },
+    "deepseek-r1": {
+      "context_length": 32768,
+      "max_output_tokens": 8192,
+      "tool_support": "native",
+      "structured_output": "native",
+      "parallel_tools": true,
+      "vision_support": false,
+      "audio_support": false,
+      "notes": "Reasoning model with native tool calling capability",
+      "source": "MLX community"
+    },
+    "qwen3": {
+      "context_length": 32768,
+      "max_output_tokens": 8192,
+      "tool_support": "native",
+      "structured_output": "native",
+      "parallel_tools": true,
+      "vision_support": false,
+      "audio_support": false,
+      "notes": "Instruct model with good reasoning and native tool support",
+      "source": "MLX community"
     }
   },
   "tool_support_levels": {
