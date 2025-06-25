@@ -367,7 +367,7 @@ def log_request(provider: str, prompt: str, parameters: Dict[str, Any], log_dir:
     }
 
 
-def log_response(provider: str, response: str, log_dir: Optional[str] = None, model: Optional[str] = None) -> None:
+def log_response(provider: str, response: str, log_dir: Optional[str] = None, model: Optional[str] = None, **kwargs) -> None:
     """
     Log an LLM response and combine it with the matching request.
     
@@ -376,6 +376,7 @@ def log_response(provider: str, response: str, log_dir: Optional[str] = None, mo
         response: The response text
         log_dir: Optional override for log directory  
         model: Model name (used to find matching request)
+        **kwargs: Additional metadata to include in the response log
     """
     timestamp = datetime.now().isoformat()
     
@@ -408,6 +409,21 @@ def log_response(provider: str, response: str, log_dir: Optional[str] = None, mo
         # Create combined interaction file
         log_filename = get_log_filename(provider, "interaction", log_dir or matching_request["log_dir"], model or matching_request.get("model"))
         if log_filename:
+            # Build response data with additional metadata
+            response_data = {
+                "timestamp": timestamp,
+                "provider": provider,
+                "response": response
+            }
+            
+            # Add any additional metadata from kwargs
+            if kwargs.get("has_tool_calls"):
+                response_data["has_tool_calls"] = kwargs["has_tool_calls"]
+            if kwargs.get("tool_calls"):
+                response_data["tool_calls"] = [{"name": tc.name, "arguments": tc.arguments} for tc in kwargs["tool_calls"]]
+            if kwargs.get("usage"):
+                response_data["usage"] = kwargs["usage"]
+                
             combined_data = {
                 "request": {
                     "timestamp": matching_request["timestamp"],
@@ -415,11 +431,7 @@ def log_response(provider: str, response: str, log_dir: Optional[str] = None, mo
                     "prompt": matching_request["prompt"],
                     "parameters": matching_request["parameters"]
                 },
-                "response": {
-                    "timestamp": timestamp,
-                    "provider": provider,
-                    "response": response
-                }
+                "response": response_data
             }
             write_to_log_file(combined_data, log_filename)
     else:
@@ -431,6 +443,10 @@ def log_response(provider: str, response: str, log_dir: Optional[str] = None, mo
                 "provider": provider,
                 "response": response
             }
+            # Add any additional metadata
+            for key, value in kwargs.items():
+                if key not in ["log_dir", "model"]:
+                    log_data[key] = value
             write_to_log_file(log_data, log_filename)
 
 

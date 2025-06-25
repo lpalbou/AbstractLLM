@@ -309,17 +309,21 @@ class OpenAIProvider(BaseProvider):
         # Initialize OpenAI client
         client = OpenAI(api_key=api_key)
         
-        # Log request
-        log_request("openai", prompt, {
-            "model": model,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "has_system_prompt": enhanced_system_prompt is not None,
-            "stream": stream,
-            "has_files": bool(files),
-            "has_tools": bool(tools),
-            "tool_mode": tool_mode
-        })
+        # Log request using base class method
+        self._log_request_details(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            enhanced_system_prompt=enhanced_system_prompt,
+            messages=messages,
+            tools=tools,
+            formatted_messages=messages,
+            stream=stream,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            has_files=bool(files),
+            tool_mode=tool_mode,
+            endpoint="https://api.openai.com/v1/chat/completions"
+        )
         
         # Make API call
         try:
@@ -455,7 +459,14 @@ class OpenAIProvider(BaseProvider):
                         usage=completion.usage.model_dump() if hasattr(completion, 'usage') else None
                     )
                 else:
-                    log_response("openai", response_text)
+                    # Log response using base class method
+                    self._log_response_details(
+                        completion,
+                        response_text,
+                        has_tool_calls=False,
+                        model=model,
+                        usage=completion.usage.model_dump() if hasattr(completion, 'usage') else None
+                    )
                     return response_text
                 
         except Exception as e:
@@ -566,16 +577,21 @@ class OpenAIProvider(BaseProvider):
         # Initialize AsyncOpenAI client
         client = AsyncOpenAI(api_key=api_key)
         
-        # Log request
-        log_request("openai", prompt, {
-            "model": model,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "has_system_prompt": system_prompt is not None,
-            "stream": stream,
-            "has_files": bool(files),
-            "has_tools": bool(tools)
-        })
+        # Log request using base class method
+        self._log_request_details(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            enhanced_system_prompt=enhanced_system_prompt,
+            messages=messages,
+            tools=tools,
+            formatted_messages=messages,
+            stream=stream,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            has_files=bool(files),
+            tool_mode=tool_mode if tools else None,
+            endpoint="https://api.openai.com/v1/chat/completions"
+        )
         
         # Process tools if provided
         processed_tools = None
@@ -716,7 +732,14 @@ class OpenAIProvider(BaseProvider):
                         usage=completion.usage.model_dump() if hasattr(completion, 'usage') else None
                     )
                 else:
-                    log_response("openai", response_text)
+                    # Log response using base class method
+                    self._log_response_details(
+                        completion,
+                        response_text,
+                        has_tool_calls=False,
+                        model=model,
+                        usage=completion.usage.model_dump() if hasattr(completion, 'usage') else None
+                    )
                     return response_text
                 
         except Exception as e:

@@ -266,6 +266,17 @@
       "notes": "Multimodal with early fusion, 109B total params (MoE)",
       "source": "Meta announcement"
     },
+    "llama4-17b-scout-16e-instruct": {
+      "context_length": 10485760,
+      "max_output_tokens": 8192,
+      "tool_support": "native",
+      "structured_output": "native",
+      "parallel_tools": true,
+      "vision_support": true,
+      "audio_support": false,
+      "notes": "Scout variant with 16 experts, optimized for efficiency",
+      "source": "Community testing"
+    },
     "qwen2.5-0.5b": {
       "context_length": 32768,
       "max_output_tokens": 8192,
@@ -382,7 +393,7 @@
       "source": "Alibaba official docs"
     },
     "qwen3-30b-a3b": {
-      "context_length": 131072,
+      "context_length": 40960,
       "max_output_tokens": 8192,
       "tool_support": "prompted",
       "structured_output": "native",

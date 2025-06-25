@@ -968,16 +968,19 @@ class HuggingFaceProvider(BaseProvider):
             temperature = self.config_manager.get_param(ModelParameter.TEMPERATURE, 0.7)
             max_tokens = self.config_manager.get_param(ModelParameter.MAX_TOKENS, 2048)
             
-            # Log request before generation
-            log_request("huggingface", prompt, {
-                "model": model,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "has_system_prompt": system_prompt is not None,
-                "stream": stream,
-                "has_files": bool(files),
-                "model_type": self._model_type
-            })
+            # Log request using base class method
+            self._log_request_details(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                messages=None,  # HuggingFace doesn't use messages format
+                tools=tools,
+                stream=stream,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                has_files=bool(files),
+                model_type=self._model_type,
+                endpoint="local model"
+            )
             
             # Handle GGUF models differently
             if hasattr(self._model, 'model_path'):
@@ -1007,6 +1010,14 @@ class HuggingFaceProvider(BaseProvider):
                     if tools:
                         tool_response = self._extract_tool_calls(result)
                         if tool_response and tool_response.has_tool_calls():
+                            # Log response with tool calls
+                            self._log_response_details(
+                                result,
+                                result,
+                                has_tool_calls=True,
+                                tool_calls=tool_response.tool_calls,
+                                model=model
+                            )
                             # Return a GenerateResponse with tool calls
                             from abstractllm.types import GenerateResponse
                             return GenerateResponse(
@@ -1015,7 +1026,13 @@ class HuggingFaceProvider(BaseProvider):
                                 model=model
                             )
                     
-                    log_response("huggingface", result)
+                    # Log response using base class method
+                    self._log_response_details(
+                        result,
+                        result,
+                        has_tool_calls=False,
+                        model=model
+                    )
                     return result
             else:
                 # Get generation parameters for PyTorch models

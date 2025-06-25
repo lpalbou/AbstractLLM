@@ -350,6 +350,20 @@ def get_context_limits(model_name: str) -> Dict[str, int]:
     }
 
 
+def get_context_length(model_name: str) -> int:
+    """
+    Get the context length (input limit) for a model.
+    
+    Args:
+        model_name: Model name to check
+        
+    Returns:
+        Context length in tokens
+    """
+    caps = get_model_capabilities(model_name)
+    return caps.get("context_length", 4096)
+
+
 def is_instruct_model(model_name: str) -> bool:
     """Check if model is instruction-tuned (vs base model)."""
     return detect_model_type(model_name) == "instruct"

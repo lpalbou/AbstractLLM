@@ -127,3 +127,12 @@ def _python_type_to_json(py_type: Any) -> str:
             return _python_type_to_json(non_none[0])
     
     return type_map.get(py_type, "string")
+
+
+# Legacy alias for backward compatibility
+ToolCallRequest = ToolCallResponse
+
+
+def function_to_tool_definition(func: Callable) -> ToolDefinition:
+    """Convert a function to a tool definition (legacy function)."""
+    return ToolDefinition.from_function(func)

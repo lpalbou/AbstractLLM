@@ -587,17 +587,15 @@ class MLXProvider(BaseProvider):
                 if key not in ["max_tokens", "temperature", "stream", "images"]:
                     generate_kwargs[key] = value
             
-            # LOG THE EXACT REQUEST PAYLOAD FOR VISION
-            vision_request_params = {
-                "model": self.config_manager.get_param(ModelParameter.MODEL),
-                "original_prompt": prompt,
-                "num_images": len(images),
-                "image_sizes": [f"{img.size[0]}x{img.size[1]}" for img in images],
-                "use_conversation": use_conversation,
+            # Log vision request using shared method
+            self._log_request_details(
+                prompt=prompt,
+                stream=False,
+                num_images=len(images),
+                image_sizes=[f"{img.size[0]}x{img.size[1]}" for img in images],
+                use_conversation=use_conversation,
                 **generate_kwargs
-            }
-            
-            log_request("mlx_vision", prompt, vision_request_params, model=self.config_manager.get_param(ModelParameter.MODEL))
+            )
             logger.info(f"MLX vision generation starting - prompt: '{prompt}', images: {len(images)}")
             
             # Try multiple approaches to handle potential broadcasting errors
@@ -688,8 +686,8 @@ class MLXProvider(BaseProvider):
                     logger.error(f"Error generating vision response: {e}")
                     return GenerateResponse(text=f"Error generating vision response: {e}")
                         
-            # LOG THE EXACT RAW RESPONSE FOR VISION
-            log_response("mlx_vision", output, model=self.config_manager.get_param(ModelParameter.MODEL))
+            # Log vision response using shared method
+            self._log_response_details(output, output)
             logger.info(f"MLX vision generation completed - response length: {len(output)} chars")
             
             # Return the output as a GenerateResponse with proper usage stats
@@ -1061,27 +1059,13 @@ class MLXProvider(BaseProvider):
                 if compatible_messages and compatible_messages[-1]['role'] != 'assistant':
                     formatted_prompt += "\nassistant:"
             
-            # LOG THE EXACT REQUEST PAYLOAD
-            request_params = {
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "top_p": top_p,
-                "model": model_name,
-                "original_prompt": prompt,
-                "system_prompt": system_prompt,
-                "tools_count": len(tools) if tools else 0,
-                "messages_count": len(messages) if messages else 0,
-                "formatted_messages": formatted_messages if mlx_tools else chat_messages
-            }
-            
-            # Add actual parameter values instead of function objects
+            # Log the request using shared method with all details
+            generation_params_log = {}
             for key, value in generation_params.items():
                 if key == "sampler":
                     # Extract sampler parameters if available
-                    if hasattr(value, '__name__'):
-                        request_params["sampler_type"] = value.__name__
-                    # Try to extract temperature from the sampler if possible
-                    request_params["sampler_temperature"] = temperature
+                    generation_params_log["sampler_type"] = value.__name__ if hasattr(value, '__name__') else str(value)
+                    generation_params_log["sampler_temperature"] = temperature
                 elif key == "logits_processors":
                     # Extract logits processor info
                     if isinstance(value, list):
@@ -1091,14 +1075,26 @@ class MLXProvider(BaseProvider):
                                 processor_info.append(processor.__name__)
                             else:
                                 processor_info.append(str(type(processor).__name__))
-                        request_params["logits_processors"] = processor_info
-                        # Add repetition penalty info since that's the main one we use
-                        request_params["repetition_penalty"] = self._model_config.default_repetition_penalty if self._model_config else 1.0
+                        generation_params_log["logits_processors"] = processor_info
+                        generation_params_log["repetition_penalty"] = self._model_config.default_repetition_penalty if self._model_config else 1.0
                 else:
-                    request_params[key] = value
+                    generation_params_log[key] = value
             
-            # Log the exact request with the formatted prompt that gets sent to MLX
-            log_request("mlx", formatted_prompt, request_params, model=model_name)
+            # Use shared logging method
+            self._log_request_details(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools,
+                formatted_messages=formatted_messages,
+                enhanced_system_prompt=enhanced_system_prompt if tools else system_prompt,
+                stream=False,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                formatted_prompt=formatted_prompt,
+                **generation_params_log
+            )
             
             logger.info(f"MLX generation starting - prompt length: {len(formatted_prompt)} chars")
             
@@ -1121,8 +1117,8 @@ class MLXProvider(BaseProvider):
             # Generate text
             output = generate_text(**generate_kwargs)
             
-            # LOG THE EXACT RAW RESPONSE
-            log_response("mlx", output, model=model_name)
+            # Log response using shared method
+            self._log_response_details(output, output)
             
             logger.info(f"MLX generation completed - response length: {len(output)} chars")
             

@@ -26,7 +26,7 @@ from abstractllm.exceptions import (
     FileProcessingError,
     ProviderAPIError
 )
-from abstractllm.utils.model_capabilities import supports_tool_calls
+from abstractllm.architectures.detection import supports_tools as supports_tool_calls
 
 # Check if Anthropic package is available
 try:
@@ -376,17 +376,21 @@ class AnthropicProvider(BaseProvider):
                 "content": content
             })
         
-        # Log request
-        log_request("anthropic", prompt, {
-            "model": model,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "has_system_prompt": enhanced_system_prompt is not None,
-            "stream": stream,
-            "has_files": bool(files),
-            "has_tools": bool(tools),
-            "tool_mode": tool_mode
-        })
+        # Log request using base class method
+        self._log_request_details(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            enhanced_system_prompt=enhanced_system_prompt,
+            messages=messages,
+            tools=tools,
+            formatted_messages=messages,
+            stream=stream,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            has_files=bool(files),
+            tool_mode=tool_mode,
+            endpoint="https://api.anthropic.com/v1/messages"
+        )
         
         # Sanitize messages to avoid trailing whitespace errors
         messages = self._sanitize_messages(messages)
@@ -543,7 +547,14 @@ class AnthropicProvider(BaseProvider):
                         usage=response.usage.model_dump() if hasattr(response, 'usage') else None
                     )
                 else:
-                    log_response("anthropic", content)
+                    # Log response using base class method
+                    self._log_response_details(
+                        response,
+                        content,
+                        has_tool_calls=False,
+                        model=model,
+                        usage=response.usage.model_dump() if hasattr(response, 'usage') else None
+                    )
                     # Return a GenerateResponse object for consistency
                     from abstractllm.types import GenerateResponse
                     return GenerateResponse(
@@ -680,16 +691,21 @@ class AnthropicProvider(BaseProvider):
                 "content": content
             })
         
-        # Log request
-        log_request("anthropic", prompt, {
-            "model": model,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "has_system_prompt": system_prompt is not None,
-            "stream": stream,
-            "has_files": bool(files),
-            "has_tools": bool(tools)
-        })
+        # Log request using base class method
+        self._log_request_details(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            enhanced_system_prompt=enhanced_system_prompt,
+            messages=messages,
+            tools=tools,
+            formatted_messages=messages,
+            stream=stream,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            has_files=bool(files),
+            tool_mode=tool_mode if tools else None,
+            endpoint="https://api.anthropic.com/v1/messages"
+        )
         
         # Process tools if provided
         processed_tools = None
@@ -850,7 +866,14 @@ class AnthropicProvider(BaseProvider):
                         usage=response.usage.model_dump() if hasattr(response, 'usage') else None
                     )
                 else:
-                    log_response("anthropic", content)
+                    # Log response using base class method
+                    self._log_response_details(
+                        response,
+                        content,
+                        has_tool_calls=False,
+                        model=model,
+                        usage=response.usage.model_dump() if hasattr(response, 'usage') else None
+                    )
                     # Return a GenerateResponse object for consistency
                     from abstractllm.types import GenerateResponse
                     return GenerateResponse(

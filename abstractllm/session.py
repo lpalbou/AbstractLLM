@@ -985,7 +985,7 @@ class Session:
             Adjusted system prompt
         """
         # Base system prompt from the original
-        base_prompt = original_system_prompt.strip()
+        base_prompt = (original_system_prompt or "").strip()
         
         # Ensure there's proper spacing
         if not base_prompt.endswith("."):

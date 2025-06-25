@@ -46,7 +46,9 @@ from abstractllm.tools.core import (
     ToolDefinition,
     ToolCall,
     ToolResult,
-    ToolCallResponse
+    ToolCallResponse,
+    ToolCallRequest,  # Legacy alias for ToolCallResponse
+    function_to_tool_definition
 )
 
 # Handler
@@ -77,6 +79,8 @@ __all__ = [
     "ToolCall", 
     "ToolResult",
     "ToolCallResponse",
+    "ToolCallRequest",  # Legacy alias
+    "function_to_tool_definition",
     
     # Handler
     "UniversalToolHandler",

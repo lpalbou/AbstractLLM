@@ -31,7 +31,7 @@ from abstractllm.utils.logging import (
     log_request_url,
     truncate_base64
 )
-from abstractllm.utils.model_capabilities import supports_tool_calls, supports_vision
+from abstractllm.architectures.detection import supports_tools as supports_tool_calls, supports_vision
 from abstractllm.media.processor import MediaProcessor
 from abstractllm.exceptions import ImageProcessingError, FileProcessingError, UnsupportedFeatureError, ProviderAPIError
 from abstractllm.media.factory import MediaFactory
@@ -39,13 +39,12 @@ from abstractllm.media.image import ImageInput
 
 # Handle circular imports with TYPE_CHECKING
 if TYPE_CHECKING:
-    from abstractllm.tools.types import ToolCallRequest, ToolDefinition
+    from abstractllm.tools.types import ToolCallResponse, ToolDefinition
 
 # Try importing tools package directly
 try:
     from abstractllm.tools import (
         ToolDefinition,
-        ToolCallRequest,
         ToolCall,
         ToolCallResponse,
         function_to_tool_definition,
@@ -55,8 +54,6 @@ except ImportError:
     TOOLS_AVAILABLE = False
     if not TYPE_CHECKING:
         class ToolDefinition:
-            pass
-        class ToolCallRequest:
             pass
         class ToolCall:
             pass
@@ -116,7 +113,7 @@ class OllamaProvider(BaseProvider):
             return "tool_calls" in response["message"] and response["message"]["tool_calls"]
         return False
     
-    def _extract_tool_calls(self, response: Dict[str, Any]) -> Optional["ToolCallRequest"]:
+    def _extract_tool_calls(self, response: Dict[str, Any]) -> Optional["ToolCallResponse"]:
         """
         Extract tool calls from an Ollama response.
         
@@ -124,7 +121,7 @@ class OllamaProvider(BaseProvider):
             response: Raw Ollama response
             
         Returns:
-            ToolCallRequest object if tool calls are present, None otherwise
+            ToolCallResponse object if tool calls are present, None otherwise
         """
         if not TOOLS_AVAILABLE or not self._check_for_tool_calls(response):
             return None
@@ -162,8 +159,8 @@ class OllamaProvider(BaseProvider):
             )
             tool_calls.append(tool_call_obj)
             
-        # Return a ToolCallRequest object
-        return ToolCallRequest(
+        # Return a ToolCallResponse object
+        return ToolCallResponse(
             content=content,
             tool_calls=tool_calls
         )
@@ -204,13 +201,26 @@ class OllamaProvider(BaseProvider):
         Returns:
             Dictionary of request data for the chat API endpoint
         """
+        # Get context length for the model
+        from abstractllm.architectures.detection import get_context_length
+        context_length = get_context_length(model)
+        
+        # Apply reasonable maximum to prevent memory issues
+        MAX_SAFE_CONTEXT = 1_000_000  # 1M tokens max
+        if context_length > MAX_SAFE_CONTEXT:
+            logger.warning(f"Model {model} reports context length of {context_length:,} tokens, capping at {MAX_SAFE_CONTEXT:,} for safety")
+            context_length = MAX_SAFE_CONTEXT
+        
+        logger.info(f"Setting context size to {context_length:,} tokens for {model}")
+        
         # Base request structure
         request_data = {
             "model": model,
             "stream": stream,
             "options": {
                 "temperature": temperature,
-                "num_predict": max_tokens
+                "num_predict": max_tokens,
+                "num_ctx": context_length  # Set context size to model's full capacity
             }
         }
         
@@ -218,15 +228,49 @@ class OllamaProvider(BaseProvider):
         if provided_messages:
             # Use provided messages - convert Message objects to dicts if needed
             messages = []
-            for msg in provided_messages:
+            
+            # Check if we need to inject/update system prompt for tools
+            has_system_in_provided = any(
+                (msg.get('role') if isinstance(msg, dict) else getattr(msg, 'role', None)) == 'system' 
+                for msg in provided_messages
+            )
+            
+            for i, msg in enumerate(provided_messages):
                 if isinstance(msg, dict):
-                    messages.append(msg)
+                    role = msg.get('role')
+                    content = msg.get('content')
                 else:
                     # Handle Message objects
-                    messages.append({
-                        "role": getattr(msg, 'role', 'user'),
-                        "content": getattr(msg, 'content', str(msg))
-                    })
+                    role = getattr(msg, 'role', 'user')
+                    content = getattr(msg, 'content', str(msg))
+                
+                # If this is the system message and we have an enhanced system prompt, use it
+                if role == 'system' and system_prompt and i == 0:
+                    messages.append({"role": "system", "content": system_prompt})
+                else:
+                    messages.append({"role": role, "content": content})
+            
+            # If no system message was provided but we have an enhanced system prompt, prepend it
+            if not has_system_in_provided and system_prompt:
+                messages.insert(0, {"role": "system", "content": system_prompt})
+                
+            # Add the current user prompt if not already in messages
+            # (This handles the case where prompt is a new message not in provided_messages)
+            if prompt and not any(
+                (msg.get('content') if isinstance(msg, dict) else getattr(msg, 'content', None)) == prompt 
+                for msg in provided_messages
+            ):
+                # Prepare user message content
+                images = []
+                for media_input in processed_files:
+                    if isinstance(media_input, ImageInput):
+                        images.append(media_input.to_provider_format("ollama"))
+                        
+                user_message = {"role": "user", "content": prompt}
+                if images:
+                    user_message["images"] = images
+                    
+                messages.append(user_message)
         else:
             # Create new messages from prompt/system_prompt
             messages = []
@@ -286,13 +330,26 @@ class OllamaProvider(BaseProvider):
         Returns:
             Dictionary of request data for the generate API endpoint
         """
+        # Get context length for the model
+        from abstractllm.architectures.detection import get_context_length
+        context_length = get_context_length(model)
+        
+        # Apply reasonable maximum to prevent memory issues
+        MAX_SAFE_CONTEXT = 1_000_000  # 1M tokens max
+        if context_length > MAX_SAFE_CONTEXT:
+            logger.warning(f"Model {model} reports context length of {context_length:,} tokens, capping at {MAX_SAFE_CONTEXT:,} for safety")
+            context_length = MAX_SAFE_CONTEXT
+        
+        logger.info(f"Setting context size to {context_length:,} tokens for {model}")
+        
         # Base request structure
         request_data = {
             "model": model,
             "stream": stream,
             "options": {
                 "temperature": temperature,
-                "num_predict": max_tokens
+                "num_predict": max_tokens,
+                "num_ctx": context_length  # Set context size to model's full capacity
             }
         }
         
@@ -390,15 +447,18 @@ class OllamaProvider(BaseProvider):
                 provider="ollama"
             )
         
-        # Log request
-        log_request("ollama", prompt, {
-            "model": model,
-            "temperature": temperature,
-            "has_system_prompt": system_prompt is not None,
-            "stream": stream,
-            "has_files": bool(files),
-            "has_tools": bool(tools)
-        })
+        # Log request using shared method - before processing tools
+        self._log_request_details(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            messages=messages,
+            tools=tools,
+            stream=stream,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            has_files=bool(files),
+            files_count=len(files) if files else 0
+        )
         
         # Handle tools using base class methods
         enhanced_system_prompt = system_prompt
@@ -408,6 +468,14 @@ class OllamaProvider(BaseProvider):
         if tools:
             # Use base class method to prepare tool context
             enhanced_system_prompt, tool_defs, tool_mode = self._prepare_tool_context(tools, system_prompt)
+            
+            # Log the tool preparation results
+            logger.info(f"Tool context prepared: mode={tool_mode}, tools={len(tool_defs) if tool_defs else 0}")
+            if tool_mode == "prompted":
+                logger.info(f"[TOOL SETUP] Using PROMPTED mode for tools")
+                logger.info(f"[TOOL SETUP] Enhanced system prompt length: {len(enhanced_system_prompt) if enhanced_system_prompt else 0}")
+                if enhanced_system_prompt:
+                    logger.debug(f"[TOOL SETUP] Full enhanced system prompt:\n{enhanced_system_prompt}")
             
             # For Ollama, we check if the model supports native tools
             # Tool defs are already formatted by _prepare_tool_context
@@ -434,6 +502,17 @@ class OllamaProvider(BaseProvider):
                 stream=stream,
                 provided_messages=messages
             )
+            
+            # Debug logging for tool support
+            logger.info(f"Using chat endpoint with tool_mode={tool_mode}")
+            if request_data.get('messages'):
+                for i, msg in enumerate(request_data['messages']):
+                    if msg.get('role') == 'system':
+                        logger.debug(f"System message {i}: {msg['content'][:200]}...")
+                    elif msg.get('role') == 'user':
+                        logger.debug(f"User message {i}: {msg['content'][:100]}...")
+            if request_data.get('tools'):
+                logger.debug(f"Native tools in request: {len(request_data['tools'])} tools")
         else:
             endpoint = f"{base_url.rstrip('/')}/api/generate"
             request_data = self._prepare_request_for_generate(
@@ -449,6 +528,24 @@ class OllamaProvider(BaseProvider):
         # Log API request URL
         log_request_url("ollama", endpoint)
         
+        # Log the complete request details after all processing
+        self._log_request_details(
+            prompt=prompt,
+            system_prompt=system_prompt if not tools else None,  # Avoid duplicate system prompt logging
+            messages=messages,
+            tools=tools,
+            formatted_messages=request_data.get("messages", []),
+            request_data=request_data,
+            endpoint=endpoint,
+            enhanced_system_prompt=enhanced_system_prompt if tools else None,
+            tool_mode=tool_mode,
+            formatted_tools=formatted_tools,
+            stream=stream,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=self.config_manager.get_param(ModelParameter.TOP_P),
+            formatted_prompt=request_data.get("prompt") if endpoint.endswith("/generate") else None
+        )
         
         # Make API call
         try:
@@ -488,9 +585,12 @@ class OllamaProvider(BaseProvider):
                                             current_tool_calls.append(tool_call)
                                 # Check for completion
                                 elif "done" in data and data["done"]:
-                                    # At the end of streaming, yield tool calls if any
+                                    # At the end of streaming, check for tool calls
+                                    tool_response = None
+                                    
+                                    # First check if we collected native tool calls
                                     if collecting_tool_call and current_tool_calls:
-                                        # Create a proper ToolCallRequest object
+                                        # Create a proper ToolCallResponse object
                                         tool_calls = []
                                         for tc in current_tool_calls:
                                             # Parse arguments if needed
@@ -509,11 +609,25 @@ class OllamaProvider(BaseProvider):
                                                 arguments=args
                                             ))
                                         
-                                        # Yield the ToolCallRequest object
-                                        yield ToolCallRequest(
+                                        tool_response = ToolCallResponse(
                                             content=current_content,
                                             tool_calls=tool_calls
                                         )
+                                    
+                                    # If no native tool calls, check for prompted tool calls in content
+                                    if not tool_response and current_content and tool_mode in ["native", "prompted"]:
+                                        handler = self._get_tool_handler()
+                                        if handler:
+                                            logger.debug(f"Checking for prompted tool calls in streamed content")
+                                            prompted_response = handler.parse_response(current_content, mode="prompted")
+                                            if prompted_response and prompted_response.has_tool_calls():
+                                                logger.debug(f"Found {len(prompted_response.tool_calls)} prompted tool calls")
+                                                tool_response = prompted_response
+                                    
+                                    # Yield the tool response if we found any tool calls
+                                    if tool_response:
+                                        yield tool_response
+                                    
                                     break
                             except json.JSONDecodeError:
                                 logger.warning(f"Failed to parse JSON from Ollama response: {line}")
@@ -539,18 +653,43 @@ class OllamaProvider(BaseProvider):
                 
                 # Extract tool calls using the handler
                 handler = self._get_tool_handler()
-                if handler:
+                tool_response = None
+                
+                if handler and content:
+                    # First try native parsing if in native mode
                     if tool_mode == "native" and formatted_tools and self._check_for_tool_calls(data):
-                        # For native mode, parse the response
+                        logger.debug(f"Parsing native tool response: {data}")
                         tool_response = handler.parse_response(data, mode="native")
-                    else:
-                        # Use prompted extraction
-                        tool_response = handler.parse_response(content, mode="prompted") if content else None
+                    
+                    # If no tool calls found (or not in native mode), try prompted parsing
+                    # This handles cases where models output tool calls in text even when using native API
+                    if not tool_response or not tool_response.has_tool_calls():
+                        logger.info(f"[TOOL PARSING] Checking content for prompted tool calls")
+                        logger.debug(f"[TOOL PARSING] Full content to parse: {content}")
+                        prompted_response = handler.parse_response(content, mode="prompted")
+                        if prompted_response and prompted_response.has_tool_calls():
+                            logger.info(f"[TOOL PARSING] SUCCESS: Found {len(prompted_response.tool_calls)} tool calls")
+                            for tc in prompted_response.tool_calls:
+                                logger.info(f"[TOOL PARSING] Tool call: {tc.name}({tc.arguments})")
+                            tool_response = prompted_response
+                        else:
+                            logger.info("[TOOL PARSING] NO TOOL CALLS FOUND in content")
                 else:
+                    logger.debug(f"No tool parsing: handler={bool(handler)}, has_content={bool(content)}")
                     tool_response = None
                 
                 # Return appropriate response
                 if tool_response and tool_response.has_tool_calls():
+                    logger.debug(f"Tool response has tool calls: {tool_response.tool_calls}")
+                    # Log response with tool calls
+                    self._log_response_details(
+                        data, 
+                        content, 
+                        has_tool_calls=True, 
+                        tool_calls=tool_response.tool_calls,
+                        model=model,
+                        usage={"prompt_tokens": 0, "completion_tokens": 0}  # Ollama doesn't provide token counts
+                    )
                     from abstractllm.types import GenerateResponse
                     return GenerateResponse(
                         content=content,
@@ -558,8 +697,22 @@ class OllamaProvider(BaseProvider):
                         model=model
                     )
                 else:
-                    log_response("ollama", content)
-                    return content
+                    logger.debug(f"No tool calls detected in response. tool_response={tool_response}")
+                    # Log response without tool calls
+                    self._log_response_details(
+                        data, 
+                        content, 
+                        has_tool_calls=False,
+                        model=model,
+                        usage={"prompt_tokens": 0, "completion_tokens": 0}  # Ollama doesn't provide token counts
+                    )
+                    # Always return a GenerateResponse for consistency
+                    from abstractllm.types import GenerateResponse
+                    return GenerateResponse(
+                        content=content,
+                        tool_calls=None,
+                        model=model
+                    )
                     
         except requests.RequestException as e:
             logger.error(f"Network error during Ollama API request: {str(e)}")
@@ -644,15 +797,18 @@ class OllamaProvider(BaseProvider):
                 provider="ollama"
             )
         
-        # Log request
-        log_request("ollama", prompt, {
-            "model": model,
-            "temperature": temperature,
-            "has_system_prompt": system_prompt is not None,
-            "stream": stream,
-            "has_files": bool(files),
-            "has_tools": bool(tools)
-        })
+        # Log request using shared method - before processing tools
+        self._log_request_details(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            messages=messages,
+            tools=tools,
+            stream=stream,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            has_files=bool(files),
+            files_count=len(files) if files else 0
+        )
         
         # Handle tools using base class methods
         enhanced_system_prompt = system_prompt
@@ -662,6 +818,14 @@ class OllamaProvider(BaseProvider):
         if tools:
             # Use base class method to prepare tool context
             enhanced_system_prompt, tool_defs, tool_mode = self._prepare_tool_context(tools, system_prompt)
+            
+            # Log the tool preparation results
+            logger.info(f"Tool context prepared: mode={tool_mode}, tools={len(tool_defs) if tool_defs else 0}")
+            if tool_mode == "prompted":
+                logger.info(f"[TOOL SETUP] Using PROMPTED mode for tools")
+                logger.info(f"[TOOL SETUP] Enhanced system prompt length: {len(enhanced_system_prompt) if enhanced_system_prompt else 0}")
+                if enhanced_system_prompt:
+                    logger.debug(f"[TOOL SETUP] Full enhanced system prompt:\n{enhanced_system_prompt}")
             
             # For Ollama, we check if the model supports native tools
             # Tool defs are already formatted by _prepare_tool_context
@@ -688,6 +852,17 @@ class OllamaProvider(BaseProvider):
                 stream=stream,
                 provided_messages=messages
             )
+            
+            # Debug logging for tool support
+            logger.info(f"Using chat endpoint with tool_mode={tool_mode}")
+            if request_data.get('messages'):
+                for i, msg in enumerate(request_data['messages']):
+                    if msg.get('role') == 'system':
+                        logger.debug(f"System message {i}: {msg['content'][:200]}...")
+                    elif msg.get('role') == 'user':
+                        logger.debug(f"User message {i}: {msg['content'][:100]}...")
+            if request_data.get('tools'):
+                logger.debug(f"Native tools in request: {len(request_data['tools'])} tools")
         else:
             endpoint = f"{base_url.rstrip('/')}/api/generate"
             request_data = self._prepare_request_for_generate(
@@ -745,7 +920,7 @@ class OllamaProvider(BaseProvider):
                                     elif "done" in data and data["done"]:
                                         # At the end of streaming, yield tool calls if any
                                         if collecting_tool_call and current_tool_calls:
-                                            # Create a proper ToolCallRequest object
+                                            # Create a proper ToolCallResponse object
                                             tool_calls = []
                                             for tc in current_tool_calls:
                                                 # Parse arguments if needed
@@ -795,16 +970,7 @@ class OllamaProvider(BaseProvider):
                             # For native mode, check if response has tool calls
                             if self._check_for_tool_calls(data):
                                 # Use the existing _extract_tool_calls which returns ToolCallRequest
-                                tool_response_old = self._extract_tool_calls(data)
-                                if tool_response_old:
-                                    # Convert to new format
-                                    from abstractllm.tools import ToolCallResponse
-                                    tool_response = ToolCallResponse(
-                                        content=tool_response_old.content,
-                                        tool_calls=tool_response_old.tool_calls
-                                    )
-                                else:
-                                    tool_response = None
+                                tool_response = self._extract_tool_calls(data)
                             else:
                                 tool_response = None
                         else:
@@ -813,6 +979,15 @@ class OllamaProvider(BaseProvider):
                         
                         # Return appropriate response
                         if tool_response and tool_response.has_tool_calls():
+                            # Log response with tool calls
+                            self._log_response_details(
+                                data, 
+                                content, 
+                                has_tool_calls=True, 
+                                tool_calls=tool_response.tool_calls,
+                                model=model,
+                                usage={"prompt_tokens": 0, "completion_tokens": 0}
+                            )
                             from abstractllm.types import GenerateResponse
                             return GenerateResponse(
                                 content=content,
@@ -820,7 +995,14 @@ class OllamaProvider(BaseProvider):
                                 model=model
                             )
                         else:
-                            log_response("ollama", content)
+                            # Log response without tool calls
+                            self._log_response_details(
+                                data, 
+                                content, 
+                                has_tool_calls=False,
+                                model=model,
+                                usage={"prompt_tokens": 0, "completion_tokens": 0}
+                            )
                             return content
 
         except aiohttp.ClientError as e:

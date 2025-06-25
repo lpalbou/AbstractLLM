@@ -263,6 +263,167 @@ class BaseProvider(AbstractLLMInterface):
         # Default implementation returns tools as-is
         return tools
     
+    def _log_request_details(self, 
+                           prompt: str,
+                           system_prompt: Optional[str] = None,
+                           messages: Optional[List[Dict[str, Any]]] = None,
+                           tools: Optional[List[Any]] = None,
+                           formatted_messages: Optional[List[Dict[str, Any]]] = None,
+                           request_data: Optional[Dict[str, Any]] = None,
+                           endpoint: Optional[str] = None,
+                           **kwargs) -> None:
+        """
+        Log detailed request information in a standardized way across all providers.
+        
+        This method ensures consistent logging across all providers, similar to
+        what MLX provider does, capturing all important details for debugging.
+        
+        Args:
+            prompt: The user prompt
+            system_prompt: The system prompt (if any)
+            messages: Raw messages list (if any)
+            tools: Tools being used (if any)
+            formatted_messages: Messages after formatting for the provider
+            request_data: The actual request data being sent to the API
+            endpoint: The API endpoint being called
+            **kwargs: Additional parameters to log
+        """
+        from abstractllm.utils.logging import log_request
+        
+        # Get model name
+        model = self.config_manager.get_param(ModelParameter.MODEL)
+        
+        # Build comprehensive log parameters
+        log_params = {
+            "model": model,
+            "provider": self.provider_name,
+            "temperature": kwargs.get("temperature", self.config_manager.get_param(ModelParameter.TEMPERATURE)),
+            "max_tokens": kwargs.get("max_tokens", self.config_manager.get_param(ModelParameter.MAX_TOKENS)),
+            "stream": kwargs.get("stream", False),
+        }
+        
+        # Add system prompt details
+        if system_prompt:
+            log_params["system_prompt"] = system_prompt
+            log_params["has_system_prompt"] = True
+        else:
+            log_params["has_system_prompt"] = False
+            
+        # Add enhanced system prompt if different
+        enhanced_system_prompt = kwargs.get("enhanced_system_prompt")
+        if enhanced_system_prompt and enhanced_system_prompt != system_prompt:
+            log_params["enhanced_system_prompt"] = enhanced_system_prompt
+            
+        # Add tool information
+        if tools:
+            log_params["has_tools"] = True
+            log_params["tools_count"] = len(tools)
+            log_params["tools"] = []
+            
+            for tool in tools:
+                if hasattr(tool, "name") and hasattr(tool, "description"):
+                    # ToolDefinition object
+                    log_params["tools"].append({
+                        "name": tool.name,
+                        "description": tool.description[:100] + "..." if len(tool.description) > 100 else tool.description
+                    })
+                elif isinstance(tool, dict):
+                    # Dictionary tool definition
+                    log_params["tools"].append({
+                        "name": tool.get("name", "unknown"),
+                        "description": (tool.get("description", "")[:100] + "..." 
+                                      if len(tool.get("description", "")) > 100 
+                                      else tool.get("description", ""))
+                    })
+                elif callable(tool):
+                    # Function tool
+                    log_params["tools"].append({
+                        "name": getattr(tool, "__name__", str(tool)),
+                        "description": getattr(tool, "__doc__", "")[:100] if getattr(tool, "__doc__", "") else ""
+                    })
+        else:
+            log_params["has_tools"] = False
+            log_params["tools_count"] = 0
+            
+        # Add messages information
+        if messages:
+            log_params["messages_count"] = len(messages)
+            log_params["original_messages"] = messages
+            
+        # Add formatted messages (what actually gets sent)
+        if formatted_messages:
+            log_params["formatted_messages"] = formatted_messages
+            log_params["formatted_messages_count"] = len(formatted_messages)
+            
+        # Add request data details
+        if request_data:
+            # Extract key information from request data
+            if "messages" in request_data:
+                log_params["request_messages"] = request_data["messages"]
+            if "tools" in request_data:
+                log_params["request_tools"] = request_data["tools"]
+            if "functions" in request_data:
+                log_params["request_functions"] = request_data["functions"]
+                
+        # Add endpoint information
+        if endpoint:
+            log_params["endpoint"] = endpoint
+            
+        # Add any additional kwargs that might be relevant
+        for key, value in kwargs.items():
+            if key not in ["temperature", "max_tokens", "stream", "enhanced_system_prompt"]:
+                log_params[key] = value
+                
+        # Log to both logger and file
+        logger.info(f"Request to {self.provider_name}: {endpoint or 'API'}")
+        logger.debug(f"Request details: model={model}, tools={log_params.get('tools_count', 0)}, messages={log_params.get('messages_count', 0)}")
+        
+        # Log the comprehensive request
+        log_request(self.provider_name, prompt, log_params, model=model)
+    
+    def _log_response_details(self, 
+                            response: Any,
+                            content: Optional[str] = None,
+                            **kwargs) -> None:
+        """
+        Log detailed response information in a standardized way across all providers.
+        
+        Args:
+            response: The raw response from the provider
+            content: The extracted content (if different from response)
+            **kwargs: Additional response details to log
+        """
+        from abstractllm.utils.logging import log_response
+        
+        # Get model name from kwargs or config
+        model = kwargs.get("model") or self.config_manager.get_param(ModelParameter.MODEL)
+        
+        # Extract content if not provided
+        if content is None:
+            if isinstance(response, str):
+                content = response
+            elif hasattr(response, "content"):
+                content = response.content
+            elif isinstance(response, dict):
+                content = response.get("content", response.get("response", str(response)))
+            else:
+                content = str(response)
+                
+        # Log the response
+        logger.info(f"Response from {self.provider_name}: {len(content)} chars")
+        
+        # Log additional details if provided
+        if kwargs.get("has_tool_calls"):
+            logger.info(f"Response contains tool calls: {len(kwargs.get('tool_calls', []))}")
+        if kwargs.get("usage"):
+            usage = kwargs["usage"]
+            logger.info(f"Token usage - prompt: {usage.get('prompt_tokens', 0)}, completion: {usage.get('completion_tokens', 0)}")
+            
+        logger.debug(f"Response preview: {content[:200]}..." if len(content) > 200 else f"Response: {content}")
+        
+        # Log to file with additional metadata
+        log_response(self.provider_name, content, model=model, **kwargs)
+    
     def _process_response(self, 
                          response: Any, 
                          content: Optional[str] = None, 
