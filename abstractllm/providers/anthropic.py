@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 from abstractllm.interface import ModelParameter, ModelCapability
 from abstractllm.providers.base import BaseProvider
+from abstractllm.types import GenerateResponse
 from abstractllm.utils.logging import (
     log_request, 
     log_response, 
@@ -556,7 +557,6 @@ class AnthropicProvider(BaseProvider):
                         usage=response.usage.model_dump() if hasattr(response, 'usage') else None
                     )
                     # Return a GenerateResponse object for consistency
-                    from abstractllm.types import GenerateResponse
                     return GenerateResponse(
                         content=content,
                         raw_response=response,
@@ -653,6 +653,21 @@ class AnthropicProvider(BaseProvider):
         # Initialize Anthropic client
         client = anthropic.Anthropic(api_key=api_key)
         
+        # Handle tools using base class methods
+        enhanced_system_prompt = system_prompt or self.config_manager.get_param(ModelParameter.SYSTEM_PROMPT)
+        formatted_tools = None
+        tool_mode = "none"
+        
+        if tools:
+            # Use base class method to prepare tool context
+            enhanced_system_prompt, tool_defs, tool_mode = self._prepare_tool_context(tools, enhanced_system_prompt)
+            
+            # If native mode, format tools for Anthropic API
+            if tool_mode == "native" and tool_defs:
+                handler = self._get_tool_handler()
+                if handler:
+                    formatted_tools = tool_defs  # Tool defs are already formatted by _prepare_tool_context
+        
         # Prepare messages
         messages = []
         
@@ -660,9 +675,6 @@ class AnthropicProvider(BaseProvider):
         if 'messages' in kwargs and kwargs['messages']:
             messages = kwargs['messages']
         else:
-            # Add system message if provided (either from config or parameter)
-            system_prompt = system_prompt or self.config_manager.get_param(ModelParameter.SYSTEM_PROMPT)
-            
             # Prepare user message content
             content = []
             
@@ -703,15 +715,10 @@ class AnthropicProvider(BaseProvider):
             temperature=temperature,
             max_tokens=max_tokens,
             has_files=bool(files),
-            tool_mode=tool_mode if tools else None,
+            tool_mode=tool_mode,
             endpoint="https://api.anthropic.com/v1/messages"
         )
         
-        # Process tools if provided
-        processed_tools = None
-        if tools:
-            processed_tools = self._process_tools(tools)
-            
         # Sanitize messages to avoid trailing whitespace errors
         messages = self._sanitize_messages(messages)
         
@@ -726,12 +733,13 @@ class AnthropicProvider(BaseProvider):
                 "stream": stream
             }
             
-            if system_prompt:
-                message_params["system"] = system_prompt
+            if enhanced_system_prompt:
+                message_params["system"] = enhanced_system_prompt
                 
             # Add tools if available
-            if processed_tools:
-                message_params["tools"] = processed_tools
+            if formatted_tools:
+                logger.debug(f"Adding tools to message params: {formatted_tools}")
+                message_params["tools"] = formatted_tools
             
             if stream:
                 async def async_generator():
@@ -875,7 +883,6 @@ class AnthropicProvider(BaseProvider):
                         usage=response.usage.model_dump() if hasattr(response, 'usage') else None
                     )
                     # Return a GenerateResponse object for consistency
-                    from abstractllm.types import GenerateResponse
                     return GenerateResponse(
                         content=content,
                         raw_response=response,
