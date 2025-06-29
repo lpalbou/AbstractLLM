@@ -1278,6 +1278,8 @@ class Session:
 
         # 2) Loop: execute any tool calls and regenerate until no more tools requested
         tool_call_count = 0
+        last_tool_calls = []  # Track recent tool calls to detect loops
+        
         while hasattr(response, 'has_tool_calls') and response.has_tool_calls() and tool_call_count < max_tool_calls:
             # Increment counter to prevent infinite loops
             tool_call_count += 1
@@ -1285,6 +1287,31 @@ class Session:
             # Execute tool calls
             logger.info(f"Session: LLM requested tool calls (iteration {tool_call_count}/{max_tool_calls})")
             tool_results = self.execute_tool_calls(response, tool_functions)
+            
+            # Check for infinite loop by detecting repeated tool calls
+            current_tool_calls = []
+            for tool_result in tool_results:
+                call_signature = f"{tool_result.get('name')}({tool_result.get('arguments')})"
+                current_tool_calls.append(call_signature)
+            
+            # If we've seen these exact tool calls in the last 2 iterations, break the loop
+            if len(last_tool_calls) >= 2 and current_tool_calls in last_tool_calls[-2:]:
+                logger.warning(f"Session: Detected infinite tool loop - same tool calls repeated. Breaking loop.")
+                logger.warning(f"Session: Repeated tool calls: {current_tool_calls}")
+                # Add a special message to help the model understand it should provide a final answer
+                loop_break_message = self.add_message(
+                    MessageRole.ASSISTANT,
+                    content="I have already executed these tools and received the results. Let me provide a final answer based on the information I have.",
+                    tool_results=tool_results,
+                    metadata={"loop_break": True, "tool_metrics": self._track_tool_execution_metrics(tool_results)}
+                )
+                break
+                
+            # Track this iteration's tool calls
+            last_tool_calls.append(current_tool_calls)
+            # Keep only the last 3 iterations to detect patterns
+            if len(last_tool_calls) > 3:
+                last_tool_calls.pop(0)
             
             # Track tool execution metrics
             metrics = self._track_tool_execution_metrics(tool_results)
@@ -1327,6 +1354,29 @@ class Session:
             
             # Prepare follow-up prompt
             updated_provider_messages = self.get_messages_for_provider(provider_name)
+            
+            # For smaller models, add explicit guidance after the first tool call
+            # to help them understand they should synthesize an answer
+            if tool_call_count >= 1:
+                # Detect if this is a smaller model that might need more guidance
+                model_name = self._get_provider_model(provider_instance) or ""
+                is_small_model = any(size in model_name.lower() for size in ["1.7b", "1b", "3b", "0.5b", "7b"])
+                
+                if is_small_model:
+                    # Add explicit instruction to prevent loops for smaller models
+                    synthesis_instruction = (
+                        "You have successfully executed the requested tools and received the results. "
+                        "Based on the tool outputs above, please provide a comprehensive answer to the user's question. "
+                        "Do NOT call any more tools - use only the information you have already gathered."
+                    )
+                    
+                    # Enhance the system prompt with synthesis instruction
+                    if current_system_prompt:
+                        current_system_prompt = f"{current_system_prompt}\n\nIMPORTANT: {synthesis_instruction}"
+                    else:
+                        current_system_prompt = synthesis_instruction
+                        
+                    logger.info(f"Session: Added synthesis guidance for small model ({model_name})")
             
             # Debug: Log message structure being sent to the provider
             logger.debug(f"Session: Sending follow-up messages to LLM: {updated_provider_messages}")

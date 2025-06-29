@@ -908,10 +908,18 @@ class MLXProvider(BaseProvider):
             if msg["role"] == "tool":
                 tool_name = msg.get("name", "unknown_tool")
                 tool_content = msg.get("content", "")
+                
+                # Use clearer formatting that helps smaller models understand they should provide a final answer
+                formatted_content = (
+                    f"I have successfully executed the {tool_name} tool and received the following result:\n\n"
+                    f"{tool_content}\n\n"
+                    f"Now I will use this information to provide a comprehensive answer to your question."
+                )
+                
                 # Convert tool response to assistant message
                 assistant_msg = {
                     "role": "assistant",
-                    "content": f"I executed the {tool_name} tool and received: {tool_content}"
+                    "content": formatted_content
                 }
                 final_messages.append(assistant_msg)
             else:
@@ -1017,9 +1025,17 @@ class MLXProvider(BaseProvider):
                             # Convert tool messages to assistant messages with clear formatting
                             tool_name = msg.get("name", "unknown_tool")
                             tool_output = msg.get("content", "")
+                            
+                            # Use clearer formatting for smaller models to understand tool execution
+                            formatted_tool_message = (
+                                f"I have successfully executed the {tool_name} tool. "
+                                f"Here is the result:\n\n{tool_output}\n\n"
+                                f"Based on this information, I can now provide an answer."
+                            )
+                            
                             formatted_messages.append({
                                 "role": "assistant", 
-                                "content": f"I called the {tool_name} tool and received: {tool_output}"
+                                "content": formatted_tool_message
                             })
                         else:
                             formatted_messages.append(msg)
@@ -1242,9 +1258,17 @@ class MLXProvider(BaseProvider):
                             # Convert tool messages to assistant messages with clear formatting
                             tool_name = msg.get("name", "unknown_tool")
                             tool_output = msg.get("content", "")
+                            
+                            # Use clearer formatting for smaller models to understand tool execution
+                            formatted_tool_message = (
+                                f"I have successfully executed the {tool_name} tool. "
+                                f"Here is the result:\n\n{tool_output}\n\n"
+                                f"Based on this information, I can now provide an answer."
+                            )
+                            
                             formatted_messages.append({
                                 "role": "assistant", 
-                                "content": f"I called the {tool_name} tool and received: {tool_output}"
+                                "content": formatted_tool_message
                             })
                         else:
                             formatted_messages.append(msg)

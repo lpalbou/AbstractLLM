@@ -239,9 +239,26 @@ def _parse_special_token(response: str) -> List[ToolCall]:
         if not overlaps:
             all_matches.append((match.start(), match.end(), match.group(1).strip()))
     
-    # Strategy 3: Even more flexible pattern to catch edge cases
+    # Strategy 3: Ultra-robust pattern - just find start tag + JSON, ignore ending completely
+    # This is the most important pattern - prioritize start tag detection and valid JSON
+    pattern_start_json = r'<\|tool_call\|>\s*(\{[^<]*?\})'
+    for match in re.finditer(pattern_start_json, response, re.DOTALL | re.IGNORECASE):
+        # Check if this match overlaps with any previous matches
+        overlaps = False
+        for prev_start, prev_end, _ in all_matches:
+            if match.start() >= prev_start and match.start() < prev_end:
+                overlaps = True
+                break
+        if not overlaps:
+            json_candidate = match.group(1).strip()
+            # Basic validation that it looks like JSON and contains tool structure
+            if (json_candidate.startswith('{') and json_candidate.endswith('}') and 
+                ('"name"' in json_candidate or '"function"' in json_candidate)):
+                all_matches.append((match.start(), match.end(), json_candidate))
+    
+    # Strategy 4: Even more flexible pattern to catch edge cases
     # Look for the opening tag followed by anything that looks like JSON until we hit a logical end
-    pattern_flexible = r'<\|tool_call\|>\s*(\{[^<]*?\})\s*(?:</\|tool_call\|>|\n\s*\n|\[context|\n\s*<|\Z)'
+    pattern_flexible = r'<\|tool_call\|>\s*(\{[^<]*?\})\s*(?:</\|tool_call\|>|\|>|\n\s*\n|\[context|\n\s*<|\Z)'
     for match in re.finditer(pattern_flexible, response, re.DOTALL | re.IGNORECASE):
         # Check if this match overlaps with any previous matches
         overlaps = False
@@ -255,7 +272,7 @@ def _parse_special_token(response: str) -> List[ToolCall]:
             if json_candidate.startswith('{') and json_candidate.endswith('}'):
                 all_matches.append((match.start(), match.end(), json_candidate))
     
-    # Strategy 4: Look for Python code blocks that might contain JSON-like tool calls
+    # Strategy 5: Look for Python code blocks that might contain JSON-like tool calls
     # This is for models that misunderstand the format but still try to make tool calls
     pattern_code_block = r'```(?:python|json)?\s*\n.*?list_files\(([^)]*)\).*?\n```'
     for match in re.finditer(pattern_code_block, response, re.DOTALL):
@@ -317,6 +334,13 @@ def _parse_special_token(response: str) -> List[ToolCall]:
             
             if json_end > 0:
                 json_str = json_str[:json_end]
+            
+            # Additional cleanup for common issues
+            # Remove any trailing characters that might be malformed closing tags
+            if json_str.endswith('}|>'):
+                json_str = json_str[:-2]  # Remove |>
+            elif json_str.endswith('}}>'):
+                json_str = json_str[:-1]  # Remove extra >
             
             data = json.loads(json_str)
             if isinstance(data, dict) and "name" in data:
