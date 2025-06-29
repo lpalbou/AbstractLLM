@@ -1059,37 +1059,6 @@ class MLXProvider(BaseProvider):
                 if compatible_messages and compatible_messages[-1]['role'] != 'assistant':
                     formatted_prompt += "\nassistant:"
             
-            # If tools are provided, modify the formatted prompt to include explicit examples
-            if tools:
-                # Add explicit tool usage examples for MLX models
-                tools_example = """
-IMPORTANT INSTRUCTIONS FOR TOOL USAGE:
-1. When you need to use a tool, you MUST use the EXACT format below:
-<|tool_call|>
-{"name": "tool_name", "arguments": {"param1": "value1"}}
-</|tool_call|>
-
-2. DO NOT use Python code blocks or any other format.
-3. For example, to list files in the current directory:
-<|tool_call|>
-{"name": "list_files", "arguments": {}}
-</|tool_call|>
-
-4. To read a file:
-<|tool_call|>
-{"name": "read_file", "arguments": {"file_path": "example.txt"}}
-</|tool_call|>
-"""
-                # Add the examples to the formatted prompt
-                if "<|im_start|>system" in formatted_prompt:
-                    # For Qwen models, insert after the system prompt
-                    formatted_prompt = formatted_prompt.replace("<|im_end|>\n<|im_start|>user", f"{tools_example}<|im_end|>\n<|im_start|>user")
-                else:
-                    # For other models, add at the beginning
-                    formatted_prompt = f"{tools_example}\n\n{formatted_prompt}"
-                
-                logger.info("Added explicit tool usage examples to prompt")
-            
             # Log the request using shared method with all details
             generation_params_log = {}
             for key, value in generation_params.items():
@@ -1128,6 +1097,15 @@ IMPORTANT INSTRUCTIONS FOR TOOL USAGE:
             )
             
             logger.info(f"MLX generation starting - prompt length: {len(formatted_prompt)} chars")
+            
+            # ===== EXACT PROMPT SENT TO MLX MODEL =====
+#            print("\n" + "="*80)
+#            print("🔥 EXACT PROMPT SENT TO MLX MODEL:")
+#            print("="*80)
+#            print(formatted_prompt)
+#            print("="*80)
+#            print(f"📊 Length: {len(formatted_prompt)} characters")
+#            print("="*80 + "\n")
             
             # Generate with MLX
             generate_kwargs = {
@@ -1305,6 +1283,54 @@ IMPORTANT INSTRUCTIONS FOR TOOL USAGE:
                 ])
                 if compatible_messages and compatible_messages[-1]['role'] != 'assistant':
                     formatted_prompt += "\nassistant:"
+            
+            # Log the request using shared method with all details
+            generation_params_log = {}
+            for key, value in generation_params.items():
+                if key == "sampler":
+                    # Extract sampler parameters if available
+                    generation_params_log["sampler_type"] = value.__name__ if hasattr(value, '__name__') else str(value)
+                    generation_params_log["sampler_temperature"] = temperature
+                elif key == "logits_processors":
+                    # Extract logits processor info
+                    if isinstance(value, list):
+                        processor_info = []
+                        for processor in value:
+                            if hasattr(processor, '__name__'):
+                                processor_info.append(processor.__name__)
+                            else:
+                                processor_info.append(str(type(processor).__name__))
+                        generation_params_log["logits_processors"] = processor_info
+                        generation_params_log["repetition_penalty"] = self._model_config.default_repetition_penalty if self._model_config else 1.0
+                else:
+                    generation_params_log[key] = value
+            
+            # Use shared logging method
+            self._log_request_details(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools,
+                formatted_messages=formatted_messages,
+                enhanced_system_prompt=enhanced_system_prompt if tools else system_prompt,
+                stream=False,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                formatted_prompt=formatted_prompt,
+                **generation_params_log
+            )
+            
+            logger.info(f"MLX generation starting - prompt length: {len(formatted_prompt)} chars")
+            
+            # ===== EXACT PROMPT SENT TO MLX MODEL (STREAMING) =====
+            print("\n" + "="*80)
+            print("🔥 EXACT PROMPT SENT TO MLX MODEL (STREAMING):")
+            print("="*80)
+            print(formatted_prompt)
+            print("="*80)
+            print(f"📊 Length: {len(formatted_prompt)} characters")
+            print("="*80 + "\n")
             
             # Stream tokens from the model using stream_generate
             stream_kwargs = {

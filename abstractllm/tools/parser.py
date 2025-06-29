@@ -162,9 +162,16 @@ def _has_json_tool_pattern(text: str) -> bool:
     patterns = [
         r'\{"name":\s*"[^"]+',
         r'\{"function":\s*"[^"]+',
-        r'"name":\s*"[^"]+.*"arguments":\s*\{'
+        r'"name":\s*"[^"]+.*"arguments":\s*\{',
+        # More flexible patterns to catch variations
+        r'\{\s*"name"\s*:\s*"[^"]+',
+        r'\{\s*"function"\s*:\s*"[^"]+',
+        r'"name"\s*:\s*"[^"]+[^}]*"arguments"\s*:\s*\{',
+        # Catch common tool names in JSON-like structures
+        r'\{\s*"name"\s*:\s*"(?:list_files|read_file|search_files|write_file)',
+        r'"(?:list_files|read_file|search_files|write_file)"\s*,?\s*"arguments"',
     ]
-    return any(re.search(p, text) for p in patterns)
+    return any(re.search(p, text, re.IGNORECASE) for p in patterns)
 
 
 # Parsing functions
@@ -214,14 +221,15 @@ def _parse_special_token(response: str) -> List[ToolCall]:
     # First, find all tool call positions to avoid duplicates from overlapping patterns
     all_matches = []
     
-    # Strategy 1: Look for properly closed tags
+    # Strategy 1: Look for properly closed tags (more flexible with whitespace)
     pattern_with_close = r'<\|tool_call\|>\s*(.*?)\s*</\|tool_call\|>'
-    for match in re.finditer(pattern_with_close, response, re.DOTALL):
+    for match in re.finditer(pattern_with_close, response, re.DOTALL | re.IGNORECASE):
         all_matches.append((match.start(), match.end(), match.group(1).strip()))
     
-    # Strategy 2: Look for opening tags followed by valid JSON (no closing tag)
-    pattern_no_close = r'<\|tool_call\|>\s*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})'
-    for match in re.finditer(pattern_no_close, response, re.DOTALL):
+    # Strategy 2: Look for opening tags followed by valid JSON (no closing tag) - more flexible
+    # This handles cases where the JSON might span multiple lines or have various whitespace
+    pattern_no_close = r'<\|tool_call\|>\s*(\{(?:[^{}]|(?:\{[^{}]*\}))*\})\s*(?:</\|tool_call\|>|$|\n|<)'
+    for match in re.finditer(pattern_no_close, response, re.DOTALL | re.IGNORECASE):
         # Check if this match overlaps with any closed tag match
         overlaps = False
         for closed_start, closed_end, _ in all_matches:
@@ -231,7 +239,23 @@ def _parse_special_token(response: str) -> List[ToolCall]:
         if not overlaps:
             all_matches.append((match.start(), match.end(), match.group(1).strip()))
     
-    # Strategy 3: Look for Python code blocks that might contain JSON-like tool calls
+    # Strategy 3: Even more flexible pattern to catch edge cases
+    # Look for the opening tag followed by anything that looks like JSON until we hit a logical end
+    pattern_flexible = r'<\|tool_call\|>\s*(\{[^<]*?\})\s*(?:</\|tool_call\|>|\n\s*\n|\[context|\n\s*<|\Z)'
+    for match in re.finditer(pattern_flexible, response, re.DOTALL | re.IGNORECASE):
+        # Check if this match overlaps with any previous matches
+        overlaps = False
+        for prev_start, prev_end, _ in all_matches:
+            if match.start() >= prev_start and match.start() < prev_end:
+                overlaps = True
+                break
+        if not overlaps:
+            json_candidate = match.group(1).strip()
+            # Basic validation that it looks like JSON
+            if json_candidate.startswith('{') and json_candidate.endswith('}'):
+                all_matches.append((match.start(), match.end(), json_candidate))
+    
+    # Strategy 4: Look for Python code blocks that might contain JSON-like tool calls
     # This is for models that misunderstand the format but still try to make tool calls
     pattern_code_block = r'```(?:python|json)?\s*\n.*?list_files\(([^)]*)\).*?\n```'
     for match in re.finditer(pattern_code_block, response, re.DOTALL):
@@ -270,13 +294,39 @@ def _parse_special_token(response: str) -> List[ToolCall]:
     all_matches.sort(key=lambda x: x[0])
     for _, _, json_str in all_matches:
         try:
+            # Clean up the JSON string - remove any trailing content that might interfere
+            json_str = json_str.strip()
+            
+            # Handle cases where there might be trailing text after the JSON
+            if json_str.count('{') > json_str.count('}'):
+                # Missing closing braces - try to add them
+                missing_braces = json_str.count('{') - json_str.count('}')
+                json_str += '}' * missing_braces
+            
+            # Try to find the JSON object boundaries more precisely
+            brace_count = 0
+            json_end = -1
+            for i, char in enumerate(json_str):
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        json_end = i + 1
+                        break
+            
+            if json_end > 0:
+                json_str = json_str[:json_end]
+            
             data = json.loads(json_str)
             if isinstance(data, dict) and "name" in data:
                 tool_calls.append(ToolCall(
                     name=data["name"],
                     arguments=data.get("arguments", {})
                 ))
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            # More detailed logging for debugging
+            logger.debug(f"JSON decode error for tool call: {e}, JSON string: {repr(json_str)}")
             continue
     
     return tool_calls

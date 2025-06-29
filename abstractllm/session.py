@@ -1163,7 +1163,7 @@ class Session:
         frequency_penalty: Optional[float] = None,
         presence_penalty: Optional[float] = None,
         max_tool_calls: int = 10,
-        adjust_system_prompt: bool = True,
+        adjust_system_prompt: bool = False,  # DISABLED - was breaking tool definitions
         system_prompt: Optional[str] = None,
         files: Optional[List[Union[str, Path]]] = None,
         **kwargs
@@ -1453,7 +1453,7 @@ class Session:
         frequency_penalty: Optional[float] = None,
         presence_penalty: Optional[float] = None,
         max_tool_calls: int = 5,
-        adjust_system_prompt: bool = True,
+        adjust_system_prompt: bool = False,  # DISABLED - was breaking tool definitions
         system_prompt: Optional[str] = None,
         files: Optional[List[Union[str, Path]]] = None,
         **kwargs
@@ -1800,7 +1800,7 @@ class Session:
         tool_functions: Optional[Dict[str, Callable[..., Any]]] = None,
         tools: Optional[List[Union[Dict[str, Any], Callable]]] = None,  # Added for consistency
         max_tool_calls: int = 10,
-        adjust_system_prompt: bool = True,
+        adjust_system_prompt: bool = False,  # DISABLED - was breaking tool definitions
         stream: bool = False,
         files: Optional[List[Union[str, Path]]] = None,
         **kwargs
