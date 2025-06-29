@@ -431,14 +431,14 @@ class HuggingFaceProvider(BaseProvider):
                 
         return self._tool_handler
 
-    def generate(self,
-                prompt: str,
-                system_prompt: Optional[str] = None,
-                files: Optional[List[Union[str, Path]]] = None,
-                stream: bool = False,
-                tools: Optional[List[Union[Dict[str, Any], Callable]]] = None,
-                messages: Optional[List[Dict[str, Any]]] = None,
-                **kwargs) -> Union[GenerateResponse, Generator[GenerateResponse, None, None]]:
+    def _generate_impl(self,
+                      prompt: str,
+                      system_prompt: Optional[str] = None,
+                      files: Optional[List[Union[str, Path]]] = None,
+                      stream: bool = False,
+                      tools: Optional[List[Union[Dict[str, Any], Callable]]] = None,
+                      messages: Optional[List[Dict[str, Any]]] = None,
+                      **kwargs) -> Union[GenerateResponse, Generator[GenerateResponse, None, None]]:
         """Generate a response using the HuggingFace model."""
         
         logger.info(f"Generation request: model={self.config_manager.get_param(ModelParameter.MODEL)}, "

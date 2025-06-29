@@ -244,13 +244,13 @@ class AnthropicProvider(BaseProvider):
             
         return sanitized_messages
     
-    def generate(self, 
-                prompt: str, 
-                system_prompt: Optional[str] = None, 
-                files: Optional[List[Union[str, Path]]] = None,
-                stream: bool = False,
-                tools: Optional[List[Union[Dict[str, Any], callable]]] = None,
-                **kwargs) -> Union[str, Generator[str, None, None], Generator[Dict[str, Any], None, None]]:
+    def _generate_impl(self, 
+                      prompt: str, 
+                      system_prompt: Optional[str] = None, 
+                      files: Optional[List[Union[str, Path]]] = None,
+                      stream: bool = False,
+                      tools: Optional[List[Union[Dict[str, Any], callable]]] = None,
+                      **kwargs) -> Union[str, Generator[str, None, None], Generator[Dict[str, Any], None, None]]:
         """
         Generate a response using Anthropic API.
         

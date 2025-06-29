@@ -256,6 +256,12 @@ def show_help():
     print(f"  /tools                            - List all available tools")
     print(f"  /help                             - Show this help message")
     print(f"  /exit, /quit, /q                  - Exit ALMA")
+    print(f"\n{BLUE_ITALIC}📎 File Attachment Syntax (AbstractLLM Core Feature):{RESET}")
+    print(f"  @file.txt                         - Attach single file temporarily")
+    print(f"  @folder/                          - Attach all files in folder")
+    print(f"  @*.py                             - Attach files matching pattern")
+    print(f"  Example: 'Analyze @data.csv and @config.json for errors'")
+    print(f"  Note: Files are attached temporarily and NOT saved to conversation history")
 
 
 def parse_arguments():
@@ -287,14 +293,14 @@ Supported providers: mlx, anthropic, openai, ollama
     parser.add_argument(
         "--provider",
         type=str,
-        default="mlx",
+        default="ollama",
         help="LLM provider to use (default: mlx). Options: mlx, anthropic, openai, ollama"
     )
     
     parser.add_argument(
         "--model",
         type=str,
-        default="mlx-community/Qwen3-30B-A3B-4bit",        
+        default="qwen3:4b",
         help="Model name to use (default: mlx-community/Qwen3-30B-A3B-4bit)"
     )
     

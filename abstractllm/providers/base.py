@@ -2,9 +2,12 @@
 Base provider implementation for AbstractLLM.
 """
 
-from typing import Any, Dict, List, Optional, Union, Callable, TYPE_CHECKING, Tuple
+from typing import Any, Dict, List, Optional, Union, Callable, TYPE_CHECKING, Tuple, Generator
 import logging
+import re
+import glob
 from pathlib import Path
+from abc import ABC, abstractmethod
 
 from abstractllm.interface import AbstractLLMInterface
 from abstractllm.types import GenerateResponse, Message
@@ -43,12 +46,12 @@ except ImportError:
 # Configure logger
 logger = logging.getLogger("abstractllm.providers.base")
 
-class BaseProvider(AbstractLLMInterface):
+class BaseProvider(AbstractLLMInterface, ABC):
     """
     Base class for LLM providers.
     
     This class implements common functionality for all providers including
-    tool support through the UniversalToolHandler.
+    tool support through the UniversalToolHandler and universal @file syntax parsing.
     """
     
     def __init__(self, config: Optional[Dict[Any, Any]] = None):
@@ -56,6 +59,84 @@ class BaseProvider(AbstractLLMInterface):
         super().__init__(config)
         self.provider_name = self.__class__.__name__.replace("Provider", "").lower()
         self._tool_handler: Optional[UniversalToolHandler] = None
+    
+    def generate(self, 
+                prompt: str, 
+                system_prompt: Optional[str] = None, 
+                files: Optional[List[Union[str, Path]]] = None,
+                stream: bool = False, 
+                tools: Optional[List[Union[Dict[str, Any], Callable]]] = None,
+                **kwargs) -> Union[GenerateResponse, Generator[GenerateResponse, None, None]]:
+        """
+        Universal generate method that handles @file parsing for all providers.
+        
+        This method:
+        1. Parses @file references from the prompt
+        2. Merges them with any explicit files parameter
+        3. Delegates to the provider-specific _generate_impl method
+        
+        Args:
+            prompt: The input prompt (may contain @file references)
+            system_prompt: Override the system prompt in the config
+            files: Optional list of files to process (paths or URLs)
+            stream: Whether to stream the response
+            tools: Optional list of tools that the model can use
+            **kwargs: Additional parameters to override configuration
+            
+        Returns:
+            Generated response or generator
+        """
+        # Parse @file references from prompt and merge with existing files
+        parsed_prompt, file_refs = self._parse_file_references(prompt)
+        
+        # Combine parsed file references with explicitly provided files
+        all_files = []
+        if files:
+            all_files.extend(files)
+        if file_refs:
+            all_files.extend(file_refs)
+        
+        # Log file attachment info if any files were found
+        if file_refs:
+            logger.info(f"Parsed {len(file_refs)} file references from prompt: {file_refs}")
+        
+        # Delegate to provider-specific implementation
+        return self._generate_impl(
+            prompt=parsed_prompt,
+            system_prompt=system_prompt,
+            files=all_files if all_files else None,
+            stream=stream,
+            tools=tools,
+            **kwargs
+        )
+    
+    @abstractmethod
+    def _generate_impl(self, 
+                      prompt: str, 
+                      system_prompt: Optional[str] = None, 
+                      files: Optional[List[Union[str, Path]]] = None,
+                      stream: bool = False, 
+                      tools: Optional[List[Union[Dict[str, Any], Callable]]] = None,
+                      **kwargs) -> Union[GenerateResponse, Generator[GenerateResponse, None, None]]:
+        """
+        Provider-specific implementation of generate.
+        
+        This method must be implemented by each provider to handle the actual generation.
+        The prompt will already have @file references parsed and files will include
+        both explicit files and those parsed from @file references.
+        
+        Args:
+            prompt: The input prompt (with @file references already parsed)
+            system_prompt: Override the system prompt in the config
+            files: Optional list of files to process (includes parsed @file references)
+            stream: Whether to stream the response
+            tools: Optional list of tools that the model can use
+            **kwargs: Additional parameters to override configuration
+            
+        Returns:
+            Generated response or generator
+        """
+        pass
     
     def _validate_tool_support(self, tools: Optional[List[Any]]) -> None:
         """
@@ -262,6 +343,127 @@ class BaseProvider(AbstractLLMInterface):
         """
         # Default implementation returns tools as-is
         return tools
+    
+    def _parse_file_references(self, text: str) -> Tuple[str, List[str]]:
+        """
+        Parse @file references from text and return cleaned text with list of files.
+        
+        This method provides universal @file syntax support across all providers.
+        Following SOTA practices, it clearly indicates to the LLM that files are 
+        attached and available in context to prevent tool usage.
+        
+        Supports:
+        - @file.txt - attach single file
+        - @folder/ - attach all files in folder  
+        - @*.py - attach files matching pattern
+        
+        Args:
+            text: Input text that may contain @file references
+            
+        Returns:
+            Tuple of (cleaned_text, list_of_file_paths)
+        """
+        if not text or '@' not in text:
+            return text, []
+            
+        # Pattern to match @file references
+        file_pattern = r'@([^\s]+)'
+        
+        attached_files = []
+        file_references = []
+        
+        def replace_file_ref(match):
+            file_ref = match.group(1)
+            
+            # Handle different file reference types
+            try:
+                if file_ref.endswith('/'):
+                    # Directory - get all files in directory
+                    dir_path = Path(file_ref)
+                    if dir_path.exists() and dir_path.is_dir():
+                        files = [str(f) for f in dir_path.iterdir() if f.is_file()]
+                        attached_files.extend(files)
+                        # Add each file as a reference
+                        for file_path in files:
+                            file_references.append(f"📎 {Path(file_path).name}")
+                        return ""  # Remove @reference from prompt
+                    else:
+                        return f"[Directory {file_ref} not found]"
+                
+                elif '*' in file_ref or '?' in file_ref:
+                    # Glob pattern
+                    files = glob.glob(file_ref)
+                    if files:
+                        attached_files.extend(files)
+                        # Add each file as a reference
+                        for file_path in files:
+                            file_references.append(f"📎 {Path(file_path).name}")
+                        return ""  # Remove @reference from prompt
+                    else:
+                        return f"[No files found matching {file_ref}]"
+                
+                else:
+                    # Single file
+                    file_path = Path(file_ref)
+                    if file_path.exists() and file_path.is_file():
+                        attached_files.append(str(file_path))
+                        file_references.append(f"📎 {file_path.name}")
+                        return ""  # Remove @reference from prompt
+                    else:
+                        return f"[File {file_ref} not found]"
+                        
+            except Exception as e:
+                logger.warning(f"Error processing file reference {file_ref}: {e}")
+                return f"[Error processing {file_ref}: {str(e)}]"
+        
+        # Replace all @file references
+        cleaned_text = re.sub(file_pattern, replace_file_ref, text)
+        
+        # Add clear file context indication and content at the beginning if files were attached
+        if file_references:
+            file_list = "\n".join(file_references)
+            
+            # Load and include actual file content following SOTA practices
+            file_content_sections = []
+            for file_path in attached_files:
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        content = f.read().strip()
+                        file_name = Path(file_path).name
+                        file_content_sections.append(f"""<document>
+<source>{file_name}</source>
+<document_content>
+{content}
+</document_content>
+</document>""")
+                except Exception as e:
+                    logger.warning(f"Error reading file {file_path}: {e}")
+                    file_name = Path(file_path).name
+                    file_content_sections.append(f"""<document>
+<source>{file_name}</source>
+<document_content>
+[Error reading file: {str(e)}]
+</document_content>
+</document>""")
+            
+            file_content = "\n\n".join(file_content_sections)
+            
+            cleaned_text = f"""📎 ATTACHED FILES - The following files are loaded in your context:
+{file_list}
+
+<documents>
+{file_content}
+</documents>
+
+IMPORTANT: The above files are already loaded in your context. Do NOT use tools to access these files. Refer to their content directly from the documents above.
+
+{cleaned_text.strip()}"""
+        
+        # Log file attachment info
+        if attached_files:
+            logger.info(f"Parsed {len(attached_files)} file references from prompt")
+            
+        return cleaned_text, attached_files
     
     def _log_request_details(self, 
                            prompt: str,
