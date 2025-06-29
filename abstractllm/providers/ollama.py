@@ -159,11 +159,14 @@ class OllamaProvider(BaseProvider):
             )
             tool_calls.append(tool_call_obj)
             
-        # Return a ToolCallResponse object
-        return ToolCallResponse(
+        # Create the response object
+        response = ToolCallResponse(
             content=content,
             tool_calls=tool_calls
         )
+        
+        # Note: Tool call logging is handled at session level for universal coverage
+        return response
     
     def _supports_tool_calls(self) -> bool:
         """

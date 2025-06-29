@@ -896,6 +896,10 @@ class Session:
             # Unknown format
             raise ValueError(f"Unsupported tool_calls format: {type(response.tool_calls)}")
             
+        # Log tool calls being executed using universal logging (if provider supports it)
+        if hasattr(self._provider, '_log_tool_calls_found') and tool_calls:
+            self._provider._log_tool_calls_found(tool_calls)
+        
         # Execute each tool call
         for tool_call in tool_calls:
             tool_result = self.execute_tool_call(tool_call, tool_functions)

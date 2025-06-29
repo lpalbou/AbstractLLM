@@ -1161,12 +1161,9 @@ IMPORTANT INSTRUCTIONS FOR TOOL USAGE:
                 # Try to extract tool calls from the response
                 tool_response = self._extract_tool_calls(output)
                 
-                # Log whether tool calls were found
+                # Check if tool calls were found and return appropriate response
                 if tool_response and tool_response.has_tool_calls():
-                    logger.info(f"Found {len(tool_response.tool_calls)} tool calls in response")
-                    for tc in tool_response.tool_calls:
-                        logger.info(f"Tool call: {tc.name} with args: {tc.arguments}")
-                    
+                    # Note: Tool call logging is handled at session level for universal coverage
                     # Return a GenerateResponse with tool calls
                     return GenerateResponse(
                         content=output,
@@ -1178,8 +1175,7 @@ IMPORTANT INSTRUCTIONS FOR TOOL USAGE:
                             "total_tokens": len(self._processor.encode(formatted_prompt)) + len(self._processor.encode(output))
                         }
                     )
-                else:
-                    logger.warning(f"No tool calls found in response despite tools being provided")
+                # No warning when no tools are called - this is normal behavior
             
             # Calculate token usage
             prompt_tokens = TokenCounter.count_tokens(formatted_prompt, model_name)

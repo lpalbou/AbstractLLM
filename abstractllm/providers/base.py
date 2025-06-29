@@ -238,19 +238,18 @@ class BaseProvider(AbstractLLMInterface, ABC):
             mode = "native" if handler.supports_native and self._check_for_tool_calls(response) else "prompted"
             
             # Parse the response using the handler
+            parsed = None
             if hasattr(response, 'content') and response.content:
                 parsed = handler.parse_response(response.content, mode=mode)
-                if parsed.has_tool_calls():
-                    return parsed
             elif isinstance(response, str):
                 parsed = handler.parse_response(response, mode=mode)
-                if parsed.has_tool_calls():
-                    return parsed
             elif isinstance(response, dict):
                 # For native responses that come as dictionaries
                 parsed = handler.parse_response(response, mode="native")
-                if parsed.has_tool_calls():
-                    return parsed
+            
+            # Return tool calls if found (logging handled at session level for universal coverage)
+            if parsed and parsed.has_tool_calls():
+                return parsed
                     
             return None
         except Exception as e:
@@ -268,6 +267,45 @@ class BaseProvider(AbstractLLMInterface, ABC):
             if model:
                 self._tool_handler = UniversalToolHandler(model)
         return self._tool_handler
+    
+    def _log_tool_calls_found(self, tool_calls: List["ToolCall"]) -> None:
+        """
+        Log when tool calls are found in a response (universal for all providers).
+        
+        This provides clear visibility when the LLM actually decides to use tools,
+        showing which tools are called and with what parameters.
+        
+        Args:
+            tool_calls: List of tool calls found in the response
+        """
+        if not tool_calls:
+            return
+            
+        # Use INFO level for file logging
+        logger.info(f"🔧 LLM called {len(tool_calls)} tool(s):")
+        
+        # Also print directly to console in yellow for visibility
+        # This ensures tool calls are always visible regardless of console logging level
+        print(f"\033[33m🔧 LLM called {len(tool_calls)} tool(s):\033[0m")
+        
+        for i, tc in enumerate(tool_calls, 1):
+            # Format arguments nicely for readability
+            if tc.arguments:
+                # Truncate very long argument values for readability
+                formatted_args = {}
+                for key, value in tc.arguments.items():
+                    if isinstance(value, str) and len(value) > 100:
+                        formatted_args[key] = f"{value[:97]}..."
+                    else:
+                        formatted_args[key] = value
+                args_str = str(formatted_args)
+            else:
+                args_str = "{}"
+                
+            # Log to file
+            logger.info(f"  {i}. {tc.name}({args_str})")
+            # Print to console in yellow
+            print(f"\033[33m  {i}. {tc.name}({args_str})\033[0m")
     
     def _prepare_tool_context(self, 
                             tools: Optional[List[Any]], 
