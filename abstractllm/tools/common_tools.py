@@ -34,15 +34,21 @@ logger = logging.getLogger(__name__)
 # File Operations
 def list_files(directory_path: str = ".", pattern: str = "*", recursive: bool = False) -> str:
     """
-    List files in a directory with optional pattern matching.
+    List files and directories in a specified directory with optional pattern matching.
+    
+    IMPORTANT: Use 'directory_path' parameter (not 'file_path') to specify the directory to list.
     
     Args:
-        directory_path: Path to the directory to list (default: current directory)
-        pattern: Glob pattern to match files (default: "*" for all files)
-        recursive: Whether to search recursively (default: False)
+        directory_path: Path to the directory to list files from (default: "." for current directory)
+        pattern: Glob pattern to match files (default: "*" for all files and directories)
+        recursive: Whether to search recursively in subdirectories (default: False)
         
     Returns:
-        Formatted string with file listings or error message
+        Formatted string with file and directory listings or error message
+        
+    Example:
+        list_files(directory_path="docs") - Lists files in the docs directory
+        list_files(directory_path=".", pattern="*.py") - Lists Python files in current directory
     """
     try:
         directory = Path(directory_path)

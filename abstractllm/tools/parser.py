@@ -438,110 +438,286 @@ def _parse_any_format(response: str) -> List[ToolCall]:
 # Formatting functions
 
 def _format_gemma_style(tools: List[ToolDefinition]) -> str:
-    """Format for Gemma (tool_code)."""
-    tool_defs = []
-    
-    for tool in tools:
-        params = []
-        if "properties" in tool.parameters:
-            for name, info in tool.parameters["properties"].items():
-                type_hint = {"string": "str", "integer": "int", 
-                            "number": "float", "boolean": "bool"}.get(info.get("type"), "str")
-                params.append(f"{name}: {type_hint}")
-        
-        signature = f"{tool.name}({', '.join(params)})" if params else f"{tool.name}()"
-        tool_defs.append(f"def {signature}:\n    \"\"\"{tool.description}\"\"\"")
-    
-    tools_text = "\n\n".join(tool_defs)
-    
-    return f"""You are a helpful AI assistant with tool access. When using tools, wrap calls in ```tool_code blocks.
-
-Available tools:
-
-{tools_text}
-
-Example usage:
-```tool_code
-{tools[0].name}(param="value")
-```"""
-
-
-def _format_qwen_style(tools: List[ToolDefinition]) -> str:
-    """Format for Qwen (special token)."""
+    """Format for Gemma (tool_code) - clean and pragmatic."""
     tool_list = [t.to_dict() for t in tools]
+    
+    # Create 2 examples for each tool
+    examples = []
+    for tool in tools:
+        if tool.name == "list_files":
+            examples.append(f"""{tool.name} - List files in a directory
+Example 1: ```tool_code
+list_files(directory_path="docs")
+```
+Example 2: ```tool_code
+list_files(directory_path="src", pattern="*.py", recursive=True)
+```""")
+        elif tool.name == "read_file":
+            examples.append(f"""{tool.name} - Read file contents
+Example 1: ```tool_code
+read_file(file_path="example.txt")
+```
+Example 2: ```tool_code
+read_file(file_path="large.txt", should_read_entire_file=False, start_line_one_indexed=10, end_line_one_indexed_inclusive=20)
+```""")
+        elif tool.name == "search_files":
+            examples.append(f"""{tool.name} - Search text in files
+Example 1: ```tool_code
+search_files(search_term="function")
+```
+Example 2: ```tool_code
+search_files(search_term="class", directory_path="src", file_pattern="*.py", case_sensitive=True)
+```""")
+        elif tool.name == "write_file":
+            examples.append(f"""{tool.name} - Write content to file
+Example 1: ```tool_code
+write_file(file_path="output.txt", content="Hello World")
+```
+Example 2: ```tool_code
+write_file(file_path="log.txt", content="Error occurred", mode="a")
+```""")
+        else:
+            # Generic examples for other tools
+            params = list(tool.parameters.get("properties", {}).keys())
+            if params:
+                # Example 1: minimal required params
+                required = tool.parameters.get("required", [])
+                if required:
+                    min_params = ", ".join([f'{p}="value"' for p in required[:2]])
+                    examples.append(f"""{tool.name} - {tool.description}
+Example 1: ```tool_code
+{tool.name}({min_params})
+```""")
+                else:
+                    examples.append(f"""{tool.name} - {tool.description}
+Example 1: ```tool_code
+{tool.name}()
+```""")
+                
+                # Example 2: more params
+                all_params = ", ".join([f'{p}="value"' for p in params[:3]])
+                examples.append(f"""Example 2: ```tool_code
+{tool.name}({all_params})
+```""")
+            else:
+                examples.append(f"""{tool.name} - {tool.description}
+Example 1: ```tool_code
+{tool.name}()
+```
+Example 2: ```tool_code
+{tool.name}()
+```""")
+    
+    examples_text = "\n\n".join(examples)
     
     return f"""You are a helpful AI assistant with tool access.
 
 Available tools:
 {json.dumps(tool_list, indent=2)}
 
-IMPORTANT: When you need to use a tool, you MUST use the exact format below. DO NOT use Python code blocks or any other format.
+EXAMPLES:
+{examples_text}"""
 
-To use a tool:
-<|tool_call|>
-{{"name": "tool_name", "arguments": {{"param": "value"}}}}
-</|tool_call|>
 
-For example, to list files in the current directory:
-<|tool_call|>
-{{"name": "list_files", "arguments": {{}}}}
-</|tool_call|>"""
+def _format_qwen_style(tools: List[ToolDefinition]) -> str:
+    """Format for Qwen (special token) - clean and pragmatic."""
+    tool_list = [t.to_dict() for t in tools]
+    
+    # Create 2 examples for each tool
+    examples = []
+    for tool in tools:
+        if tool.name == "list_files":
+            examples.append(f"""{tool.name} - List files in a directory
+Example 1: <|tool_call|>{{"name": "list_files", "arguments": {{"directory_path": "docs"}}}}</|tool_call|>
+Example 2: <|tool_call|>{{"name": "list_files", "arguments": {{"directory_path": "src", "pattern": "*.py", "recursive": true}}}}</|tool_call|>""")
+        elif tool.name == "read_file":
+            examples.append(f"""{tool.name} - Read file contents
+Example 1: <|tool_call|>{{"name": "read_file", "arguments": {{"file_path": "example.txt"}}}}</|tool_call|>
+Example 2: <|tool_call|>{{"name": "read_file", "arguments": {{"file_path": "large.txt", "should_read_entire_file": false, "start_line_one_indexed": 10, "end_line_one_indexed_inclusive": 20}}}}</|tool_call|>""")
+        elif tool.name == "search_files":
+            examples.append(f"""{tool.name} - Search text in files
+Example 1: <|tool_call|>{{"name": "search_files", "arguments": {{"search_term": "function"}}}}</|tool_call|>
+Example 2: <|tool_call|>{{"name": "search_files", "arguments": {{"search_term": "class", "directory_path": "src", "file_pattern": "*.py", "case_sensitive": true}}}}</|tool_call|>""")
+        elif tool.name == "write_file":
+            examples.append(f"""{tool.name} - Write content to file
+Example 1: <|tool_call|>{{"name": "write_file", "arguments": {{"file_path": "output.txt", "content": "Hello World"}}}}</|tool_call|>
+Example 2: <|tool_call|>{{"name": "write_file", "arguments": {{"file_path": "log.txt", "content": "Error occurred", "mode": "a"}}}}</|tool_call|>""")
+        else:
+            # Generic examples for other tools
+            params = list(tool.parameters.get("properties", {}).keys())
+            if params:
+                # Example 1: minimal required params
+                required = tool.parameters.get("required", [])
+                min_args = {param: "value" for param in required[:2]} if required else {}
+                # Example 2: more params
+                all_args = {param: "value" for param in params[:3]}
+                examples.append(f"""{tool.name} - {tool.description}
+Example 1: <|tool_call|>{{"name": "{tool.name}", "arguments": {min_args}}}</|tool_call|>
+Example 2: <|tool_call|>{{"name": "{tool.name}", "arguments": {all_args}}}</|tool_call|>""")
+            else:
+                examples.append(f"""{tool.name} - {tool.description}
+Example 1: <|tool_call|>{{"name": "{tool.name}", "arguments": {{}}}}</|tool_call|>
+Example 2: <|tool_call|>{{"name": "{tool.name}", "arguments": {{}}}}</|tool_call|>""")
+    
+    examples_text = "\n\n".join(examples)
+    
+    return f"""You are a helpful AI assistant with tool access.
+
+Available tools:
+{json.dumps(tool_list, indent=2)}
+
+EXAMPLES:
+{examples_text}"""
 
 
 def _format_llama_style(tools: List[ToolDefinition]) -> str:
-    """Format for Llama (function_call)."""
-    tool_descriptions = []
+    """Format for Llama (function_call) - clean and pragmatic."""
+    tool_list = [t.to_dict() for t in tools]
     
+    # Create 2 examples for each tool
+    examples = []
     for tool in tools:
-        params = []
-        if "properties" in tool.parameters:
-            for name, info in tool.parameters["properties"].items():
-                params.append(f"- {name} ({info.get('type', 'string')})")
-        
-        params_text = "\n  ".join(params) if params else "No parameters"
-        tool_descriptions.append(f"• {tool.name}: {tool.description}\n  Parameters:\n  {params_text}")
+        if tool.name == "list_files":
+            examples.append(f"""{tool.name} - List files in a directory
+Example 1: <function_call>{{"name": "list_files", "arguments": {{"directory_path": "docs"}}}}</function_call>
+Example 2: <function_call>{{"name": "list_files", "arguments": {{"directory_path": "src", "pattern": "*.py", "recursive": true}}}}</function_call>""")
+        elif tool.name == "read_file":
+            examples.append(f"""{tool.name} - Read file contents
+Example 1: <function_call>{{"name": "read_file", "arguments": {{"file_path": "example.txt"}}}}</function_call>
+Example 2: <function_call>{{"name": "read_file", "arguments": {{"file_path": "large.txt", "should_read_entire_file": false, "start_line_one_indexed": 10, "end_line_one_indexed_inclusive": 20}}}}</function_call>""")
+        elif tool.name == "search_files":
+            examples.append(f"""{tool.name} - Search text in files
+Example 1: <function_call>{{"name": "search_files", "arguments": {{"search_term": "function"}}}}</function_call>
+Example 2: <function_call>{{"name": "search_files", "arguments": {{"search_term": "class", "directory_path": "src", "file_pattern": "*.py", "case_sensitive": true}}}}</function_call>""")
+        elif tool.name == "write_file":
+            examples.append(f"""{tool.name} - Write content to file
+Example 1: <function_call>{{"name": "write_file", "arguments": {{"file_path": "output.txt", "content": "Hello World"}}}}</function_call>
+Example 2: <function_call>{{"name": "write_file", "arguments": {{"file_path": "log.txt", "content": "Error occurred", "mode": "a"}}}}</function_call>""")
+        else:
+            # Generic examples for other tools
+            params = list(tool.parameters.get("properties", {}).keys())
+            if params:
+                # Example 1: minimal required params
+                required = tool.parameters.get("required", [])
+                min_args = {param: "value" for param in required[:2]} if required else {}
+                # Example 2: more params
+                all_args = {param: "value" for param in params[:3]}
+                examples.append(f"""{tool.name} - {tool.description}
+Example 1: <function_call>{{"name": "{tool.name}", "arguments": {min_args}}}</function_call>
+Example 2: <function_call>{{"name": "{tool.name}", "arguments": {all_args}}}</function_call>""")
+            else:
+                examples.append(f"""{tool.name} - {tool.description}
+Example 1: <function_call>{{"name": "{tool.name}", "arguments": {{}}}}</function_call>
+Example 2: <function_call>{{"name": "{tool.name}", "arguments": {{}}}}</function_call>""")
     
-    tools_text = "\n\n".join(tool_descriptions)
+    examples_text = "\n\n".join(examples)
     
     return f"""You are a helpful AI assistant with tool access.
 
 Available tools:
-{tools_text}
+{json.dumps(tool_list, indent=2)}
 
-To use a tool:
-<function_call>
-{{"name": "tool_name", "arguments": {{"param": "value"}}}}
-</function_call>"""
+EXAMPLES:
+{examples_text}"""
 
 
 def _format_xml_style(tools: List[ToolDefinition]) -> str:
-    """Format for XML style."""
-    tool_list = []
+    """Format for XML style - clean and pragmatic."""
+    tool_list = [t.to_dict() for t in tools]
     
+    # Create 2 examples for each tool
+    examples = []
     for tool in tools:
-        param_names = list(tool.parameters.get("properties", {}).keys())
-        params = f"({', '.join(param_names)})" if param_names else "()"
-        tool_list.append(f"- {tool.name}{params}: {tool.description}")
+        if tool.name == "list_files":
+            examples.append(f"""{tool.name} - List files in a directory
+Example 1: <tool_call>{{"name": "list_files", "arguments": {{"directory_path": "docs"}}}}</tool_call>
+Example 2: <tool_call>{{"name": "list_files", "arguments": {{"directory_path": "src", "pattern": "*.py", "recursive": true}}}}</tool_call>""")
+        elif tool.name == "read_file":
+            examples.append(f"""{tool.name} - Read file contents
+Example 1: <tool_call>{{"name": "read_file", "arguments": {{"file_path": "example.txt"}}}}</tool_call>
+Example 2: <tool_call>{{"name": "read_file", "arguments": {{"file_path": "large.txt", "should_read_entire_file": false, "start_line_one_indexed": 10, "end_line_one_indexed_inclusive": 20}}}}</tool_call>""")
+        elif tool.name == "search_files":
+            examples.append(f"""{tool.name} - Search text in files
+Example 1: <tool_call>{{"name": "search_files", "arguments": {{"search_term": "function"}}}}</tool_call>
+Example 2: <tool_call>{{"name": "search_files", "arguments": {{"search_term": "class", "directory_path": "src", "file_pattern": "*.py", "case_sensitive": true}}}}</tool_call>""")
+        elif tool.name == "write_file":
+            examples.append(f"""{tool.name} - Write content to file
+Example 1: <tool_call>{{"name": "write_file", "arguments": {{"file_path": "output.txt", "content": "Hello World"}}}}</tool_call>
+Example 2: <tool_call>{{"name": "write_file", "arguments": {{"file_path": "log.txt", "content": "Error occurred", "mode": "a"}}}}</tool_call>""")
+        else:
+            # Generic examples for other tools
+            params = list(tool.parameters.get("properties", {}).keys())
+            if params:
+                # Example 1: minimal required params
+                required = tool.parameters.get("required", [])
+                min_args = {param: "value" for param in required[:2]} if required else {}
+                # Example 2: more params
+                all_args = {param: "value" for param in params[:3]}
+                examples.append(f"""{tool.name} - {tool.description}
+Example 1: <tool_call>{{"name": "{tool.name}", "arguments": {min_args}}}</tool_call>
+Example 2: <tool_call>{{"name": "{tool.name}", "arguments": {all_args}}}</tool_call>""")
+            else:
+                examples.append(f"""{tool.name} - {tool.description}
+Example 1: <tool_call>{{"name": "{tool.name}", "arguments": {{}}}}</tool_call>
+Example 2: <tool_call>{{"name": "{tool.name}", "arguments": {{}}}}</tool_call>""")
     
-    tools_text = "\n".join(tool_list)
+    examples_text = "\n\n".join(examples)
     
     return f"""You are a helpful AI assistant with tool access.
 
 Available tools:
-{tools_text}
+{json.dumps(tool_list, indent=2)}
 
-To use a tool:
-<tool_call>
-{{"name": "tool_name", "arguments": {{"param": "value"}}}}
-</tool_call>"""
+EXAMPLES:
+{examples_text}"""
 
 
 def _format_generic_style(tools: List[ToolDefinition]) -> str:
-    """Generic format."""
-    tool_list = [f"- {t.name}: {t.description}" for t in tools]
+    """Generic format - clean and pragmatic."""
+    tool_list = [t.to_dict() for t in tools]
+    
+    # Create 2 examples for each tool
+    examples = []
+    for tool in tools:
+        if tool.name == "list_files":
+            examples.append(f"""{tool.name} - List files in a directory
+Example 1: {{"name": "list_files", "arguments": {{"directory_path": "docs"}}}}
+Example 2: {{"name": "list_files", "arguments": {{"directory_path": "src", "pattern": "*.py", "recursive": true}}}}""")
+        elif tool.name == "read_file":
+            examples.append(f"""{tool.name} - Read file contents
+Example 1: {{"name": "read_file", "arguments": {{"file_path": "example.txt"}}}}
+Example 2: {{"name": "read_file", "arguments": {{"file_path": "large.txt", "should_read_entire_file": false, "start_line_one_indexed": 10, "end_line_one_indexed_inclusive": 20}}}}""")
+        elif tool.name == "search_files":
+            examples.append(f"""{tool.name} - Search text in files
+Example 1: {{"name": "search_files", "arguments": {{"search_term": "function"}}}}
+Example 2: {{"name": "search_files", "arguments": {{"search_term": "class", "directory_path": "src", "file_pattern": "*.py", "case_sensitive": true}}}}""")
+        elif tool.name == "write_file":
+            examples.append(f"""{tool.name} - Write content to file
+Example 1: {{"name": "write_file", "arguments": {{"file_path": "output.txt", "content": "Hello World"}}}}
+Example 2: {{"name": "write_file", "arguments": {{"file_path": "log.txt", "content": "Error occurred", "mode": "a"}}}}""")
+        else:
+            # Generic examples for other tools
+            params = list(tool.parameters.get("properties", {}).keys())
+            if params:
+                # Example 1: minimal required params
+                required = tool.parameters.get("required", [])
+                min_args = {param: "value" for param in required[:2]} if required else {}
+                # Example 2: more params
+                all_args = {param: "value" for param in params[:3]}
+                examples.append(f"""{tool.name} - {tool.description}
+Example 1: {{"name": "{tool.name}", "arguments": {min_args}}}
+Example 2: {{"name": "{tool.name}", "arguments": {all_args}}}""")
+            else:
+                examples.append(f"""{tool.name} - {tool.description}
+Example 1: {{"name": "{tool.name}", "arguments": {{}}}}
+Example 2: {{"name": "{tool.name}", "arguments": {{}}}}""")
+    
+    examples_text = "\n\n".join(examples)
+    
     return f"""You are a helpful AI assistant with tool access.
 
 Available tools:
-{chr(10).join(tool_list)}
+{json.dumps(tool_list, indent=2)}
 
-When you need to use a tool, format your request as JSON with 'name' and 'arguments' fields."""
+EXAMPLES:
+{examples_text}"""
