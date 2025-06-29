@@ -906,20 +906,10 @@ class MLXProvider(BaseProvider):
         final_messages = []
         for msg in fixed_messages:
             if msg["role"] == "tool":
-                tool_name = msg.get("name", "unknown_tool")
-                tool_content = msg.get("content", "")
-                
-                # Use clearer formatting that helps smaller models understand they should provide a final answer
-                formatted_content = (
-                    f"I have successfully executed the {tool_name} tool and received the following result:\n\n"
-                    f"{tool_content}\n\n"
-                    f"Now I will use this information to provide a comprehensive answer to your question."
-                )
-                
                 # Convert tool response to assistant message
                 assistant_msg = {
                     "role": "assistant",
-                    "content": formatted_content
+                    "content": f"I called the {msg.get('name', 'unknown_tool')} tool and received: {msg.get('content', '')}"
                 }
                 final_messages.append(assistant_msg)
             else:
