@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 import json
 import logging
+import uuid
 
 # Import base Session
 from abstractllm.session import Session as BaseSession, Message, MessageRole
@@ -25,6 +26,12 @@ from abstractllm.structured_response import (
     StructuredResponseHandler, 
     StructuredResponseConfig,
     ResponseFormat
+)
+from abstractllm.scratchpad_manager import (
+    ScratchpadManager, 
+    get_scratchpad_manager,
+    ReActPhase,
+    CyclePhaseEvent
 )
 
 # Import types
@@ -99,6 +106,16 @@ class EnhancedSession(BaseSession):
         
         # Structured response handlers per provider
         self.response_handlers: Dict[str, StructuredResponseHandler] = {}
+        
+        # Enhanced telemetry tracking
+        self.current_tool_traces: List[Dict[str, Any]] = []
+        self.current_retry_attempts: int = 0
+        self.facts_before_generation: int = 0
+        
+        # SOTA Scratchpad Manager with complete observability
+        memory_folder = persist_memory.parent if persist_memory else Path("./memory")
+        session_id = self.memory.session_id if self.memory else f"session_{uuid.uuid4().hex[:8]}"
+        self.scratchpad = get_scratchpad_manager(session_id, memory_folder)
     
     def generate(self,
                 prompt: Optional[str] = None,
@@ -118,7 +135,7 @@ class EnhancedSession(BaseSession):
                 use_memory_context: bool = True,
                 create_react_cycle: bool = True,
                 structured_config: Optional[StructuredResponseConfig] = None,
-                **kwargs) -> Union[str, "GenerateResponse", Generator]:
+                **kwargs) -> "GenerateResponse":
         """
         Enhanced generate with memory, retry, and structured response support.
         
@@ -148,6 +165,15 @@ class EnhancedSession(BaseSession):
         provider_instance = self._get_provider(provider)
         provider_name = self._get_provider_name(provider_instance)
         
+        # Initialize telemetry tracking
+        generation_start_time = datetime.now()
+        self.current_tool_traces = []  # Reset for this generation
+        self.current_retry_attempts = 0
+        
+        # Track memory state before generation
+        if self.enable_memory:
+            self.facts_before_generation = len(self.memory.semantic_memory) if self.memory else 0
+        
         # Start ReAct cycle if enabled
         if self.enable_memory and create_react_cycle and prompt:
             self.current_cycle = self.memory.start_react_cycle(
@@ -158,6 +184,14 @@ class EnhancedSession(BaseSession):
             self.current_cycle.add_thought(
                 f"Processing query with {provider_name} provider",
                 confidence=1.0
+            )
+            
+            # Start scratchpad cycle with complete observability
+            self.scratchpad.start_cycle(self.current_cycle.cycle_id, prompt)
+            self.scratchpad.add_thought(
+                f"Processing query with {provider_name} provider",
+                confidence=1.0,
+                metadata={"provider": provider_name, "model": getattr(provider_instance, 'model', 'unknown')}
             )
         
         # Add memory context if enabled
@@ -247,9 +281,17 @@ class EnhancedSession(BaseSession):
                         **kwargs
                     )
         
+        # Calculate total generation time
+        total_generation_time = (datetime.now() - generation_start_time).total_seconds()
+        
         # Update memory if enabled
+        extracted_facts = []
+        
         if self.enable_memory and prompt:
-            # Add to chat history
+            # Track facts extracted before adding new messages
+            facts_before = len(self.memory.semantic_memory)
+            
+            # Add to chat history (this triggers fact extraction)
             msg_id = self.memory.add_chat_message(
                 role="user",
                 content=prompt,
@@ -264,12 +306,39 @@ class EnhancedSession(BaseSession):
                 cycle_id=self.current_cycle.cycle_id if self.current_cycle else None
             )
             
-            # Complete ReAct cycle
+            # Calculate facts extracted during this generation
+            facts_after = len(self.memory.semantic_memory)
+            new_facts_count = facts_after - self.facts_before_generation
+            
+            # Get the actual facts that were extracted
+            if new_facts_count > 0:
+                # Get the most recent facts
+                all_facts = list(self.memory.semantic_memory.values())
+                extracted_facts = all_facts[-new_facts_count:]
+            
+                # Complete ReAct cycle
             if self.current_cycle:
                 self.current_cycle.complete(response_content, success=True)
-                self.current_cycle = None
+                
+                # Complete scratchpad cycle with final answer
+                self.scratchpad.complete_cycle(
+                    final_answer=response_content,
+                    success=True
+                )
         
-        return response
+        # Build enhanced response with telemetry
+        enhanced_response = self._build_enhanced_response(
+            base_response=response,
+            provider_name=provider_name,
+            total_time=total_generation_time,
+            extracted_facts=extracted_facts
+        )
+        
+        # Clear current cycle after building response
+        if self.current_cycle:
+            self.current_cycle = None
+        
+        return enhanced_response
     
     def execute_tool_call(self,
                          tool_call: "ToolCall",
@@ -277,6 +346,9 @@ class EnhancedSession(BaseSession):
         """
         Execute tool call with retry and memory tracking.
         """
+        import time
+        start_time = time.time()
+        
         # Track in ReAct cycle
         if self.current_cycle:
             action_id = self.current_cycle.add_action(
@@ -285,9 +357,20 @@ class EnhancedSession(BaseSession):
                 reasoning=f"Executing {tool_call.name} to gather information"
             )
         else:
-            action_id = None
+            action_id = f"action_{len(self.current_tool_traces)}"
+            
+        # Add to scratchpad with complete observability
+        scratchpad_action_id = self.scratchpad.add_action(
+            tool_name=tool_call.name,
+            tool_args=tool_call.arguments if hasattr(tool_call, 'arguments') else {},
+            reasoning=f"Executing {tool_call.name} to gather information",
+            metadata={"session_action_id": action_id}
+        )
         
         # Execute with retry if enabled
+        success = True
+        error = None
+        
         if self.enable_retry:
             try:
                 result = self.retry_manager.retry_with_backoff(
@@ -296,26 +379,104 @@ class EnhancedSession(BaseSession):
                     tool_functions,
                     key=f"tool_{tool_call.name}"
                 )
+                # Track retry attempts
+                retry_attempts = getattr(self.retry_manager, '_current_attempts', {}).get(f"tool_{tool_call.name}", 0)
+                self.current_retry_attempts += retry_attempts
             except Exception as e:
+                success = False
+                error = str(e)
+                result = {"error": str(e)}
                 if self.current_cycle and action_id:
                     self.current_cycle.add_observation(
                         action_id=action_id,
                         content=str(e),
                         success=False
                     )
-                raise
+                # Still create the trace for failed tools
         else:
-            result = super().execute_tool_call(tool_call, tool_functions)
+            try:
+                result = super().execute_tool_call(tool_call, tool_functions)
+            except Exception as e:
+                success = False
+                error = str(e)
+                result = {"error": str(e)}
         
-        # Track observation
+        execution_time = time.time() - start_time
+        
+        # Create tool execution trace
+        tool_trace = {
+            "name": tool_call.name,
+            "arguments": tool_call.arguments if hasattr(tool_call, 'arguments') else {},
+            "result": str(result.get("output", result.get("error", result)))[:500],  # Truncate for readability
+            "success": success,
+            "execution_time": execution_time,
+            "timestamp": datetime.now().isoformat(),
+            "action_id": action_id,
+            "reasoning": f"Executing {tool_call.name} to gather information",
+            "error": error
+        }
+        
+        # Add to current traces
+        self.current_tool_traces.append(tool_trace)
+        
+        # Track observation in ReAct cycle
         if self.current_cycle and action_id:
             self.current_cycle.add_observation(
                 action_id=action_id,
                 content=result.get("output", result.get("error")),
-                success=result.get("error") is None
+                success=success
             )
+            
+        # Add observation to scratchpad (COMPLETE - no truncation)
+        self.scratchpad.add_observation(
+            action_id=scratchpad_action_id,
+            result=result.get("output", result.get("error", result)),
+            success=success,
+            execution_time=execution_time,
+            metadata={"session_action_id": action_id}
+        )
+        
+        # Re-raise exception if it occurred
+        if not success and error:
+            raise Exception(error)
         
         return result
+    
+    def _build_enhanced_response(self,
+                                base_response: "GenerateResponse",
+                                provider_name: str,
+                                total_time: float,
+                                extracted_facts: List[Any]) -> "GenerateResponse":
+        """Build enhanced response with readable telemetry."""
+        
+        # Create facts list
+        facts_strings = []
+        for fact in extracted_facts:
+            if hasattr(fact, '__str__'):
+                facts_strings.append(str(fact))
+            else:
+                facts_strings.append(f"{fact.subject} --[{fact.predicate}]--> {fact.object}")
+        
+        # Get COMPLETE scratchpad trace (NO truncation)
+        complete_scratchpad = self.scratchpad.get_complete_trace()
+        scratchpad_file_path = self.scratchpad.get_scratchpad_file_path()
+        
+        # Create enhanced response by copying base response
+        enhanced_response = base_response
+        
+        # Add telemetry fields with complete observability
+        enhanced_response.react_cycle_id = self.current_cycle.cycle_id if self.current_cycle else None
+        enhanced_response.tool_calls = self.current_tool_traces  # Now readable list
+        enhanced_response.tools_executed = self.current_tool_traces
+        enhanced_response.facts_extracted = facts_strings
+        enhanced_response.reasoning_trace = complete_scratchpad  # COMPLETE scratchpad
+        enhanced_response.total_reasoning_time = total_time
+        
+        # Add scratchpad file reference for external access
+        enhanced_response.scratchpad_file = str(scratchpad_file_path)
+        enhanced_response.scratchpad_manager = self.scratchpad  # For direct access
+        
+        return enhanced_response
     
     def _get_response_handler(self, provider_name: str) -> StructuredResponseHandler:
         """Get or create structured response handler for provider."""

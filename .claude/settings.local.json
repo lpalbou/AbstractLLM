@@ -27,7 +27,10 @@
       "Bash(awk:*)",
       "Bash(pip install:*)",
       "Bash(pip uninstall:*)",
-      "Read(//opt/anaconda3/lib/**)"
+      "Read(//opt/anaconda3/lib/**)",
+      "Bash(echo $PATH)",
+      "Bash(chmod:*)",
+      "Bash(./run_isolated.sh python:*)"
     ],
     "deny": []
   },
