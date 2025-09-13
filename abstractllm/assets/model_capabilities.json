@@ -655,6 +655,39 @@
       "notes": "Vision-language model",
       "source": "Google docs"
     },
+    "glm-4": {
+      "context_length": 128000,
+      "max_output_tokens": 4096,
+      "tool_support": "prompted",
+      "structured_output": "prompted",
+      "parallel_tools": false,
+      "vision_support": false,
+      "audio_support": false,
+      "notes": "ChatGLM4 from Zhipu AI",
+      "source": "Model documentation"
+    },
+    "glm-4-9b": {
+      "context_length": 128000,
+      "max_output_tokens": 4096,
+      "tool_support": "prompted",
+      "structured_output": "prompted",
+      "parallel_tools": false,
+      "vision_support": false,
+      "audio_support": false,
+      "notes": "9B parameter version",
+      "source": "Model documentation"
+    },
+    "glm-4-9b-0414-4bit": {
+      "context_length": 128000,
+      "max_output_tokens": 4096,
+      "tool_support": "prompted",
+      "structured_output": "prompted",
+      "parallel_tools": false,
+      "vision_support": false,
+      "audio_support": false,
+      "notes": "MLX quantized version",
+      "source": "Model documentation"
+    },
     "deepseek-r1": {
       "context_length": 32768,
       "max_output_tokens": 8192,
@@ -669,13 +702,24 @@
     "qwen3": {
       "context_length": 32768,
       "max_output_tokens": 8192,
-      "tool_support": "native",
-      "structured_output": "native",
-      "parallel_tools": true,
+      "tool_support": "prompted",
+      "structured_output": "prompted",
+      "parallel_tools": false,
       "vision_support": false,
       "audio_support": false,
-      "notes": "Instruct model with good reasoning and native tool support",
+      "notes": "Instruct model with good reasoning. Use prompted tool support when running via MLX.",
       "source": "MLX community"
+    },
+    "qwen3-14b": {
+      "context_length": 131072,
+      "max_output_tokens": 8192,
+      "tool_support": "prompted",
+      "structured_output": "prompted",
+      "parallel_tools": false,
+      "vision_support": false,
+      "audio_support": false,
+      "notes": "14B parameter model with prompted tool support",
+      "source": "Alibaba official docs"
     }
   },
   "tool_support_levels": {

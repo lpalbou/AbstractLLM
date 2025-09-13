@@ -18,8 +18,15 @@
       "Bash(/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/arm64-darwin/rg -B 5 -A 5 \"Maximum tool call limit.*reached\" abstractllm/session.py)",
       "Bash(/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/arm64-darwin/rg -B 3 -A 3 \"max_tool_calls\" alma-minimal.py)",
       "Bash(/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/arm64-darwin/rg -n \"use_chat_endpoint = formatted_tools\" abstractllm/providers/ollama.py)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "WebSearch",
+      "Read(//Users/albou/.cache/huggingface/hub/models--mlx-community--GLM-4.5-Air-4bit/snapshots/**)",
+      "Bash(xargs cat:*)",
+      "Read(//Users/albou/.cache/huggingface/**)",
+      "Bash(xargs ls:*)",
+      "Bash(awk:*)"
     ],
     "deny": []
-  }
+  },
+  "outputStyle": "Explanatory"
 }

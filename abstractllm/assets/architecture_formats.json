@@ -61,6 +61,18 @@
       "tool_format": "json",
       "patterns": ["gemma", "codegemma"]
     },
+    "glm": {
+      "description": "Zhipu AI's GLM architecture family",
+      "message_format": "im_start_end",
+      "system_prefix": "<|system|>\n",
+      "system_suffix": "\n",
+      "user_prefix": "<|user|>\n",
+      "user_suffix": "\n",
+      "assistant_prefix": "<|assistant|>\n",
+      "assistant_suffix": "\n",
+      "tool_format": "json",
+      "patterns": ["glm", "chatglm"]
+    },
     "granite": {
       "description": "IBM's Granite architecture family",
       "message_format": "special_tokens",

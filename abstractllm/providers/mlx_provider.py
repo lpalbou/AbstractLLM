@@ -1021,27 +1021,32 @@ class MLXProvider(BaseProvider):
             config_kwargs.pop("temperature", None)  # Remove temperature to avoid duplicate argument
             generation_params = self._model_config.get_generation_params(temperature, **config_kwargs)
             
-            # Prepare messages for MLX chat template
-            if messages is not None:
-                # Use provided messages (includes conversation history and tool results)
-                chat_messages = messages.copy()
-            else:
-                # Construct messages from prompt and system_prompt
-                chat_messages = []
-                if system_prompt:
-                    chat_messages.append({"role": "system", "content": system_prompt})
-                chat_messages.append({"role": "user", "content": prompt})
-            
             # Get model name for architecture detection
             model_name = self.config_manager.get_param(ModelParameter.MODEL)
             
-            # Use base class method to prepare tool context
+            # Prepare tool context BEFORE constructing messages
             enhanced_system_prompt = system_prompt
             mlx_tools = None
             if tools:
                 # Use base class method for tool preparation
                 enhanced_system_prompt, tool_defs, mode = self._prepare_tool_context(tools, system_prompt)
                 logger.info(f"Prepared {len(tools)} tools in {mode} mode")
+            
+            # NOW prepare messages for MLX chat template with enhanced system prompt
+            if messages is not None:
+                # Use provided messages (includes conversation history and tool results)
+                chat_messages = messages.copy()
+            else:
+                # Construct messages from prompt and enhanced_system_prompt (with tools)
+                chat_messages = []
+                if enhanced_system_prompt:  # Use enhanced prompt that includes tool instructions
+                    chat_messages.append({"role": "system", "content": enhanced_system_prompt})
+                    # Debug logging to see what system prompt is being used
+                    if tools:
+                        logger.warning(f"System prompt with tools (first 500 chars): {enhanced_system_prompt[:500]}")
+                chat_messages.append({"role": "user", "content": prompt})
+            
+            if tools:
                 
                 # MLX uses prompted mode, so mlx_tools is mainly for tracking
                 mlx_tools = tool_defs if mode == "native" else tools
@@ -1255,27 +1260,32 @@ class MLXProvider(BaseProvider):
             config_kwargs.pop("temperature", None)  # Remove temperature to avoid duplicate argument
             generation_params = self._model_config.get_generation_params(temperature, **config_kwargs)
             
-            # Prepare messages for MLX chat template
-            if messages is not None:
-                # Use provided messages (includes conversation history and tool results)
-                chat_messages = messages.copy()
-            else:
-                # Construct messages from prompt and system_prompt
-                chat_messages = []
-                if system_prompt:
-                    chat_messages.append({"role": "system", "content": system_prompt})
-                chat_messages.append({"role": "user", "content": prompt})
-            
             # Get model name for architecture detection
             model_name = self.config_manager.get_param(ModelParameter.MODEL)
             
-            # Use base class method to prepare tool context
+            # Prepare tool context BEFORE constructing messages
             enhanced_system_prompt = system_prompt
             mlx_tools = None
             if tools:
                 # Use base class method for tool preparation
                 enhanced_system_prompt, tool_defs, mode = self._prepare_tool_context(tools, system_prompt)
                 logger.info(f"Prepared {len(tools)} tools in {mode} mode")
+            
+            # NOW prepare messages for MLX chat template with enhanced system prompt
+            if messages is not None:
+                # Use provided messages (includes conversation history and tool results)
+                chat_messages = messages.copy()
+            else:
+                # Construct messages from prompt and enhanced_system_prompt (with tools)
+                chat_messages = []
+                if enhanced_system_prompt:  # Use enhanced prompt that includes tool instructions
+                    chat_messages.append({"role": "system", "content": enhanced_system_prompt})
+                    # Debug logging to see what system prompt is being used
+                    if tools:
+                        logger.warning(f"System prompt with tools (first 500 chars): {enhanced_system_prompt[:500]}")
+                chat_messages.append({"role": "user", "content": prompt})
+            
+            if tools:
                 
                 # MLX uses prompted mode, so mlx_tools is mainly for tracking
                 mlx_tools = tool_defs if mode == "native" else tools

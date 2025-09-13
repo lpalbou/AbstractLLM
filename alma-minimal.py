@@ -8,6 +8,9 @@ It supports text generation and tool usage in a simple REPL interface.
 
 from abstractllm import create_llm, create_session
 from abstractllm.session import Session
+# Import enhanced session factory for SOTA features
+from abstractllm.factory_enhanced import create_enhanced_session
+from abstractllm.structured_response import StructuredResponseConfig, ResponseFormat
 from abstractllm.tools.common_tools import read_file, list_files, search_files
 from abstractllm.utils.logging import configure_logging, log_step
 from abstractllm.utils.formatting import (
@@ -32,8 +35,16 @@ GREEN_BOLD = '\033[1m\033[32m'   # Green bold
 
 
 
-def execute_single_prompt(session, prompt: str, stream: bool = False, args=None):
-    """Execute a single prompt and display the result without starting REPL."""
+def execute_single_prompt(session, prompt: str, stream: bool = False, args=None, structured_output=None):
+    """Execute a single prompt and display the result without starting REPL.
+    
+    Args:
+        session: The session instance (base or enhanced)
+        prompt: The user prompt
+        stream: Whether to stream output
+        args: Command line arguments
+        structured_output: Optional structured output format ('json', 'pydantic', etc.)
+    """
     try:
         print(f"\n{BLUE_ITALIC}Executing prompt:{RESET} {prompt}")
         print(f"\n{BLUE_ITALIC}Assistant:{RESET}")
@@ -43,12 +54,36 @@ def execute_single_prompt(session, prompt: str, stream: bool = False, args=None)
         
         # Use the unified generate method with tools parameter
         log_step(2, "AGENT→LLM", "Sending query to LLM with tool support enabled")
-        response = session.generate(
-            prompt=prompt,
-            tools=[read_file, list_files, search_files],  # Directly pass the tool functions
-            max_tool_calls=25,  # Limit tool calls to avoid infinite loops
-            stream=stream
-        )
+        # Prepare structured config if requested
+        structured_config = None
+        if structured_output:
+            structured_config = StructuredResponseConfig(
+                format=ResponseFormat.JSON if structured_output == 'json' else ResponseFormat.PYDANTIC,
+                force_valid_json=True,
+                max_retries=3,
+                temperature_override=0.0  # Lower temperature for structured output
+            )
+        
+        # Use enhanced features if available
+        if hasattr(session, 'enable_memory'):
+            # Enhanced session with memory and structured response
+            response = session.generate(
+                prompt=prompt,
+                tools=[read_file, list_files, search_files],
+                max_tool_calls=25,
+                stream=stream,
+                use_memory_context=True,  # Use memory context
+                create_react_cycle=True,  # Create ReAct cycle
+                structured_config=structured_config  # Use structured output if configured
+            )
+        else:
+            # Standard session
+            response = session.generate(
+                prompt=prompt,
+                tools=[read_file, list_files, search_files],
+                max_tool_calls=25,
+                stream=stream
+            )
         
         log_step(3, "LLM→AGENT", "Received response, displaying to user")
         
@@ -262,12 +297,24 @@ def start_repl(session, stream: bool = False, args=None):
             
             # Use the unified generate method with tools parameter
             log_step(2, "AGENT→LLM", "Sending query to LLM with tool support enabled")
-            response = session.generate(
-                prompt=user_input,
-                tools=[read_file, list_files, search_files],  # Directly pass the tool functions
-                max_tool_calls=25,  # Limit tool calls to avoid infinite loops
-                stream=stream
-            )
+            
+            # Use enhanced features if available
+            if hasattr(session, 'enable_memory'):
+                response = session.generate(
+                    prompt=user_input,
+                    tools=[read_file, list_files, search_files],
+                    max_tool_calls=25,
+                    stream=stream,
+                    use_memory_context=True,
+                    create_react_cycle=True
+                )
+            else:
+                response = session.generate(
+                    prompt=user_input,
+                    tools=[read_file, list_files, search_files],
+                    max_tool_calls=25,
+                    stream=stream
+                )
             
             log_step(3, "LLM→AGENT", "Received response, displaying to user")
             
@@ -482,6 +529,27 @@ Supported providers: mlx, anthropic, openai, ollama
         help="Temperature for generation (default: model-specific, typically 0.7)"
     )
     
+    parser.add_argument(
+        "--enhanced",
+        action="store_true",
+        help="Use enhanced session with memory, retry strategies, and structured responses"
+    )
+    
+    parser.add_argument(
+        "--memory-persist",
+        type=str,
+        default=None,
+        help="Path to persist memory across sessions (only with --enhanced)"
+    )
+    
+    parser.add_argument(
+        "--structured-output",
+        type=str,
+        choices=['json', 'pydantic', 'yaml', 'xml'],
+        default=None,
+        help="Enable structured output format (only with --enhanced)"
+    )
+    
     return parser.parse_args()
 
 
@@ -513,15 +581,51 @@ def main():
     if args.stream:
         print(f"{BLUE_ITALIC}Streaming enabled for single prompt mode{RESET}")
 
-    session = create_session(args.provider, 
-                         model=args.model,
-                         tools=[read_file, list_files, search_files],  # Restore tools
-                         system_prompt="You are a helpful AI assistant.",  # Add default system prompt
-                         **config_params)
+    # Create either enhanced or standard session based on flag
+    if args.enhanced:
+        print(f"{BLUE_ITALIC}🧠 Using enhanced session with memory and SOTA features{RESET}")
+        
+        # Enhanced session with memory, retry, and structured response support
+        session = create_enhanced_session(
+            args.provider,
+            model=args.model,
+            enable_memory=True,
+            enable_retry=True,
+            persist_memory=args.memory_persist,
+            memory_config={
+                'working_memory_size': 10,
+                'consolidation_threshold': 5
+            },
+            tools=[read_file, list_files, search_files],
+            system_prompt="You are a helpful AI assistant with memory and reasoning capabilities.",
+            **config_params
+        )
+        
+        if args.memory_persist:
+            print(f"{BLUE_ITALIC}💾 Memory will be persisted to: {args.memory_persist}{RESET}")
+    else:
+        # Standard session
+        session = create_session(
+            args.provider,
+            model=args.model,
+            tools=[read_file, list_files, search_files],
+            system_prompt="You are a helpful AI assistant.",
+            **config_params
+        )
 
     # If prompt is provided, execute it and exit
     if args.prompt:
-        execute_single_prompt(session, args.prompt, args.stream, args)
+        execute_single_prompt(session, args.prompt, args.stream, args, args.structured_output)
+        
+        # Show memory summary if using enhanced session
+        if args.enhanced and hasattr(session, 'memory'):
+            print(f"\n{BLUE_ITALIC}📊 Memory Summary:{RESET}")
+            if session.current_cycle:
+                print(f"  ReAct Cycle ID: {session.current_cycle.cycle_id}")
+                print(f"  Iterations: {session.current_cycle.iterations}")
+                print(f"  Thoughts: {len(session.current_cycle.thoughts)}")
+                print(f"  Actions: {len(session.current_cycle.actions)}")
+                print(f"  Observations: {len(session.current_cycle.observations)}")
         return
 
     # Show help for interactive mode
