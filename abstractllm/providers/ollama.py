@@ -9,6 +9,8 @@ import json
 import asyncio
 import logging
 import copy
+import time
+import re
 
 # Check for required packages
 try:
@@ -62,6 +64,23 @@ except ImportError:
 
 # Configure logger
 logger = logging.getLogger("abstractllm.providers.ollama.OllamaProvider")
+
+def _approximate_token_count(text: str) -> int:
+    """
+    Approximate token count for text.
+    Uses a simple heuristic: ~4 characters per token for most models.
+    This provides reasonable estimates when exact token counts aren't available.
+    """
+    if not text:
+        return 0
+    
+    # Remove extra whitespace and count characters
+    cleaned_text = re.sub(r'\s+', ' ', text.strip())
+    
+    # Rough approximation: 4 characters per token
+    # This is conservative but reasonable for most languages
+    return max(1, len(cleaned_text) // 4)
+
 
 class OllamaProvider(BaseProvider):
     """
@@ -443,6 +462,9 @@ class OllamaProvider(BaseProvider):
         if kwargs:
             self.config_manager.update_config(kwargs)
         
+        # Track timing for metrics
+        start_time = time.time()
+        
         # Get necessary parameters from config
         model = self.config_manager.get_param(ModelParameter.MODEL)
         temperature = self.config_manager.get_param(ModelParameter.TEMPERATURE)
@@ -747,6 +769,11 @@ class OllamaProvider(BaseProvider):
                 # Return appropriate response
                 if tool_response and tool_response.has_tool_calls():
                     logger.debug(f"Tool response has tool calls: {tool_response.tool_calls}")
+                    # Calculate approximate token counts and timing
+                    prompt_tokens = _approximate_token_count(prompt)
+                    completion_tokens = _approximate_token_count(content)
+                    total_time = time.time() - start_time
+                    
                     # Log response with tool calls
                     self._log_response_details(
                         data, 
@@ -754,30 +781,57 @@ class OllamaProvider(BaseProvider):
                         has_tool_calls=True, 
                         tool_calls=tool_response.tool_calls,
                         model=model,
-                        usage={"prompt_tokens": 0, "completion_tokens": 0}  # Ollama doesn't provide token counts
+                        usage={
+                            "prompt_tokens": prompt_tokens,
+                            "completion_tokens": completion_tokens, 
+                            "total_tokens": prompt_tokens + completion_tokens,
+                            "total_time": total_time
+                        }
                     )
                     from abstractllm.types import GenerateResponse
                     return GenerateResponse(
                         content=content,
                         tool_calls=tool_response,
-                        model=model
+                        model=model,
+                        usage={
+                            "prompt_tokens": prompt_tokens,
+                            "completion_tokens": completion_tokens, 
+                            "total_tokens": prompt_tokens + completion_tokens,
+                            "total_time": total_time
+                        }
                     )
                 else:
                     logger.debug(f"No tool calls detected in response. tool_response={tool_response}")
+                    # Calculate approximate token counts and timing
+                    prompt_tokens = _approximate_token_count(prompt)
+                    completion_tokens = _approximate_token_count(content)
+                    total_time = time.time() - start_time
+                    
                     # Log response without tool calls
                     self._log_response_details(
                         data, 
                         content, 
                         has_tool_calls=False,
                         model=model,
-                        usage={"prompt_tokens": 0, "completion_tokens": 0}  # Ollama doesn't provide token counts
+                        usage={
+                            "prompt_tokens": prompt_tokens,
+                            "completion_tokens": completion_tokens,
+                            "total_tokens": prompt_tokens + completion_tokens, 
+                            "total_time": total_time
+                        }
                     )
                     # Always return a GenerateResponse for consistency
                     from abstractllm.types import GenerateResponse
                     return GenerateResponse(
                         content=content,
                         tool_calls=None,
-                        model=model
+                        model=model,
+                        usage={
+                            "prompt_tokens": prompt_tokens,
+                            "completion_tokens": completion_tokens,
+                            "total_tokens": prompt_tokens + completion_tokens, 
+                            "total_time": total_time
+                        }
                     )
                     
         except requests.RequestException as e:
@@ -824,6 +878,9 @@ class OllamaProvider(BaseProvider):
         # Update config with any remaining kwargs
         if kwargs:
             self.config_manager.update_config(kwargs)
+        
+        # Track timing for metrics
+        start_time = time.time()
         
         # Get necessary parameters from config
         model = self.config_manager.get_param(ModelParameter.MODEL)
@@ -1074,6 +1131,11 @@ class OllamaProvider(BaseProvider):
                         
                         # Return appropriate response
                         if tool_response and tool_response.has_tool_calls():
+                            # Calculate approximate token counts and timing
+                            prompt_tokens = _approximate_token_count(prompt)
+                            completion_tokens = _approximate_token_count(content)
+                            total_time = time.time() - start_time
+                            
                             # Log response with tool calls
                             self._log_response_details(
                                 data, 
@@ -1081,24 +1143,56 @@ class OllamaProvider(BaseProvider):
                                 has_tool_calls=True, 
                                 tool_calls=tool_response.tool_calls,
                                 model=model,
-                                usage={"prompt_tokens": 0, "completion_tokens": 0}
+                                usage={
+                                    "prompt_tokens": prompt_tokens,
+                                    "completion_tokens": completion_tokens,
+                                    "total_tokens": prompt_tokens + completion_tokens,
+                                    "total_time": total_time
+                                }
                             )
                             from abstractllm.types import GenerateResponse
                             return GenerateResponse(
                                 content=content,
                                 tool_calls=tool_response,
-                                model=model
+                                model=model,
+                                usage={
+                                    "prompt_tokens": prompt_tokens,
+                                    "completion_tokens": completion_tokens,
+                                    "total_tokens": prompt_tokens + completion_tokens,
+                                    "total_time": total_time
+                                }
                             )
                         else:
+                            # Calculate approximate token counts and timing
+                            prompt_tokens = _approximate_token_count(prompt)
+                            completion_tokens = _approximate_token_count(content)
+                            total_time = time.time() - start_time
+                            
                             # Log response without tool calls
                             self._log_response_details(
                                 data, 
                                 content, 
                                 has_tool_calls=False,
                                 model=model,
-                                usage={"prompt_tokens": 0, "completion_tokens": 0}
+                                usage={
+                                    "prompt_tokens": prompt_tokens,
+                                    "completion_tokens": completion_tokens,
+                                    "total_tokens": prompt_tokens + completion_tokens,
+                                    "total_time": total_time
+                                }
                             )
-                            return content
+                            from abstractllm.types import GenerateResponse
+                            return GenerateResponse(
+                                content=content,
+                                tool_calls=None,
+                                model=model,
+                                usage={
+                                    "prompt_tokens": prompt_tokens,
+                                    "completion_tokens": completion_tokens,
+                                    "total_tokens": prompt_tokens + completion_tokens,
+                                    "total_time": total_time
+                                }
+                            )
 
         except aiohttp.ClientError as e:
             logger.error(f"Network error during Ollama API request: {str(e)}")

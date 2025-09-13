@@ -213,25 +213,32 @@ def format_metrics_line(response: Any) -> str:
     
     # Token metrics - only if usage data available
     if usage and isinstance(usage, dict):
-        if 'prompt_tokens' in usage and 'completion_tokens' in usage and 'total_tokens' in usage:
-            input_tokens = usage['prompt_tokens']
-            generated_tokens = usage['completion_tokens']
-            total_tokens = usage['total_tokens']
-            metrics_parts.append(f"Tokens: {input_tokens}→{generated_tokens} ({total_tokens} total)")
-        elif 'total_tokens' in usage:
-            total_tokens = usage['total_tokens']
+        # Handle different provider field names
+        prompt_tokens = usage.get('prompt_tokens', usage.get('input_tokens', 0))
+        completion_tokens = usage.get('completion_tokens', usage.get('output_tokens', 0))
+        total_tokens = usage.get('total_tokens', prompt_tokens + completion_tokens if prompt_tokens and completion_tokens else 0)
+        
+        if prompt_tokens and completion_tokens and total_tokens:
+            metrics_parts.append(f"Tokens: {prompt_tokens}→{completion_tokens} ({total_tokens} total)")
+        elif total_tokens:
             metrics_parts.append(f"Tokens: {total_tokens}")
     
-    # Speed calculation - only if we have timing and usage data
-    if hasattr(response, 'total_reasoning_time') and response.total_reasoning_time and usage and 'completion_tokens' in usage:
+    # Speed calculation - check multiple sources for timing information
+    reasoning_time = None
+    if hasattr(response, 'total_reasoning_time') and response.total_reasoning_time:
         reasoning_time = response.total_reasoning_time
-        if reasoning_time > 0:
-            tokens_per_second = usage['completion_tokens'] / reasoning_time
+    elif usage and 'total_time' in usage and usage['total_time']:
+        reasoning_time = usage['total_time']
+    
+    if reasoning_time and usage:
+        # Get completion tokens with fallback to output_tokens (Anthropic)
+        completion_tokens = usage.get('completion_tokens', usage.get('output_tokens', 0))
+        if reasoning_time > 0 and completion_tokens > 0:
+            tokens_per_second = completion_tokens / reasoning_time
             metrics_parts.append(f"Speed: {tokens_per_second:.1f} tk/s")
         metrics_parts.append(f"Time: {reasoning_time:.2f}s")
-    elif hasattr(response, 'total_reasoning_time') and response.total_reasoning_time:
+    elif reasoning_time:
         # Show timing even without token data
-        reasoning_time = response.total_reasoning_time
         metrics_parts.append(f"Time: {reasoning_time:.2f}s")
     
     # Tools used
