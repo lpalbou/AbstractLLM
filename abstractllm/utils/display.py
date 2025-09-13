@@ -69,6 +69,7 @@ class Symbols:
     SPARKLES = '✨'
     CHART = '📊'
     CLOCK = '⏱️'
+    CHAT = '💬'
     
     # Arrows and connectors
     ARROW_RIGHT = '→'
@@ -238,8 +239,9 @@ def format_metrics_line(response: Any) -> str:
         tools_count = len(response.tools_executed)
         metrics_parts.append(f"Tools: {tools_count}")
     
-    # Scratchpad reference - always show since we have the ID
-    scratchpad_note = f" | /scratch {cycle_id} for details"
+    # Scratchpad reference - always show since we have the ID (use short format)
+    short_id = cycle_id.replace('cycle_', '') if cycle_id.startswith('cycle_') else cycle_id
+    scratchpad_note = f" | /scratch {short_id} for details"
     
     metrics_line = " | ".join(metrics_parts) + scratchpad_note
     return colorize(f"  {metrics_line}", Colors.BRIGHT_BLUE, italic=True)
