@@ -30,6 +30,7 @@ classifiers = [
 dependencies = [
     "pydantic>=2.0.0",  # For configuration and type validation
     "typing-extensions>=4.0.0",  # For enhanced typing support
+    "pillow>=9.0.0",  # For image processing (required by MLX and other providers)
 ]
 
 [project.urls]
@@ -56,7 +57,8 @@ mlx = [
     "huggingface_hub>=0.15.0",
     "transformers>=4.30.0",  # For chat templating
     "numpy>=1.24.0",         # Often needed by MLX
-    "humanize>=4.6.0"        # For human-readable sizes in caching utilities
+    "humanize>=4.6.0",       # For human-readable sizes in caching utilities
+    "pillow>=9.0.0",         # For image processing with vision models
 ]
 tools = [
     "docstring-parser>=0.15",

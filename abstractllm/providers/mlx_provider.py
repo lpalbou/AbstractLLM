@@ -41,6 +41,9 @@ from abstractllm.utils.logging import log_request, log_response
 from abstractllm.architectures.detection import detect_architecture
 # Architecture capabilities and templates removed during refactoring
 
+# PIL is required for image processing
+from PIL import Image
+
 # Set up logging
 logger = logging.getLogger("abstractllm.providers.mlx_provider")
 
@@ -70,10 +73,12 @@ try:
         MLXVLM_AVAILABLE = False
         logging.warning("MLX-VLM not available. Vision capabilities will be disabled.")
     
-except ImportError as e:
+except (ImportError, OSError) as e:
+    # Handle both import errors and dynamic library loading errors
     MLX_AVAILABLE = False
     MLXLM_AVAILABLE = False
     logging.warning(f"MLX libraries not available: {e}")
+    logging.warning("To fix MLX issues: pip uninstall mlx mlx-lm && pip install mlx mlx-lm")
     
 # If module is loaded directly without dependencies, prevent provider initialization
 if not MLX_AVAILABLE or not MLXLM_AVAILABLE:
@@ -356,7 +361,7 @@ class MLXProvider(BaseProvider):
             Processed PIL Image
         """
         try:
-            from PIL import Image
+            # Image is already imported at module level
             import numpy as np
             
             # Case 1: image_input is a string path

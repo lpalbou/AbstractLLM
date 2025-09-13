@@ -111,7 +111,7 @@ class EnhancedSession(BaseSession):
                 presence_penalty: Optional[float] = None,
                 tools: Optional[List[Union[Dict[str, Any], Callable]]] = None,
                 tool_functions: Optional[Dict[str, Callable[..., Any]]] = None,
-                max_tool_calls: int = 10,
+                max_tool_calls: int = 25,
                 stream: bool = False,
                 files: Optional[List[Union[str, Path]]] = None,
                 # New parameters

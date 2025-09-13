@@ -24,7 +24,10 @@
       "Bash(xargs cat:*)",
       "Read(//Users/albou/.cache/huggingface/**)",
       "Bash(xargs ls:*)",
-      "Bash(awk:*)"
+      "Bash(awk:*)",
+      "Bash(pip install:*)",
+      "Bash(pip uninstall:*)",
+      "Read(//opt/anaconda3/lib/**)"
     ],
     "deny": []
   },
