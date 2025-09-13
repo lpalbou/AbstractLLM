@@ -1544,21 +1544,21 @@ class Session:
             )
             logger.debug(f"Session: Using initial phase system prompt for streaming")
         
-                    # Start streaming generation
-            stream = provider_instance.generate(
-                prompt=original_prompt,  # Use original prompt consistently
-                system_prompt=current_system_prompt,
-                model=model,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                top_p=top_p,
-                frequency_penalty=frequency_penalty,
-                presence_penalty=presence_penalty,
-                tools=tools if tools is not None else self.tools,  # Use provided tools if available
-                messages=provider_messages,
-                stream=True,
-                **kwargs
-            )
+        # Start streaming generation
+        stream = provider_instance.generate(
+            prompt=original_prompt,  # Use original prompt consistently
+            system_prompt=current_system_prompt,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            frequency_penalty=frequency_penalty,
+            presence_penalty=presence_penalty,
+            tools=tools if tools is not None else self.tools,  # Use provided tools if available
+            messages=provider_messages,
+            stream=True,
+            **kwargs
+        )
         
         # Process the stream chunks one by one
         for chunk in stream:

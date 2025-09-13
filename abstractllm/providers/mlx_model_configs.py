@@ -58,9 +58,11 @@ class MLXModelConfig:
             sampler = mlx_lm.sample_utils.make_sampler(temp=temperature)
             params["sampler"] = sampler
             
-            # Apply repetition penalty if configured
-            if cls.default_repetition_penalty != 1.0:
-                repetition_penalty = cls.default_repetition_penalty
+            # Apply repetition penalty if configured or provided
+            # Allow custom repetition_penalty to override default
+            repetition_penalty = kwargs.get("repetition_penalty", cls.default_repetition_penalty)
+            
+            if repetition_penalty != 1.0:
                 logits_processors = mlx_lm.sample_utils.make_logits_processors(
                     repetition_penalty=repetition_penalty,
                     repetition_context_size=64  # Look back at last 64 tokens

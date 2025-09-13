@@ -52,7 +52,7 @@ def detect_tool_calls(response: str, model_name: Optional[str] = None) -> bool:
     # Check format-specific patterns
     # Be lenient - only check for opening tags since models may forget closing tags
     if tool_format == ToolFormat.TOOL_CODE:
-        return "```tool_code" in response
+        return "```tool_code" in response or "```tool_call" in response or "tool_call:" in response
     elif tool_format == ToolFormat.SPECIAL_TOKEN:
         return "<|tool_call|>" in response  # Just check opening tag
     elif tool_format == ToolFormat.FUNCTION_CALL:
@@ -63,6 +63,8 @@ def detect_tool_calls(response: str, model_name: Optional[str] = None) -> bool:
         # Try common patterns - be lenient with any opening tag
         return any([
             "```tool_code" in response,
+            "```tool_call" in response,  # Add support for tool_call blocks
+            "tool_call:" in response,  # Add support for Gemma 3 style
             "<|tool_call|>" in response,
             "<function_call" in response,
             "<tool_call>" in response,
@@ -177,10 +179,11 @@ def _has_json_tool_pattern(text: str) -> bool:
 # Parsing functions
 
 def _parse_tool_code(response: str) -> List[ToolCall]:
-    """Parse ```tool_code format."""
+    """Parse ```tool_code format and tool_call: format."""
     tool_calls = []
-    pattern = r'```tool_code\s*\n(.*?)\n```'
     
+    # Strategy 1: Parse ```tool_code blocks
+    pattern = r'```tool_code\s*\n(.*?)\n```'
     for match in re.findall(pattern, response, re.DOTALL):
         # Parse function calls like: func_name(arg1="val1", arg2=123)
         func_pattern = r'(\w+)\s*\((.*?)\)'
@@ -210,6 +213,72 @@ def _parse_tool_code(response: str) -> List[ToolCall]:
                     arguments[key] = value
             
             tool_calls.append(ToolCall(name=name, arguments=arguments))
+    
+    # Strategy 1.5: Parse ```tool_call blocks (Gemma 3 alternative format)
+    tool_call_block_pattern = r'```tool_call\s*\n(.*?)\n```'
+    for match in re.findall(tool_call_block_pattern, response, re.DOTALL):
+        # Parse function calls like: func_name(arg1="val1", arg2=123) or just func_name
+        func_pattern = r'(\w+)(?:\s*\((.*?)\))?'
+        for func_match in re.finditer(func_pattern, match.strip()):
+            name = func_match.group(1)
+            args_str = func_match.group(2) if func_match.group(2) else ""
+            
+            # Parse arguments
+            arguments = {}
+            if args_str:
+                # Simple argument parsing
+                arg_pattern = r'(\w+)\s*=\s*([^,)]+)'
+                for arg_match in re.finditer(arg_pattern, args_str):
+                    key = arg_match.group(1)
+                    value = arg_match.group(2).strip()
+                    
+                    # Parse value
+                    if value.startswith('"') and value.endswith('"'):
+                        value = value[1:-1]
+                    elif value.startswith("'") and value.endswith("'"):
+                        value = value[1:-1]
+                    elif value.lower() == 'true':
+                        value = True
+                    elif value.lower() == 'false':
+                        value = False
+                    elif value.isdigit():
+                        value = int(value)
+                    
+                    arguments[key] = value
+            
+            tool_calls.append(ToolCall(name=name, arguments=arguments))
+    
+    # Strategy 2: Parse tool_call: format (Gemma 3 style)
+    # Look for patterns like: tool_call: function_name(arg1="val1", arg2=val2)
+    tool_call_pattern = r'tool_call:\s*(\w+)\s*\((.*?)\)'
+    for match in re.finditer(tool_call_pattern, response):
+        name = match.group(1)
+        args_str = match.group(2)
+        
+        # Parse arguments
+        arguments = {}
+        if args_str:
+            # Simple argument parsing
+            arg_pattern = r'(\w+)\s*=\s*([^,)]+)'
+            for arg_match in re.finditer(arg_pattern, args_str):
+                key = arg_match.group(1)
+                value = arg_match.group(2).strip()
+                
+                # Parse value
+                if value.startswith('"') and value.endswith('"'):
+                    value = value[1:-1]
+                elif value.startswith("'") and value.endswith("'"):
+                    value = value[1:-1]
+                elif value.lower() == 'true':
+                    value = True
+                elif value.lower() == 'false':
+                    value = False
+                elif value.isdigit():
+                    value = int(value)
+                
+                arguments[key] = value
+        
+        tool_calls.append(ToolCall(name=name, arguments=arguments))
     
     return tool_calls
 

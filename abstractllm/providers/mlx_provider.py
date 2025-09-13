@@ -731,6 +731,7 @@ class MLXProvider(BaseProvider):
         params = self._get_generation_params(**kwargs)
         max_tokens = params["max_tokens"]
         temperature = params["temperature"]
+        top_p = params["top_p"]
         
         images = []
         # Process images
@@ -840,7 +841,53 @@ class MLXProvider(BaseProvider):
             "top_p": filtered_kwargs.get("top_p", self.config_manager.get_param(ModelParameter.TOP_P, 0.95))
         }
         
+        # Add repetition_penalty if provided - it will be passed to model config
+        if "repetition_penalty" in filtered_kwargs:
+            params["repetition_penalty"] = filtered_kwargs["repetition_penalty"]
+        
         return params
+
+    def _get_tool_handler(self) -> Optional["UniversalToolHandler"]:
+        """
+        Get or create the tool handler for this provider.
+        
+        This method overrides the base class to ensure MLX models always have
+        tool support via prompting, since MLX can run any model with tools
+        through careful prompt engineering.
+        """
+        if not hasattr(self, '_tool_handler') or self._tool_handler is None:
+            try:
+                from abstractllm.tools.handler import UniversalToolHandler
+                
+                # Get the model name
+                model = self.config_manager.get_param(ModelParameter.MODEL)
+                if model:
+                    self._tool_handler = UniversalToolHandler(model)
+                    
+                    # For MLX, ensure we always have at least prompted tool support
+                    # MLX can run any instruct model with tools via prompting
+                    if not self._tool_handler.supports_prompted and not self._tool_handler.supports_native:
+                        # Force prompted mode for instruct models
+                        from abstractllm.architectures.detection import detect_model_type
+                        if detect_model_type(model) == "instruct":
+                            self._tool_handler.supports_prompted = True
+                            logger.info(f"Enabled prompted tool support for MLX model {model}")
+                    
+                    logger.debug(f"Created tool handler for MLX model {model}: "
+                               f"native={self._tool_handler.supports_native}, "
+                               f"prompted={self._tool_handler.supports_prompted}")
+                else:
+                    logger.warning("No model specified for tool handler")
+                    return None
+                    
+            except ImportError:
+                logger.warning("Tool handler not available - tools package not installed")
+                return None
+            except Exception as e:
+                logger.error(f"Failed to create tool handler: {e}")
+                return None
+                
+        return self._tool_handler
 
     def _ensure_chat_template_compatibility(self, messages: List[Dict[str, Any]], model_name: str) -> List[Dict[str, Any]]:
         """
@@ -1192,6 +1239,7 @@ class MLXProvider(BaseProvider):
         params = self._get_generation_params(**kwargs)
         max_tokens = params["max_tokens"]
         temperature = params["temperature"]
+        top_p = params["top_p"]
         
         try:
             start_time = time.time()

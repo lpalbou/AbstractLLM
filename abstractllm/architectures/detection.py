@@ -214,8 +214,8 @@ def get_model_capabilities(model_name: str) -> Dict[str, Any]:
     
     # Find the best (longest) matching model key
     for model_key, model_caps in models.items():
-        model_key_normalized = model_key.replace("-", "").replace(".", "").lower()
-        normalized_clean = normalized.replace("-", "").replace(".", "")
+        model_key_normalized = model_key.replace("-", "").replace(".", "").replace("_", "").lower()
+        normalized_clean = normalized.replace("-", "").replace(".", "").replace("_", "")
         
         # Check if this model key matches
         if (model_key in normalized or 
@@ -237,6 +237,12 @@ def get_model_capabilities(model_name: str) -> Dict[str, Any]:
             capabilities["audio_support"] = True
         if any(indicator in normalized for indicator in ["embed", "embedding", "bge", "e5", "gte"]):
             capabilities["embeddings_support"] = True
+        
+        # For unknown models, default to prompted tool support if it's an instruct model
+        # This ensures we don't block tool usage for capable models we haven't catalogued
+        if capabilities["model_type"] == "instruct":
+            capabilities["tool_support"] = "prompted"
+            capabilities["structured_output"] = "prompted"
     
     # Add embeddings detection for known embedding models
     embedding_models = ["text-embedding", "embed", "bge", "e5", "gte", "instructor", "sentence-transformers"]

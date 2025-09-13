@@ -621,6 +621,17 @@
       "audio_support": false,
       "source": "Google docs"
     },
+    "gemma3": {
+      "context_length": 8192,
+      "max_output_tokens": 8192,
+      "tool_support": "native",
+      "structured_output": "native",
+      "parallel_tools": true,
+      "vision_support": false,
+      "audio_support": false,
+      "notes": "Native function calling support introduced in Gemma 3",
+      "source": "Google docs"
+    },
     "codegemma": {
       "context_length": 8192,
       "max_output_tokens": 8192,
