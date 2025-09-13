@@ -281,31 +281,26 @@ class BaseProvider(AbstractLLMInterface, ABC):
         if not tool_calls:
             return
             
-        # Use INFO level for file logging
-        logger.info(f"🔧 LLM called {len(tool_calls)} tool(s):")
-        
-        # Also print directly to console in yellow for visibility
-        # This ensures tool calls are always visible regardless of console logging level
-        print(f"\033[33m🔧 LLM called {len(tool_calls)} tool(s):\033[0m")
-        
+        # Use concise, direct format for tool call display - NO parameter truncation
         for i, tc in enumerate(tool_calls, 1):
-            # Format arguments nicely for readability
+            # Format arguments - keep ALL parameters intact
             if tc.arguments:
-                # Truncate very long argument values for readability
-                formatted_args = {}
-                for key, value in tc.arguments.items():
-                    if isinstance(value, str) and len(value) > 100:
-                        formatted_args[key] = f"{value[:97]}..."
-                    else:
-                        formatted_args[key] = value
-                args_str = str(formatted_args)
+                args_str = str(tc.arguments)
             else:
                 args_str = "{}"
+            
+            # Create concise, direct message
+            if len(tool_calls) == 1:
+                # Single tool call - more concise format
+                tool_message = f"🔧 LLM called {tc.name}({args_str})"
+            else:
+                # Multiple tool calls - show which one
+                tool_message = f"🔧 LLM called {tc.name}({args_str}) [{i}/{len(tool_calls)}]"
                 
             # Log to file
-            logger.info(f"  {i}. {tc.name}({args_str})")
-            # Print to console in yellow
-            print(f"\033[33m  {i}. {tc.name}({args_str})\033[0m")
+            logger.info(tool_message)
+            # Print to console in yellow with direct format
+            print(f"\033[33m{tool_message}\033[0m")
     
     def _prepare_tool_context(self, 
                             tools: Optional[List[Any]], 
