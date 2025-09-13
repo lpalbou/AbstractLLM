@@ -16,9 +16,8 @@ from abstractllm.session import (
 )
 from abstractllm.utils.logging import configure_logging
 
-# Enhanced features
-from abstractllm.factory_enhanced import create_enhanced_session
-from abstractllm.session_enhanced import EnhancedSession
+# Enhanced features (now integrated into main Session class)
+from abstractllm.session import create_enhanced_session
 from abstractllm.memory_v2 import HierarchicalMemory
 from abstractllm.retry_strategies import RetryManager, RetryConfig, with_retry
 from abstractllm.structured_response import (
@@ -30,21 +29,20 @@ from abstractllm.structured_response import (
 __all__ = [
     "create_llm",
     "create_session",
-    "create_enhanced_session",  # New enhanced factory
+    "create_enhanced_session",  # Enhanced factory (now uses unified Session class)
     "AbstractLLMInterface",
     "ModelParameter",
     "ModelCapability",
     "create_fallback_chain",
     "create_capability_chain",
     "create_load_balanced_chain",
-    "Session",
+    "Session",  # Now includes both core and enhanced features
     "SessionManager",
-    "EnhancedSession",  # New enhanced session
-    "HierarchicalMemory",  # New memory system
-    "RetryManager",  # New retry strategies
+    "HierarchicalMemory",  # SOTA memory system
+    "RetryManager",  # SOTA retry strategies
     "RetryConfig",
     "with_retry",
-    "StructuredResponseHandler",  # New structured response
+    "StructuredResponseHandler",  # SOTA structured response
     "StructuredResponseConfig",
     "ResponseFormat",
     "configure_logging",

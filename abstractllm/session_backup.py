@@ -1,20 +1,8 @@
 """
-Enhanced Session management for AbstractLLM with integrated SOTA features.
+Session management for AbstractLLM.
 
-This module provides comprehensive session management for LLM conversations,
-integrating both core functionality and SOTA enhancements:
-
-Core Features:
-- Conversation history management with metadata
-- Tool calling with enhanced telemetry
-- Provider switching with state preservation  
-- Session persistence and loading
-
-SOTA Features (when available):
-- Hierarchical memory system with fact extraction
-- ReAct reasoning cycles with complete observability
-- Retry strategies with exponential backoff
-- Structured response parsing and validation
+This module provides utilities for managing stateful conversations with LLMs,
+including tracking conversation history and metadata across multiple requests.
 """
 
 from typing import Dict, List, Any, Optional, Union, Tuple, Callable, Generator, TYPE_CHECKING
@@ -24,7 +12,6 @@ import json
 import os
 import uuid
 import logging
-import time
 
 from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability
 from abstractllm.exceptions import UnsupportedFeatureError
@@ -72,103 +59,6 @@ except ImportError as e:
         ToolCallRequest = ToolCallResponse  # Alias
         class GenerateResponse:
             pass
-
-# Try importing SOTA improvements (optional)
-try:
-    from abstractllm.memory_v2 import HierarchicalMemory, ReActCycle, MemoryComponent
-    from abstractllm.retry_strategies import RetryManager, RetryConfig, with_retry
-    from abstractllm.structured_response import (
-        StructuredResponseHandler, 
-        StructuredResponseConfig,
-        ResponseFormat
-    )
-    from abstractllm.scratchpad_manager import (
-        ScratchpadManager, 
-        get_scratchpad_manager,
-        ReActPhase,
-        CyclePhaseEvent
-    )
-    SOTA_FEATURES_AVAILABLE = True
-    logger = logging.getLogger(__name__)
-    logger.debug("SOTA features loaded successfully")
-except ImportError as e:
-    SOTA_FEATURES_AVAILABLE = False
-    # Create placeholder classes for graceful degradation
-    class HierarchicalMemory:
-        def __init__(self, *args, **kwargs):
-            pass
-        def get_statistics(self):
-            return {"error": "SOTA features not available"}
-        def get_context_for_query(self, query):
-            return None
-        def start_react_cycle(self, query, max_iterations=10):
-            return None
-        def add_chat_message(self, role, content, cycle_id=None):
-            return str(uuid.uuid4())
-        @property
-        def semantic_memory(self):
-            return {}
-        def save_to_disk(self):
-            pass
-        def visualize_links(self):
-            return None
-        def query_memory(self, query):
-            return None
-    class ReActCycle:
-        def __init__(self, *args, **kwargs):
-            self.cycle_id = str(uuid.uuid4())
-            self.error = None
-        def add_thought(self, thought, confidence=1.0):
-            pass
-        def add_action(self, tool_name, arguments, reasoning):
-            return str(uuid.uuid4())
-        def add_observation(self, action_id, content, success=True):
-            pass
-        def complete(self, content, success=True):
-            pass
-    class RetryManager:
-        def __init__(self, *args, **kwargs):
-            pass
-        def retry_with_backoff(self, func, *args, **kwargs):
-            return func(*args, **kwargs)
-    class RetryConfig:
-        def __init__(self, *args, **kwargs):
-            pass
-    class StructuredResponseHandler:
-        def __init__(self, *args, **kwargs):
-            pass
-        def prepare_request(self, prompt, config, system_prompt=None):
-            return {"prompt": prompt, "system_prompt": system_prompt}
-        def parse_response(self, response, config):
-            return response
-        def generate_with_retry(self, generate_fn, prompt, config, **kwargs):
-            return generate_fn(prompt=prompt, **kwargs)
-    class StructuredResponseConfig:
-        def __init__(self, *args, **kwargs):
-            self.max_retries = 0
-    def with_retry(func):
-        return func
-    def get_scratchpad_manager(*args, **kwargs):
-        return ScratchpadManager()
-    class ScratchpadManager:
-        def __init__(self, *args, **kwargs):
-            pass
-        def start_cycle(self, cycle_id, prompt):
-            pass
-        def add_thought(self, thought, confidence=1.0, metadata=None):
-            pass
-        def add_action(self, tool_name, tool_args, reasoning, metadata=None):
-            return str(uuid.uuid4())
-        def add_observation(self, action_id, result, success=True, execution_time=0, metadata=None):
-            pass
-        def complete_cycle(self, final_answer, success=True):
-            pass
-        def get_complete_trace(self):
-            return []
-        def get_scratchpad_file_path(self):
-            return Path("./memory/scratchpad.json")
-
-logger = logging.getLogger(__name__)
 
 
 class Message:
@@ -275,22 +165,10 @@ class Message:
 
 class Session:
     """
-    Enhanced session with comprehensive LLM conversation management and optional SOTA features.
+    Manages a conversation session with one or more LLM providers.
     
-    This class provides both core session functionality and optional SOTA enhancements:
-    
-    Core Features:
-    - Conversation history management with metadata
-    - Tool calling with enhanced telemetry tracking  
-    - Provider switching with state preservation
-    - Session persistence and loading
-    - Multi-provider message formatting
-    
-    SOTA Features (when dependencies available):
-    - Hierarchical memory system with fact extraction
-    - ReAct reasoning cycles with complete observability 
-    - Retry strategies with exponential backoff
-    - Structured response parsing and validation
+    A session keeps track of conversation history and provides methods
+    for continuing the conversation with the same or different providers.
     """
     
     def __init__(self, 
@@ -298,15 +176,9 @@ class Session:
                  provider: Optional[Union[str, AbstractLLMInterface]] = None,
                  provider_config: Optional[Dict[Union[str, ModelParameter], Any]] = None,
                  metadata: Optional[Dict[str, Any]] = None,
-                 tools: Optional[List[Union[Dict[str, Any], Callable, "ToolDefinition"]]] = None,
-                 # SOTA enhancement parameters (optional)
-                 enable_memory: bool = True,
-                 memory_config: Optional[Dict[str, Any]] = None,
-                 enable_retry: bool = True,
-                 retry_config: Optional[RetryConfig] = None,
-                 persist_memory: Optional[Path] = None):
+                 tools: Optional[List[Union[Dict[str, Any], Callable, "ToolDefinition"]]] = None):
         """
-        Initialize a comprehensive session with optional SOTA features.
+        Initialize a conversation session.
         
         Args:
             system_prompt: The system prompt for the conversation
@@ -316,16 +188,10 @@ class Session:
             tools: Optional list of tool definitions or functions available for the LLM to use.
                   Functions will be automatically converted to tool definitions and their
                   implementations stored for use with generate_with_tools.
-            enable_memory: Enable hierarchical memory system (if available)
-            memory_config: Memory system configuration
-            enable_retry: Enable retry strategies (if available)
-            retry_config: Retry configuration
-            persist_memory: Path to persist memory
                   
         Raises:
             ValueError: If tools are provided but tool support is not available
         """
-        # Core session initialization
         self.messages: List[Message] = []
         self.system_prompt = system_prompt
         self.metadata = metadata or {}
@@ -334,7 +200,7 @@ class Session:
         self.last_updated = self.created_at
         self.tools: List["ToolDefinition"] = []
         
-        # Store the original function implementations for tools
+        # Store the original function implementations
         self._tool_implementations: Dict[str, Callable[..., Any]] = {}
         
         # Track last assistant message index for tool results
@@ -362,61 +228,6 @@ class Session:
             # Register each tool
             for tool in tools:
                 self.add_tool(tool)
-
-        # Initialize SOTA features if available
-        self.enable_memory = enable_memory and SOTA_FEATURES_AVAILABLE
-        self.enable_retry = enable_retry and SOTA_FEATURES_AVAILABLE
-        
-        if self.enable_memory:
-            try:
-                memory_cfg = memory_config or {}
-                self.memory = HierarchicalMemory(
-                    working_memory_size=memory_cfg.get('working_memory_size', 10),
-                    episodic_consolidation_threshold=memory_cfg.get('consolidation_threshold', 5),
-                    persist_path=persist_memory
-                )
-                logger.debug("Hierarchical memory initialized")
-            except Exception as e:
-                logger.warning(f"Failed to initialize hierarchical memory: {e}")
-                self.memory = None
-                self.enable_memory = False
-        else:
-            self.memory = None
-        
-        if self.enable_retry:
-            try:
-                self.retry_manager = RetryManager(retry_config or RetryConfig())
-                logger.debug("Retry manager initialized")
-            except Exception as e:
-                logger.warning(f"Failed to initialize retry manager: {e}")
-                self.retry_manager = None
-                self.enable_retry = False
-        else:
-            self.retry_manager = None
-        
-        # Track current ReAct cycle (SOTA feature)
-        self.current_cycle: Optional[ReActCycle] = None
-        
-        # Structured response handlers per provider (SOTA feature)
-        self.response_handlers: Dict[str, StructuredResponseHandler] = {}
-        
-        # Enhanced telemetry tracking (SOTA feature)
-        self.current_tool_traces: List[Dict[str, Any]] = []
-        self.current_retry_attempts: int = 0
-        self.facts_before_generation: int = 0
-        
-        # SOTA Scratchpad Manager with complete observability (if available)
-        if SOTA_FEATURES_AVAILABLE and persist_memory:
-            try:
-                memory_folder = persist_memory.parent if persist_memory else Path("./memory")
-                session_id = self.memory.session_id if self.memory else f"session_{uuid.uuid4().hex[:8]}"
-                self.scratchpad = get_scratchpad_manager(session_id, memory_folder)
-                logger.debug("Scratchpad manager initialized")
-            except Exception as e:
-                logger.warning(f"Failed to initialize scratchpad manager: {e}")
-                self.scratchpad = None
-        else:
-            self.scratchpad = None
     
     @property
     def provider(self) -> Optional[AbstractLLMInterface]:
@@ -937,11 +748,13 @@ class Session:
         self.tools.append(tool_def)
         # The provider will validate tool support when generate is called
     
-    def execute_tool_call(self,
-                         tool_call: "ToolCall",
-                         tool_functions: Dict[str, Callable[..., Any]]) -> Dict[str, Any]:
+    def execute_tool_call(
+        self,
+        tool_call: "ToolCall",
+        tool_functions: Dict[str, Callable[..., Any]]
+    ) -> Dict[str, Any]:
         """
-        Execute a tool call using the provided functions with enhanced retry and memory tracking.
+        Execute a tool call using the provided functions.
         
         Args:
             tool_call: The tool call to execute
@@ -953,62 +766,36 @@ class Session:
         logger = logging.getLogger("abstractllm.session")
         logger.info(f"Session: Executing tool call: {tool_call.name} with args: {tool_call.arguments}")
         
-        start_time = time.time()
+        # Check if the tool function exists
+        if tool_call.name not in tool_functions:
+            error_msg = f"Tool '{tool_call.name}' not found in available tools."
+            logger.error(error_msg)
+            return {
+                "call_id": tool_call.id,
+                "name": tool_call.name,
+                "arguments": tool_call.arguments,
+                "output": None,
+                "error": error_msg
+            }
         
-        # Track in ReAct cycle if enabled
-        if self.current_cycle:
-            action_id = self.current_cycle.add_action(
-                tool_name=tool_call.name,
-                arguments=tool_call.arguments if hasattr(tool_call, 'arguments') else {},
-                reasoning=f"Executing {tool_call.name} to gather information"
-            )
-        else:
-            action_id = f"action_{len(self.current_tool_traces)}"
-            
-        # Add to scratchpad with complete observability if available
-        scratchpad_action_id = None
-        if self.scratchpad:
-            scratchpad_action_id = self.scratchpad.add_action(
-                tool_name=tool_call.name,
-                tool_args=tool_call.arguments if hasattr(tool_call, 'arguments') else {},
-                reasoning=f"Executing {tool_call.name} to gather information",
-                metadata={"session_action_id": action_id}
-            )
+        # Get the tool function
+        tool_function = tool_functions[tool_call.name]
         
-        # Execute with retry if enabled
-        success = True
-        error = None
+        # Find the corresponding tool definition if available
+        tool_def = None
+        if TOOLS_AVAILABLE and hasattr(self, 'tools') and self.tools:
+            for tool in self.tools:
+                if isinstance(tool, dict) and tool.get('name') == tool_call.name:
+                    # For dictionary tools
+                    tool_def = tool
+                    break
+                elif hasattr(tool, 'name') and tool.name == tool_call.name:
+                    # For ToolDefinition objects
+                    tool_def = tool
+                    break
         
-        def _execute_tool():
-            """Internal function to execute tool call."""
-            # Check if the tool function exists
-            if tool_call.name not in tool_functions:
-                error_msg = f"Tool '{tool_call.name}' not found in available tools."
-                logger.error(error_msg)
-                return {
-                    "call_id": tool_call.id,
-                    "name": tool_call.name,
-                    "arguments": tool_call.arguments,
-                    "output": None,
-                    "error": error_msg
-                }
-            
-            # Get the tool function
-            tool_function = tool_functions[tool_call.name]
-            
-            # Find the corresponding tool definition if available
-            tool_def = None
-            if TOOLS_AVAILABLE and hasattr(self, 'tools') and self.tools:
-                for tool in self.tools:
-                    if isinstance(tool, dict) and tool.get('name') == tool_call.name:
-                        # For dictionary tools
-                        tool_def = tool
-                        break
-                    elif hasattr(tool, 'name') and tool.name == tool_call.name:
-                        # For ToolDefinition objects
-                        tool_def = tool
-                        break
-            
+        # Execute the tool and handle potential errors
+        try:
             # Parse arguments as needed
             args = tool_call.arguments
             
@@ -1060,86 +847,17 @@ class Session:
                 "output": result,
                 "error": None
             }
-        
-        if self.enable_retry:
-            try:
-                result = self.retry_manager.retry_with_backoff(
-                    _execute_tool,
-                    key=f"tool_{tool_call.name}"
-                )
-                # Track retry attempts
-                retry_attempts = getattr(self.retry_manager, '_current_attempts', {}).get(f"tool_{tool_call.name}", 0)
-                self.current_retry_attempts += retry_attempts
-            except Exception as e:
-                success = False
-                error = str(e)
-                result = {
-                    "call_id": tool_call.id,
-                    "name": tool_call.name,
-                    "arguments": tool_call.arguments,
-                    "output": None,
-                    "error": str(e)
-                }
-                if self.current_cycle and action_id:
-                    self.current_cycle.add_observation(
-                        action_id=action_id,
-                        content=str(e),
-                        success=False
-                    )
-        else:
-            try:
-                result = _execute_tool()
-                if result.get("error"):
-                    success = False
-                    error = result["error"]
-            except Exception as e:
-                success = False
-                error = str(e)
-                result = {
-                    "call_id": tool_call.id,
-                    "name": tool_call.name,
-                    "arguments": tool_call.arguments,
-                    "output": None,
-                    "error": str(e)
-                }
-        
-        execution_time = time.time() - start_time
-        
-        # Create tool execution trace
-        tool_trace = {
-            "name": tool_call.name,
-            "arguments": tool_call.arguments if hasattr(tool_call, 'arguments') else {},
-            "result": str(result.get("output", result.get("error", result)))[:500],  # Truncate for readability
-            "success": success,
-            "execution_time": execution_time,
-            "timestamp": datetime.now().isoformat(),
-            "action_id": action_id,
-            "reasoning": f"Executing {tool_call.name} to gather information",
-            "error": error
-        }
-        
-        # Add to current traces
-        self.current_tool_traces.append(tool_trace)
-        
-        # Track observation in ReAct cycle
-        if self.current_cycle and action_id:
-            self.current_cycle.add_observation(
-                action_id=action_id,
-                content=result.get("output", result.get("error")),
-                success=success
-            )
             
-        # Add observation to scratchpad (COMPLETE - no truncation)
-        if self.scratchpad and scratchpad_action_id:
-            self.scratchpad.add_observation(
-                action_id=scratchpad_action_id,
-                result=result.get("output", result.get("error", result)),
-                success=success,
-                execution_time=execution_time,
-                metadata={"session_action_id": action_id}
-            )
-        
-        return result
+        except Exception as e:
+            error_msg = f"Error executing tool '{tool_call.name}': {str(e)}"
+            logger.error(error_msg)
+            return {
+                "call_id": tool_call.id,
+                "name": tool_call.name,
+                "arguments": tool_call.arguments,
+                "output": None,
+                "error": error_msg
+            }
     
     def execute_tool_calls(
         self,
@@ -2088,20 +1806,15 @@ class Session:
         adjust_system_prompt: bool = False,  # DISABLED - was breaking tool definitions
         stream: bool = False,
         files: Optional[List[Union[str, Path]]] = None,
-        # SOTA parameters
-        use_memory_context: bool = True,
-        create_react_cycle: bool = True,
-        structured_config: Optional[StructuredResponseConfig] = None,
         **kwargs
     ) -> Union[str, "GenerateResponse", Generator[Union[str, Dict[str, Any]], None, None]]:
         """
-        Enhanced unified method to generate a response with or without tool support and SOTA features.
+        Unified method to generate a response with or without tool support.
         
         This method intelligently handles all generation use cases:
         1. Simple text generation with no tools
         2. Generation with tool support including executing tools and follow-up
         3. Streaming response with or without tools
-        4. Enhanced generation with memory context, ReAct cycles, and structured responses
         
         Args:
             prompt: The input prompt or user query
@@ -2117,9 +1830,6 @@ class Session:
             adjust_system_prompt: Whether to adjust system prompt based on tool execution phase
             stream: Whether to stream the response
             files: Optional list of files to process
-            use_memory_context: Include memory context (SOTA feature)
-            create_react_cycle: Create ReAct cycle for this query (SOTA feature)
-            structured_config: Structured response configuration (SOTA feature)
             **kwargs: Additional provider-specific parameters
             
         Returns:
@@ -2133,56 +1843,6 @@ class Session:
         provider_instance = self._get_provider(provider)
         provider_name = self._get_provider_name(provider_instance)
         logger.info(f"Using provider: {provider_name}")
-        
-        # SOTA Enhancement: Initialize telemetry tracking
-        generation_start_time = datetime.now()
-        self.current_tool_traces = []  # Reset for this generation
-        self.current_retry_attempts = 0
-        
-        # SOTA Enhancement: Track memory state before generation
-        if self.enable_memory:
-            self.facts_before_generation = len(self.memory.semantic_memory) if self.memory else 0
-        
-        # SOTA Enhancement: Start ReAct cycle if enabled
-        if self.enable_memory and create_react_cycle and prompt:
-            self.current_cycle = self.memory.start_react_cycle(
-                query=prompt,
-                max_iterations=max_tool_calls
-            )
-            # Add initial thought
-            self.current_cycle.add_thought(
-                f"Processing query with {provider_name} provider",
-                confidence=1.0
-            )
-            
-            # Start scratchpad cycle with complete observability
-            if self.scratchpad:
-                self.scratchpad.start_cycle(self.current_cycle.cycle_id, prompt)
-                self.scratchpad.add_thought(
-                    f"Processing query with {provider_name} provider",
-                    confidence=1.0,
-                    metadata={"provider": provider_name, "model": getattr(provider_instance, 'model', 'unknown')}
-                )
-        
-        # SOTA Enhancement: Add memory context if enabled
-        enhanced_prompt = prompt
-        if self.enable_memory and use_memory_context and prompt:
-            context = self.memory.get_context_for_query(prompt)
-            if context:
-                enhanced_prompt = f"{context}\n\nUser: {prompt}"
-                logger.debug(f"Added memory context: {len(context)} chars")
-        
-        # SOTA Enhancement: Prepare for structured response if configured
-        if structured_config and SOTA_FEATURES_AVAILABLE:
-            handler = self._get_response_handler(provider_name)
-            request_params = handler.prepare_request(
-                prompt=enhanced_prompt,
-                config=structured_config,
-                system_prompt=system_prompt
-            )
-            enhanced_prompt = request_params.pop("prompt")
-            system_prompt = request_params.pop("system_prompt", system_prompt)
-            kwargs.update(request_params)
         
         # Determine if we should use tool functionality
         use_tools = False
@@ -2223,7 +1883,7 @@ class Session:
         # If streaming is requested with tools, use specialized streaming method
         if stream and use_tools:
             return self.generate_with_tools_streaming(
-                prompt=enhanced_prompt,
+                prompt=prompt,
                 tool_functions=tool_functions,
                 tools=tools,  # Pass tools parameter
                 temperature=temperature,
@@ -2240,8 +1900,8 @@ class Session:
         # For regular streaming without tools
         if stream and not use_tools:
             # Add the user message if provided
-            if enhanced_prompt:
-                self.add_message(MessageRole.USER, enhanced_prompt)
+            if prompt:
+                self.add_message(MessageRole.USER, prompt)
                 
             # Get conversation history
             system_prompt_to_use = system_prompt or self.system_prompt
@@ -2249,7 +1909,7 @@ class Session:
             
             # Generate streaming response
             stream_response = provider_instance.generate(
-                prompt=enhanced_prompt,
+                prompt=prompt,
                 system_prompt=system_prompt_to_use,
                 messages=messages,
                 temperature=temperature,
@@ -2292,164 +1952,68 @@ class Session:
             
             return stream_wrapper()
         
-        # Define generation function for SOTA retry support
-        def _generate():
-            if use_tools:
-                return self.generate_with_tools(
-                    prompt=enhanced_prompt,
-                    tool_functions=tool_functions,
-                    tools=tools,  # Pass tools parameter
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    top_p=top_p,
-                    frequency_penalty=frequency_penalty,
-                    presence_penalty=presence_penalty,
-                    max_tool_calls=max_tool_calls,
-                    adjust_system_prompt=adjust_system_prompt,
-                    provider=provider_instance,  # Use the provider instance directly
-                    system_prompt=system_prompt,
-                    files=files,
-                    **kwargs
-                )
-            else:
-                # Standard generation without tools
-                # Add the user message if provided
-                if enhanced_prompt:
-                    self.add_message(MessageRole.USER, enhanced_prompt)
-                    
-                # Get conversation history
-                system_prompt_to_use = system_prompt or self.system_prompt
-                messages = self.get_messages_for_provider(provider_name)
-                
-                # Generate response
-                response = provider_instance.generate(
-                    prompt=enhanced_prompt,
-                    system_prompt=system_prompt_to_use,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    top_p=top_p,
-                    frequency_penalty=frequency_penalty,
-                    presence_penalty=presence_penalty,
-                    tools=tools if tools is not None else self.tools,  # Pass tools to provider
-                    files=files,
-                    **kwargs
-                )
-                
-                # Extract content and metadata from the response
-                if isinstance(response, str):
-                    content = response
-                    metadata = {}
-                else:
-                    content = response.content if hasattr(response, 'content') else str(response)
-                    
-                    # Extract usage information and other metadata from response
-                    metadata = {}
-                    if hasattr(response, 'usage') and response.usage:
-                        metadata["usage"] = response.usage
-                    if hasattr(response, 'model') and response.model:
-                        metadata["provider"] = provider_name
-                        metadata["model"] = response.model
-                
-                # Add the response to the conversation with metadata
-                self.add_message(MessageRole.ASSISTANT, content, metadata=metadata)
-                
-                return response
+        # For tool-based generation
+        if use_tools:
+            return self.generate_with_tools(
+                prompt=prompt,
+                tool_functions=tool_functions,
+                tools=tools,  # Pass tools parameter
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                max_tool_calls=max_tool_calls,
+                adjust_system_prompt=adjust_system_prompt,
+                provider=provider_instance,  # Use the provider instance directly
+                system_prompt=system_prompt,
+                files=files,
+                **kwargs
+            )
         
-        # SOTA Enhancement: Apply retry if enabled
-        if self.enable_retry:
-            try:
-                response = self.retry_manager.retry_with_backoff(
-                    _generate,
-                    key=f"{provider_name}_generate"
-                )
-            except Exception as e:
-                if self.current_cycle:
-                    self.current_cycle.error = str(e)
-                    self.current_cycle.complete("Failed to generate response", success=False)
-                raise
+        # Standard generation without tools or streaming
+        # Add the user message if provided
+        if prompt:
+            self.add_message(MessageRole.USER, prompt)
+            
+        # Get conversation history
+        system_prompt_to_use = system_prompt or self.system_prompt
+        messages = self.get_messages_for_provider(provider_name)
+        
+        # Generate response
+        response = provider_instance.generate(
+            prompt=prompt,
+            system_prompt=system_prompt_to_use,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            frequency_penalty=frequency_penalty,
+            presence_penalty=presence_penalty,
+            tools=tools if tools is not None else self.tools,  # Pass tools to provider
+            files=files,
+            **kwargs
+        )
+        
+        # Extract content and metadata from the response
+        if isinstance(response, str):
+            content = response
+            metadata = {}
         else:
-            response = _generate()
-        
-        # SOTA Enhancement: Parse structured response if configured
-        if structured_config and SOTA_FEATURES_AVAILABLE:
-            handler = self._get_response_handler(provider_name)
-            try:
-                response = handler.parse_response(response, structured_config)
-            except Exception as e:
-                logger.error(f"Failed to parse structured response: {e}")
-                if self.enable_retry and structured_config.max_retries > 0:
-                    # Retry with feedback
-                    response = handler.generate_with_retry(
-                        generate_fn=provider_instance.generate,
-                        prompt=prompt,
-                        config=structured_config,
-                        system_prompt=system_prompt,
-                        **kwargs
-                    )
-        
-        # SOTA Enhancement: Calculate total generation time
-        total_generation_time = (datetime.now() - generation_start_time).total_seconds()
-        
-        # SOTA Enhancement: Update memory if enabled
-        extracted_facts = []
-        
-        if self.enable_memory and prompt:
-            # Track facts extracted before adding new messages
-            facts_before = len(self.memory.semantic_memory)
+            content = response.content if hasattr(response, 'content') else str(response)
             
-            # Add to chat history (this triggers fact extraction)
-            msg_id = self.memory.add_chat_message(
-                role="user",
-                content=prompt,
-                cycle_id=self.current_cycle.cycle_id if self.current_cycle else None
-            )
-            
-            # Add response
-            response_content = str(response)
-            resp_id = self.memory.add_chat_message(
-                role="assistant",
-                content=response_content,
-                cycle_id=self.current_cycle.cycle_id if self.current_cycle else None
-            )
-            
-            # Calculate facts extracted during this generation
-            facts_after = len(self.memory.semantic_memory)
-            new_facts_count = facts_after - self.facts_before_generation
-            
-            # Get the actual facts that were extracted
-            if new_facts_count > 0:
-                # Get the most recent facts
-                all_facts = list(self.memory.semantic_memory.values())
-                extracted_facts = all_facts[-new_facts_count:]
-            
-            # Complete ReAct cycle
-            if self.current_cycle:
-                self.current_cycle.complete(response_content, success=True)
-                
-                # Complete scratchpad cycle with final answer
-                if self.scratchpad:
-                    self.scratchpad.complete_cycle(
-                        final_answer=response_content,
-                        success=True
-                    )
+            # Extract usage information and other metadata from response
+            metadata = {}
+            if hasattr(response, 'usage') and response.usage:
+                metadata["usage"] = response.usage
+            if hasattr(response, 'model') and response.model:
+                metadata["provider"] = provider_name
+                metadata["model"] = response.model
         
-        # SOTA Enhancement: Build enhanced response with telemetry if available
-        if SOTA_FEATURES_AVAILABLE and (self.enable_memory or self.current_tool_traces):
-            enhanced_response = self._build_enhanced_response(
-                base_response=response,
-                provider_name=provider_name,
-                total_time=total_generation_time,
-                extracted_facts=extracted_facts
-            )
-        else:
-            enhanced_response = response
+        # Add the response to the conversation with metadata
+        self.add_message(MessageRole.ASSISTANT, content, metadata=metadata)
         
-        # Clear current cycle after building response
-        if self.current_cycle:
-            self.current_cycle = None
-        
-        return enhanced_response
+        return response
 
     def get_last_interactions(self, count: int = 1) -> List[Dict[str, Any]]:
         """
@@ -2672,76 +2236,6 @@ class Session:
             "capabilities": capabilities
         }
 
-    # SOTA Enhancement Methods
-    def _build_enhanced_response(self,
-                                base_response: "GenerateResponse",
-                                provider_name: str,
-                                total_time: float,
-                                extracted_facts: List[Any]) -> "GenerateResponse":
-        """Build enhanced response with readable telemetry."""
-        
-        # Create facts list
-        facts_strings = []
-        for fact in extracted_facts:
-            if hasattr(fact, '__str__'):
-                facts_strings.append(str(fact))
-            else:
-                facts_strings.append(f"{fact.subject} --[{fact.predicate}]--> {fact.object}")
-        
-        # Get COMPLETE scratchpad trace (NO truncation) if available
-        complete_scratchpad = []
-        scratchpad_file_path = ""
-        if self.scratchpad:
-            complete_scratchpad = self.scratchpad.get_complete_trace()
-            scratchpad_file_path = self.scratchpad.get_scratchpad_file_path()
-        
-        # Create enhanced response by copying base response
-        enhanced_response = base_response
-        
-        # Add telemetry fields with complete observability
-        enhanced_response.react_cycle_id = self.current_cycle.cycle_id if self.current_cycle else None
-        enhanced_response.tool_calls = self.current_tool_traces  # Now readable list
-        enhanced_response.tools_executed = self.current_tool_traces
-        enhanced_response.facts_extracted = facts_strings
-        enhanced_response.reasoning_trace = complete_scratchpad  # COMPLETE scratchpad
-        enhanced_response.total_reasoning_time = total_time
-        
-        # Add scratchpad file reference for external access
-        enhanced_response.scratchpad_file = str(scratchpad_file_path)
-        enhanced_response.scratchpad_manager = self.scratchpad  # For direct access
-        
-        return enhanced_response
-    
-    def _get_response_handler(self, provider_name: str) -> StructuredResponseHandler:
-        """Get or create structured response handler for provider."""
-        if provider_name not in self.response_handlers:
-            self.response_handlers[provider_name] = StructuredResponseHandler(provider_name)
-        return self.response_handlers[provider_name]
-    
-    def get_memory_stats(self) -> Optional[Dict[str, Any]]:
-        """Get memory system statistics."""
-        if self.memory:
-            return self.memory.get_statistics()
-        return None
-    
-    def save_memory(self):
-        """Save memory to disk."""
-        if self.memory:
-            self.memory.save_to_disk()
-            logger.info("Memory saved to disk")
-    
-    def visualize_memory_links(self) -> Optional[str]:
-        """Get memory link visualization."""
-        if self.memory:
-            return self.memory.visualize_links()
-        return None
-    
-    def query_memory(self, query: str) -> Optional[Dict[str, Any]]:
-        """Query memory for relevant information."""
-        if self.memory:
-            return self.memory.query_memory(query)
-        return None
-
 
 class SessionManager:
     """
@@ -2867,34 +2361,3 @@ class SessionManager:
                     provider_config=provider_config
                 )
                 self.sessions[session.id] = session
-
-
-def create_enhanced_session(
-    provider: Optional[Union[str, AbstractLLMInterface]] = None,
-    enable_memory: bool = True,
-    enable_retry: bool = True,
-    persist_memory: Optional[str] = None,
-    **kwargs
-) -> Session:
-    """
-    Create an enhanced session with SOTA features.
-    
-    Args:
-        provider: Provider name or instance
-        enable_memory: Enable hierarchical memory
-        enable_retry: Enable retry strategies
-        persist_memory: Path to persist memory
-        **kwargs: Additional session parameters
-        
-    Returns:
-        Enhanced session instance
-    """
-    persist_path = Path(persist_memory) if persist_memory else None
-    
-    return Session(
-        provider=provider,
-        enable_memory=enable_memory,
-        enable_retry=enable_retry,
-        persist_memory=persist_path,
-        **kwargs
-    )
