@@ -42,6 +42,7 @@ class CommandProcessor:
             'scratchpad': self._cmd_scratchpad,
             'scratch': self._cmd_scratchpad,
             'history': self._cmd_history,
+            'last': self._cmd_last,
             'clear': self._cmd_clear,
             'reset': self._cmd_reset,
             'status': self._cmd_status,
@@ -109,6 +110,7 @@ class CommandProcessor:
             ]),
             ("Session Control", [
                 ("/history", "Show command history"),
+                ("/last [count]", "Replay conversation messages"),
                 ("/clear", "Clear conversation history"),
                 ("/reset", "Reset entire session"),
                 ("/status", "Show session status"),
@@ -130,6 +132,7 @@ class CommandProcessor:
         examples = [
             "/save my_session.pkl",
             "/load my_session.pkl", 
+            "/last 3",
             "/facts machine learning",
             "/export memory_backup.json"
         ]
@@ -472,26 +475,47 @@ class CommandProcessor:
                         memory.react_cycles = {}
                         for cycle_id, cycle_data in cycles_dict.items():
                             try:
-                                cycle = ReActCycle(
-                                    cycle_id=cycle_data.get('cycle_id', cycle_id),
-                                    query=cycle_data.get('query', ''),
-                                    system_prompt=cycle_data.get('system_prompt', '')
-                                )
-                                cycle.success = cycle_data.get('success', False)
-                                if 'thoughts' in cycle_data:
-                                    cycle.thoughts = cycle_data['thoughts']
-                                if 'actions' in cycle_data:
-                                    cycle.actions = cycle_data['actions']
-                                if 'observations' in cycle_data:
-                                    cycle.observations = cycle_data['observations']
+                                # Use the from_dict class method if available
+                                if hasattr(ReActCycle, 'from_dict') and isinstance(cycle_data, dict):
+                                    # Ensure required fields are present
+                                    if 'cycle_id' not in cycle_data:
+                                        cycle_data['cycle_id'] = cycle_id
+                                    if 'query' not in cycle_data:
+                                        cycle_data['query'] = ''
+                                    if 'start_time' not in cycle_data:
+                                        cycle_data['start_time'] = datetime.now().isoformat()
+                                    
+                                    cycle = ReActCycle.from_dict(cycle_data)
+                                else:
+                                    # Fallback to manual construction with correct parameters
+                                    cycle = ReActCycle(
+                                        cycle_id=cycle_data.get('cycle_id', cycle_id),
+                                        query=cycle_data.get('query', '')
+                                    )
+                                    
+                                    # Set additional fields
+                                    if 'success' in cycle_data:
+                                        cycle.success = cycle_data['success']
+                                    if 'start_time' in cycle_data:
+                                        try:
+                                            cycle.start_time = datetime.fromisoformat(cycle_data['start_time'])
+                                        except:
+                                            cycle.start_time = datetime.now()
+                                    if 'end_time' in cycle_data and cycle_data['end_time']:
+                                        try:
+                                            cycle.end_time = datetime.fromisoformat(cycle_data['end_time'])
+                                        except:
+                                            pass
+                                            
                                 memory.react_cycles[cycle_id] = cycle
+                                
                             except Exception as cycle_error:
                                 print(f"  {colorize('Cycle restore warning:', Colors.BRIGHT_YELLOW)} {str(cycle_error)}")
                                 continue
                     
                     # Restore memory links
                     if 'links' in memory_snapshot and hasattr(memory, 'links'):
-                        from abstractllm.memory import MemoryLink, MemoryType  # Import necessary classes
+                        from abstractllm.memory import MemoryLink, MemoryComponent  # Import correct classes
                         
                         memory.links = []
                         from collections import defaultdict
@@ -499,9 +523,27 @@ class CommandProcessor:
                         
                         for link_data in memory_snapshot['links']:
                             try:
-                                # Convert string back to enum
-                                source_type = MemoryType(link_data['source_type'])
-                                target_type = MemoryType(link_data['target_type'])
+                                # Convert string back to MemoryComponent enum
+                                source_type_str = link_data['source_type']
+                                target_type_str = link_data['target_type']
+                                
+                                # Handle potential enum value mismatches
+                                source_type = None
+                                target_type = None
+                                
+                                try:
+                                    source_type = MemoryComponent(source_type_str)
+                                except ValueError:
+                                    # Skip invalid enum values with a warning
+                                    print(f"  {colorize('Link restore warning:', Colors.BRIGHT_YELLOW)} Invalid source type '{source_type_str}'")
+                                    continue
+                                    
+                                try:
+                                    target_type = MemoryComponent(target_type_str)
+                                except ValueError:
+                                    # Skip invalid enum values with a warning
+                                    print(f"  {colorize('Link restore warning:', Colors.BRIGHT_YELLOW)} Invalid target type '{target_type_str}'")
+                                    continue
                                 
                                 link = MemoryLink(
                                     source_type=source_type,
@@ -689,6 +731,9 @@ class CommandProcessor:
         # If a response ID is provided, show specific interaction scratchpad
         if args:
             response_id = args[0]
+            # Handle both formats: "4258e5b8" and "cycle_4258e5b8"
+            if not response_id.startswith('cycle_'):
+                response_id = f"cycle_{response_id}"
             from abstractllm.utils.response_helpers import scratchpad_command
             scratchpad_command(response_id)
             return
@@ -751,6 +796,149 @@ class CommandProcessor:
             timestamp = cmd_info['timestamp'][:19]  # Remove microseconds
             command = cmd_info['command']
             print(f"  {i:2d}. {colorize(timestamp, Colors.DIM)} {colorize(command, Colors.BRIGHT_GREEN)}")
+    
+    def _cmd_last(self, args: List[str]) -> None:
+        """Replay conversation messages."""
+        if not hasattr(self.session, 'messages') or not self.session.messages:
+            display_info("No conversation messages to replay")
+            return
+        
+        # Parse count parameter
+        count = None
+        if args:
+            try:
+                count = int(args[0])
+                if count <= 0:
+                    display_error("Count must be a positive integer")
+                    return
+            except ValueError:
+                display_error(f"Invalid count '{args[0]}' - must be an integer")
+                return
+        
+        # Get messages to display
+        messages = self.session.messages
+        if count:
+            messages = messages[-count*2:] if len(messages) >= count*2 else messages
+            display_title = f"Last {min(count, len(messages)//2)} Interaction(s)"
+        else:
+            display_title = f"Complete Conversation ({len(messages)} messages)"
+        
+        print(f"\n{colorize(f'{Symbols.CHAT} {display_title}', Colors.BRIGHT_CYAN, bold=True)}")
+        print(create_divider(80, "═", Colors.CYAN))
+        
+        # Group messages into interactions
+        interactions = self._group_messages_into_interactions(messages)
+        
+        for i, interaction in enumerate(interactions, 1):
+            user_msg = interaction.get('user')
+            assistant_msg = interaction.get('assistant')
+            
+            # Interaction header
+            print(f"\n{colorize(f'{Symbols.ARROW_RIGHT} Interaction {i}', Colors.BRIGHT_YELLOW, bold=True)}")
+            print(create_divider(70, "─", Colors.YELLOW))
+            
+            # User message
+            if user_msg:
+                print(f"\n{colorize('👤 User:', Colors.BRIGHT_BLUE, bold=True)}")
+                print(self._format_message_content(user_msg['content']))
+            
+            # Assistant message
+            if assistant_msg:
+                print(f"\n{colorize('🤖 Assistant:', Colors.BRIGHT_GREEN, bold=True)}")
+                assistant_content = assistant_msg['content']
+                
+                # Check if it contains thinking tags
+                if '<think>' in assistant_content and '</think>' in assistant_content:
+                    # Extract and format thinking vs response
+                    import re
+                    think_match = re.search(r'<think>(.*?)</think>', assistant_content, re.DOTALL)
+                    if think_match:
+                        thinking = think_match.group(1).strip()
+                        response = assistant_content.split('</think>')[-1].strip()
+                        
+                        # Show thinking process (collapsed)
+                        think_preview = thinking.split('\n')[0][:100] + "..." if len(thinking) > 100 else thinking[:100]
+                        print(f"  {colorize('[THINKING]', Colors.DIM)} {colorize(think_preview, Colors.DIM)}")
+                        
+                        # Show main response
+                        if response:
+                            print(self._format_message_content(response))
+                    else:
+                        print(self._format_message_content(assistant_content))
+                else:
+                    print(self._format_message_content(assistant_content))
+        
+        # Summary footer
+        print(f"\n{create_divider(80, '═', Colors.BRIGHT_BLACK)}")
+        total_interactions = len(interactions)
+        if count and total_interactions > count:
+            print(f"{colorize(f'Showing last {count} of {total_interactions} total interactions', Colors.DIM)}")
+        else:
+            print(f"{colorize(f'Complete conversation: {total_interactions} interactions', Colors.DIM)}")
+    
+    def _group_messages_into_interactions(self, messages: list) -> list:
+        """Group messages into user-assistant interaction pairs."""
+        interactions = []
+        current_interaction = {}
+        
+        for msg in messages:
+            if hasattr(msg, 'role'):
+                role = msg.role
+                content = msg.content
+            else:
+                # Handle dict-like message objects
+                role = msg.get('role', 'unknown')
+                content = msg.get('content', '')
+            
+            if role == 'user':
+                # Start new interaction
+                if current_interaction:
+                    interactions.append(current_interaction)
+                current_interaction = {'user': {'role': role, 'content': content}}
+            elif role == 'assistant':
+                # Complete current interaction
+                if 'user' in current_interaction:
+                    current_interaction['assistant'] = {'role': role, 'content': content}
+                else:
+                    # Orphaned assistant message, create interaction
+                    current_interaction = {'assistant': {'role': role, 'content': content}}
+            
+        # Add final interaction if exists
+        if current_interaction:
+            interactions.append(current_interaction)
+        
+        return interactions
+    
+    def _format_message_content(self, content: str, indent: str = "  ") -> str:
+        """Format message content with proper indentation and wrapping."""
+        if not content:
+            return f"{indent}{colorize('(empty message)', Colors.DIM)}"
+        
+        # Split content into lines and add indentation
+        lines = content.split('\n')
+        formatted_lines = []
+        
+        for line in lines:
+            if line.strip():
+                # Wrap long lines
+                if len(line) > 100:
+                    # Simple word wrapping
+                    words = line.split(' ')
+                    current_line = indent
+                    for word in words:
+                        if len(current_line + word) > 100:
+                            formatted_lines.append(current_line.rstrip())
+                            current_line = indent + word + " "
+                        else:
+                            current_line += word + " "
+                    if current_line.strip():
+                        formatted_lines.append(current_line.rstrip())
+                else:
+                    formatted_lines.append(f"{indent}{line}")
+            else:
+                formatted_lines.append("")  # Preserve empty lines
+        
+        return '\n'.join(formatted_lines)
     
     def _cmd_clear(self, args: List[str]) -> None:
         """Clear conversation history."""
