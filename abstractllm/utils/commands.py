@@ -1,0 +1,865 @@
+"""
+Slash command system for alma_simple.py interactive mode.
+
+Provides a comprehensive command interface for memory management,
+session control, and agent interaction.
+"""
+
+import json
+import os
+import pickle
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from abstractllm.utils.display import (
+    Colors, Symbols, display_error, display_info, display_success,
+    colorize, create_divider
+)
+
+
+class CommandProcessor:
+    """Processes slash commands in interactive mode."""
+    
+    def __init__(self, session, display_func=None):
+        """Initialize command processor."""
+        self.session = session
+        self.display_func = display_func or print
+        self.command_history = []
+        
+        # Register available commands
+        self.commands = {
+            'help': self._cmd_help,
+            'h': self._cmd_help,
+            'memory': self._cmd_memory,
+            'mem': self._cmd_memory,
+            'save': self._cmd_save,
+            'load': self._cmd_load,
+            'export': self._cmd_export,
+            'import': self._cmd_import,
+            'facts': self._cmd_facts,
+            'links': self._cmd_links,
+            'scratchpad': self._cmd_scratchpad,
+            'scratch': self._cmd_scratchpad,
+            'history': self._cmd_history,
+            'clear': self._cmd_clear,
+            'reset': self._cmd_reset,
+            'status': self._cmd_status,
+            'stats': self._cmd_stats,
+            'config': self._cmd_config,
+            'exit': self._cmd_exit,
+            'quit': self._cmd_exit,
+            'q': self._cmd_exit,
+        }
+    
+    def process_command(self, command_line: str) -> bool:
+        """
+        Process a slash command.
+        
+        Returns:
+            True if command was processed, False if it's a regular query
+        """
+        if not command_line.startswith('/'):
+            return False
+        
+        # Parse command and arguments
+        parts = command_line[1:].strip().split()
+        if not parts:
+            self._cmd_help()
+            return True
+        
+        cmd = parts[0].lower()
+        args = parts[1:] if len(parts) > 1 else []
+        
+        # Track command history
+        self.command_history.append({
+            'timestamp': datetime.now().isoformat(),
+            'command': command_line,
+            'parsed_cmd': cmd,
+            'args': args
+        })
+        
+        # Execute command
+        if cmd in self.commands:
+            try:
+                self.commands[cmd](args)
+            except Exception as e:
+                display_error(f"Command failed: {str(e)}")
+        else:
+            display_error(f"Unknown command: {cmd}")
+            print(f"{Colors.DIM}Type {colorize('/help', Colors.BRIGHT_BLUE)} for available commands{Colors.RESET}")
+        
+        return True
+    
+    def _cmd_help(self, args: List[str]) -> None:
+        """Display help information."""
+        print(f"\n{colorize(f'{Symbols.INFO} Available Commands', Colors.BRIGHT_CYAN, bold=True)}")
+        print(create_divider(60, "─", Colors.CYAN))
+        
+        commands_info = [
+            ("Memory Management", [
+                ("/memory, /mem", "Show memory system insights"),
+                ("/save <file>", "Save complete session state"),
+                ("/load <file>", "Load complete session state"),
+                ("/export <file>", "Export memory to JSON"),
+                ("/import <file>", "Import memory from JSON"),
+                ("/facts [query]", "Show extracted facts"),
+                ("/links", "Visualize memory links"),
+                ("/scratchpad, /scratch", "Show reasoning traces")
+            ]),
+            ("Session Control", [
+                ("/history", "Show command history"),
+                ("/clear", "Clear conversation history"),
+                ("/reset", "Reset entire session"),
+                ("/status", "Show session status"),
+                ("/stats", "Show detailed statistics"),
+                ("/config", "Show current configuration")
+            ]),
+            ("Navigation", [
+                ("/help, /h", "Show this help message"),
+                ("/exit, /quit, /q", "Exit interactive mode")
+            ])
+        ]
+        
+        for category, commands in commands_info:
+            print(f"\n{colorize(f'  {category}:', Colors.BRIGHT_YELLOW, bold=True)}")
+            for cmd, description in commands:
+                print(f"    {colorize(cmd, Colors.BRIGHT_GREEN):<20} {colorize(description, Colors.WHITE)}")
+        
+        print(f"\n{colorize('Usage Examples:', Colors.BRIGHT_YELLOW, bold=True)}")
+        examples = [
+            "/save my_session.pkl",
+            "/load my_session.pkl", 
+            "/facts machine learning",
+            "/export memory_backup.json"
+        ]
+        for example in examples:
+            print(f"  {colorize(example, Colors.BRIGHT_BLUE)}")
+        
+        print(f"\n{create_divider(60, '═', Colors.BRIGHT_BLACK)}")
+    
+    def _cmd_memory(self, args: List[str]) -> None:
+        """Show memory system insights."""
+        if not hasattr(self.session, 'memory') or not self.session.memory:
+            display_error("Memory system not available")
+            return
+        
+        memory = self.session.memory
+        try:
+            stats = memory.get_statistics()
+            
+            # Debug: Check if stats is actually a dictionary
+            if not isinstance(stats, dict):
+                display_error(f"Memory statistics returned {type(stats).__name__} instead of dict: {str(stats)[:200]}...")
+                return
+                
+        except Exception as e:
+            display_error(f"Failed to get memory statistics: {str(e)}")
+            return
+        
+        print(f"\n{colorize(f'{Symbols.BRAIN} Memory System Overview', Colors.BRIGHT_BLUE, bold=True)}")
+        print(create_divider(60, "─", Colors.BLUE))
+        
+        # Memory distribution - check if keys exist
+        if 'memory_distribution' in stats and isinstance(stats['memory_distribution'], dict):
+            dist = stats['memory_distribution']
+            print(f"  {colorize('Working Memory:', Colors.BRIGHT_GREEN)} {dist.get('working_memory', 0)} items")
+            print(f"  {colorize('Episodic Memory:', Colors.BRIGHT_GREEN)} {dist.get('episodic_memory', 0)} experiences")
+        else:
+            print(f"  {colorize('Working Memory:', Colors.BRIGHT_GREEN)} 0 items")
+            print(f"  {colorize('Episodic Memory:', Colors.BRIGHT_GREEN)} 0 experiences")
+            
+        # Knowledge graph stats
+        if 'knowledge_graph' in stats and isinstance(stats['knowledge_graph'], dict):
+            kg_stats = stats['knowledge_graph']
+            print(f"  {colorize('Knowledge Graph:', Colors.BRIGHT_GREEN)} {kg_stats.get('total_facts', 0)} facts")
+        else:
+            print(f"  {colorize('Knowledge Graph:', Colors.BRIGHT_GREEN)} 0 facts")
+        
+        # ReAct cycles
+        total_cycles = stats.get('total_react_cycles', 0)
+        successful_cycles = stats.get('successful_cycles', 0)
+        print(f"  {colorize('ReAct Cycles:', Colors.BRIGHT_CYAN)} {total_cycles} total ({successful_cycles} successful)")
+        
+        # Links - check for both possible key names
+        total_links = 0
+        if 'link_statistics' in stats and isinstance(stats['link_statistics'], dict):
+            total_links = stats['link_statistics'].get('total_links', 0)
+        elif 'memory_distribution' in stats and isinstance(stats['memory_distribution'], dict):
+            total_links = stats['memory_distribution'].get('total_links', 0)
+            
+        print(f"  {colorize('Bidirectional Links:', Colors.BRIGHT_MAGENTA)} {total_links}")
+        
+        # Memory health - only if available
+        try:
+            if hasattr(memory, 'get_memory_health_report'):
+                health = memory.get_memory_health_report()
+                if isinstance(health, dict) and 'overall_health' in health:
+                    health_score = health['overall_health']
+                    health_color = Colors.BRIGHT_GREEN if health_score > 0.8 else Colors.BRIGHT_YELLOW if health_score > 0.5 else Colors.BRIGHT_RED
+                    print(f"  {colorize('Health Score:', health_color)} {health_score:.1%}")
+        except Exception:
+            pass  # Skip health if not available
+        
+        # Recent facts - only if available
+        try:
+            if hasattr(memory, 'knowledge_graph') and hasattr(memory.knowledge_graph, 'facts') and memory.knowledge_graph.facts:
+                print(f"\n{colorize('Recent Facts:', Colors.BRIGHT_YELLOW)}")
+                for i, (fact_id, fact) in enumerate(list(memory.knowledge_graph.facts.items())[-3:]):
+                    print(f"    {i+1}. {fact.subject} --[{fact.predicate}]--> {fact.object}")
+        except Exception:
+            pass  # Skip facts if not available
+    
+    def _cmd_save(self, args: List[str]) -> None:
+        """Save complete session state."""
+        if not args:
+            display_error("Usage: /save <filename>")
+            return
+        
+        filename = args[0]
+        if not filename.endswith('.pkl'):
+            filename += '.pkl'
+        
+        try:
+            # Create comprehensive session state
+            session_state = {
+                'timestamp': datetime.now().isoformat(),
+                'messages': [msg.to_dict() for msg in self.session.messages],
+                'system_prompt': self.session.system_prompt,
+                'metadata': self.session.metadata,
+                'command_history': self.command_history,
+                'provider_config': getattr(self.session, 'provider_config', {}),
+                'tools': [tool.__name__ if callable(tool) else str(tool) for tool in self.session.tools] if self.session.tools else []
+            }
+            
+            # Add memory state if available
+            if hasattr(self.session, 'memory') and self.session.memory:
+                try:
+                    memory = self.session.memory
+                    
+                    # Create a comprehensive memory snapshot directly
+                    memory_snapshot = {
+                        "version": "2.0",
+                        "session_id": memory.session_id if hasattr(memory, 'session_id') else "unknown",
+                        "session_start": memory.session_start.isoformat() if hasattr(memory, 'session_start') else datetime.now().isoformat(),
+                        "working_memory": memory.working_memory if hasattr(memory, 'working_memory') else [],
+                        "episodic_memory": memory.episodic_memory if hasattr(memory, 'episodic_memory') else [],
+                        "chat_history": memory.chat_history if hasattr(memory, 'chat_history') else [],
+                        "configuration": {
+                            "working_memory_size": getattr(memory, 'working_memory_size', 10),
+                            "episodic_consolidation_threshold": getattr(memory, 'episodic_consolidation_threshold', 5)
+                        }
+                    }
+                    
+                    # Add knowledge graph facts
+                    if hasattr(memory, 'knowledge_graph') and memory.knowledge_graph:
+                        facts_dict = {}
+                        if hasattr(memory.knowledge_graph, 'facts') and memory.knowledge_graph.facts:
+                            for fact_id, fact in memory.knowledge_graph.facts.items():
+                                if hasattr(fact, 'to_dict'):
+                                    facts_dict[fact_id] = fact.to_dict()
+                                else:
+                                    # Fallback for simple fact objects
+                                    facts_dict[fact_id] = {
+                                        "subject": getattr(fact, 'subject', ''),
+                                        "predicate": getattr(fact, 'predicate', ''),
+                                        "object": getattr(fact, 'object', ''),
+                                        "confidence": getattr(fact, 'confidence', 0.5),
+                                        "importance": getattr(fact, 'importance', 1.0),
+                                        "access_count": getattr(fact, 'access_count', 0)
+                                    }
+                        memory_snapshot["semantic_memory"] = facts_dict
+                    
+                    # Add ReAct cycles
+                    if hasattr(memory, 'react_cycles') and memory.react_cycles:
+                        cycles_dict = {}
+                        for cycle_id, cycle in memory.react_cycles.items():
+                            if hasattr(cycle, 'to_dict'):
+                                cycles_dict[cycle_id] = cycle.to_dict()
+                            else:
+                                # Fallback
+                                cycles_dict[cycle_id] = {
+                                    "cycle_id": getattr(cycle, 'cycle_id', cycle_id),
+                                    "query": getattr(cycle, 'query', ''),
+                                    "success": getattr(cycle, 'success', False)
+                                }
+                        memory_snapshot["react_cycles"] = cycles_dict
+                    
+                    # Add memory links
+                    if hasattr(memory, 'links') and memory.links:
+                        links_list = []
+                        for link in memory.links:
+                            try:
+                                if hasattr(link, 'source_type') and hasattr(link.source_type, 'value'):
+                                    source_type_val = link.source_type.value
+                                else:
+                                    source_type_val = str(getattr(link, 'source_type', 'unknown'))
+                                    
+                                if hasattr(link, 'target_type') and hasattr(link.target_type, 'value'):
+                                    target_type_val = link.target_type.value
+                                else:
+                                    target_type_val = str(getattr(link, 'target_type', 'unknown'))
+                                
+                                link_dict = {
+                                    "source_type": source_type_val,
+                                    "source_id": getattr(link, 'source_id', ''),
+                                    "target_type": target_type_val,
+                                    "target_id": getattr(link, 'target_id', ''),
+                                    "relationship": getattr(link, 'relationship', ''),
+                                    "strength": getattr(link, 'strength', 1.0),
+                                    "metadata": getattr(link, 'metadata', {}),
+                                    "created_at": getattr(link, 'created_at', datetime.now()).isoformat() if hasattr(getattr(link, 'created_at', None), 'isoformat') else str(getattr(link, 'created_at', datetime.now())),
+                                    "accessed_count": getattr(link, 'accessed_count', 0)
+                                }
+                                links_list.append(link_dict)
+                            except Exception:
+                                # Skip problematic links
+                                continue
+                        memory_snapshot["links"] = links_list
+                    
+                    session_state['memory_snapshot'] = memory_snapshot
+                    
+                except Exception as mem_error:
+                    print(f"  {colorize('Memory save warning:', Colors.BRIGHT_YELLOW)} {str(mem_error)}")
+                    # Continue without memory data
+            
+            # Save complete state
+            with open(filename, 'wb') as f:
+                pickle.dump(session_state, f)
+            
+            display_success(f"Session saved to {filename}")
+            
+            # Show what was saved
+            size_bytes = os.path.getsize(filename)
+            if size_bytes < 1024:
+                size_display = f"{size_bytes} bytes"
+            elif size_bytes < 1024 * 1024:
+                size_display = f"{size_bytes / 1024:.1f} KB"
+            else:
+                size_display = f"{size_bytes / (1024 * 1024):.2f} MB"
+            
+            print(f"  {colorize('File size:', Colors.DIM)} {size_display}")
+            print(f"  {colorize('Messages:', Colors.DIM)} {len(session_state['messages'])}")
+            print(f"  {colorize('Commands:', Colors.DIM)} {len(self.command_history)}")
+            
+            # Show memory components saved
+            if 'memory_snapshot' in session_state:
+                memory_info = []
+                memory_snapshot = session_state['memory_snapshot']
+                if 'semantic_memory' in memory_snapshot and memory_snapshot['semantic_memory']:
+                    facts_count = len(memory_snapshot['semantic_memory'])
+                    memory_info.append(f"{facts_count} facts")
+                if 'working_memory' in memory_snapshot and memory_snapshot['working_memory']:
+                    working_count = len(memory_snapshot['working_memory'])
+                    memory_info.append(f"{working_count} working memory")
+                if 'react_cycles' in memory_snapshot and memory_snapshot['react_cycles']:
+                    cycles_count = len(memory_snapshot['react_cycles'])
+                    memory_info.append(f"{cycles_count} ReAct cycles")
+                if 'links' in memory_snapshot and memory_snapshot['links']:
+                    links_count = len(memory_snapshot['links'])
+                    memory_info.append(f"{links_count} links")
+                
+                memory_desc = ", ".join(memory_info) if memory_info else "empty"
+                print(f"  {colorize('Memory:', Colors.DIM)} {memory_desc}")
+            
+        except Exception as e:
+            display_error(f"Failed to save session: {str(e)}")
+    
+    def _cmd_load(self, args: List[str]) -> None:
+        """Load complete session state."""
+        if not args:
+            display_error("Usage: /load <filename>")
+            return
+        
+        filename = args[0]
+        if not filename.endswith('.pkl'):
+            filename += '.pkl'
+        
+        if not os.path.exists(filename):
+            display_error(f"File not found: {filename}")
+            return
+        
+        try:
+            with open(filename, 'rb') as f:
+                session_state = pickle.load(f)
+            
+            # Restore basic session state
+            # Note: We can't completely replace the session object, but we can restore its state
+            if 'messages' in session_state:
+                from abstractllm.types import Message
+                self.session.messages = [
+                    Message(role=msg['role'], content=msg['content'], name=msg.get('name'))
+                    for msg in session_state['messages']
+                ]
+            
+            if 'system_prompt' in session_state:
+                self.session.system_prompt = session_state['system_prompt']
+            
+            if 'metadata' in session_state:
+                self.session.metadata.update(session_state['metadata'])
+            
+            if 'command_history' in session_state:
+                self.command_history = session_state['command_history']
+            
+            # Restore memory if available
+            if 'memory_snapshot' in session_state and hasattr(self.session, 'memory') and self.session.memory:
+                try:
+                    memory = self.session.memory
+                    memory_snapshot = session_state['memory_snapshot']
+                    
+                    # Restore basic memory attributes
+                    if 'session_id' in memory_snapshot:
+                        memory.session_id = memory_snapshot['session_id']
+                    
+                    if 'session_start' in memory_snapshot:
+                        try:
+                            memory.session_start = datetime.fromisoformat(memory_snapshot['session_start'])
+                        except:
+                            memory.session_start = datetime.now()
+                    
+                    # Restore working memory
+                    if 'working_memory' in memory_snapshot:
+                        memory.working_memory = memory_snapshot['working_memory']
+                    
+                    # Restore episodic memory
+                    if 'episodic_memory' in memory_snapshot:
+                        memory.episodic_memory = memory_snapshot['episodic_memory']
+                    
+                    # Restore chat history
+                    if 'chat_history' in memory_snapshot:
+                        memory.chat_history = memory_snapshot['chat_history']
+                    
+                    # Restore knowledge graph facts
+                    if 'semantic_memory' in memory_snapshot and hasattr(memory, 'knowledge_graph'):
+                        facts_dict = memory_snapshot['semantic_memory']
+                        from abstractllm.memory import Fact  # Import the Fact class
+                        
+                        # Clear existing facts
+                        memory.knowledge_graph.facts = {}
+                        from collections import defaultdict
+                        memory.knowledge_graph.subject_index = defaultdict(list)
+                        memory.knowledge_graph.predicate_index = defaultdict(list)
+                        memory.knowledge_graph.object_index = defaultdict(list)
+                        
+                        # Restore facts
+                        for fact_id, fact_data in facts_dict.items():
+                            try:
+                                fact = Fact(
+                                    fact_id=fact_id,
+                                    subject=fact_data.get('subject', ''),
+                                    predicate=fact_data.get('predicate', ''),
+                                    object=fact_data.get('object', ''),
+                                    confidence=fact_data.get('confidence', 0.5),
+                                    importance=fact_data.get('importance', 1.0)
+                                )
+                                fact.access_count = fact_data.get('access_count', 0)
+                                memory.knowledge_graph.facts[fact_id] = fact
+                                
+                                # Rebuild indexes
+                                memory.knowledge_graph.subject_index[fact.subject].append(fact_id)
+                                memory.knowledge_graph.predicate_index[fact.predicate].append(fact_id)
+                                memory.knowledge_graph.object_index[fact.object].append(fact_id)
+                                
+                            except Exception as fact_error:
+                                print(f"  {colorize('Fact restore warning:', Colors.BRIGHT_YELLOW)} {str(fact_error)}")
+                                continue
+                    
+                    # Restore ReAct cycles
+                    if 'react_cycles' in memory_snapshot and hasattr(memory, 'react_cycles'):
+                        cycles_dict = memory_snapshot['react_cycles']
+                        from abstractllm.memory import ReActCycle  # Import the ReActCycle class
+                        
+                        memory.react_cycles = {}
+                        for cycle_id, cycle_data in cycles_dict.items():
+                            try:
+                                cycle = ReActCycle(
+                                    cycle_id=cycle_data.get('cycle_id', cycle_id),
+                                    query=cycle_data.get('query', ''),
+                                    system_prompt=cycle_data.get('system_prompt', '')
+                                )
+                                cycle.success = cycle_data.get('success', False)
+                                if 'thoughts' in cycle_data:
+                                    cycle.thoughts = cycle_data['thoughts']
+                                if 'actions' in cycle_data:
+                                    cycle.actions = cycle_data['actions']
+                                if 'observations' in cycle_data:
+                                    cycle.observations = cycle_data['observations']
+                                memory.react_cycles[cycle_id] = cycle
+                            except Exception as cycle_error:
+                                print(f"  {colorize('Cycle restore warning:', Colors.BRIGHT_YELLOW)} {str(cycle_error)}")
+                                continue
+                    
+                    # Restore memory links
+                    if 'links' in memory_snapshot and hasattr(memory, 'links'):
+                        from abstractllm.memory import MemoryLink, MemoryType  # Import necessary classes
+                        
+                        memory.links = []
+                        from collections import defaultdict
+                        memory.link_index = defaultdict(list)
+                        
+                        for link_data in memory_snapshot['links']:
+                            try:
+                                # Convert string back to enum
+                                source_type = MemoryType(link_data['source_type'])
+                                target_type = MemoryType(link_data['target_type'])
+                                
+                                link = MemoryLink(
+                                    source_type=source_type,
+                                    source_id=link_data['source_id'],
+                                    target_type=target_type,
+                                    target_id=link_data['target_id'],
+                                    relationship=link_data['relationship'],
+                                    strength=link_data.get('strength', 1.0),
+                                    metadata=link_data.get('metadata', {})
+                                )
+                                
+                                if 'created_at' in link_data:
+                                    try:
+                                        link.created_at = datetime.fromisoformat(link_data['created_at'])
+                                    except:
+                                        link.created_at = datetime.now()
+                                
+                                link.accessed_count = link_data.get('accessed_count', 0)
+                                memory.links.append(link)
+                                
+                                # Rebuild link index
+                                link_key = f"{link.source_type.value}:{link.source_id}"
+                                memory.link_index[link_key].append(link)
+                                
+                            except Exception as link_error:
+                                print(f"  {colorize('Link restore warning:', Colors.BRIGHT_YELLOW)} {str(link_error)}")
+                                continue
+                    
+                    # Restore configuration
+                    if 'configuration' in memory_snapshot:
+                        config = memory_snapshot['configuration']
+                        memory.working_memory_size = config.get('working_memory_size', 10)
+                        memory.episodic_consolidation_threshold = config.get('episodic_consolidation_threshold', 5)
+                    
+                except Exception as mem_error:
+                    print(f"  {colorize('Memory restore warning:', Colors.BRIGHT_YELLOW)} {str(mem_error)}")
+                    # Continue without memory restoration
+            
+            display_success(f"Session loaded from {filename}")
+            
+            # Show what was loaded
+            print(f"  {colorize('Messages restored:', Colors.DIM)} {len(self.session.messages)}")
+            print(f"  {colorize('Commands restored:', Colors.DIM)} {len(self.command_history)}")
+            if 'memory_data' in session_state:
+                print(f"  {colorize('Memory restored:', Colors.DIM)} Yes")
+            
+            # Show session info
+            if session_state.get('timestamp'):
+                print(f"  {colorize('Saved on:', Colors.DIM)} {session_state['timestamp']}")
+            
+        except Exception as e:
+            display_error(f"Failed to load session: {str(e)}")
+    
+    def _cmd_export(self, args: List[str]) -> None:
+        """Export memory to JSON format."""
+        if not args:
+            display_error("Usage: /export <filename>")
+            return
+        
+        filename = args[0]
+        if not filename.endswith('.json'):
+            filename += '.json'
+        
+        if not hasattr(self.session, 'memory') or not self.session.memory:
+            display_error("Memory system not available")
+            return
+        
+        try:
+            memory = self.session.memory
+            
+            # Create exportable memory data
+            export_data = {
+                'timestamp': datetime.now().isoformat(),
+                'statistics': memory.get_statistics(),
+                'facts': [
+                    {
+                        'id': fact_id,
+                        'subject': fact.subject,
+                        'predicate': fact.predicate,
+                        'object': fact.object,
+                        'confidence': fact.confidence,
+                        'importance': fact.importance,
+                        'access_count': fact.access_count,
+                        'timestamp': fact.timestamp.isoformat() if fact.timestamp else None
+                    }
+                    for fact_id, fact in memory.knowledge_graph.facts.items()
+                ],
+                'working_memory': [
+                    {
+                        'content': item.content,
+                        'importance': item.importance,
+                        'timestamp': item.timestamp.isoformat()
+                    }
+                    for item in memory.working_memory
+                ],
+                'episodic_memory': [
+                    {
+                        'content': item.content,
+                        'timestamp': item.timestamp.isoformat(),
+                        'importance': item.importance
+                    }
+                    for item in memory.episodic_memory
+                ]
+            }
+            
+            with open(filename, 'w') as f:
+                json.dump(export_data, f, indent=2)
+            
+            display_success(f"Memory exported to {filename}")
+            
+            # Show export stats
+            size_kb = os.path.getsize(filename) / 1024
+            print(f"  {colorize('File size:', Colors.DIM)} {size_kb:.1f} KB")
+            print(f"  {colorize('Facts exported:', Colors.DIM)} {len(export_data['facts'])}")
+            print(f"  {colorize('Working memory:', Colors.DIM)} {len(export_data['working_memory'])}")
+            print(f"  {colorize('Episodic memory:', Colors.DIM)} {len(export_data['episodic_memory'])}")
+            
+        except Exception as e:
+            display_error(f"Failed to export memory: {str(e)}")
+    
+    def _cmd_import(self, args: List[str]) -> None:
+        """Import memory from JSON format."""
+        display_info("Import functionality requires memory system reconstruction - use /load for complete session restore")
+    
+    def _cmd_facts(self, args: List[str]) -> None:
+        """Show extracted facts, optionally filtered by query."""
+        if not hasattr(self.session, 'memory') or not self.session.memory:
+            display_error("Memory system not available")
+            return
+        
+        facts = self.session.memory.knowledge_graph.facts
+        
+        if not facts:
+            display_info("No facts extracted yet")
+            return
+        
+        query = ' '.join(args) if args else None
+        
+        print(f"\n{colorize(f'{Symbols.KEY} Knowledge Facts', Colors.BRIGHT_YELLOW, bold=True)}")
+        if query:
+            print(f"{colorize(f'Filtered by: {query}', Colors.DIM, italic=True)}")
+        print(create_divider(60, "─", Colors.YELLOW))
+        
+        displayed = 0
+        for fact_id, fact in facts.items():
+            # Simple text matching if query provided
+            if query:
+                fact_text = f"{fact.subject} {fact.predicate} {fact.object}".lower()
+                if query.lower() not in fact_text:
+                    continue
+            
+            confidence_color = Colors.BRIGHT_GREEN if fact.confidence > 0.8 else Colors.BRIGHT_YELLOW if fact.confidence > 0.5 else Colors.BRIGHT_RED
+            
+            print(f"  {displayed + 1}. {colorize(fact.subject, Colors.BRIGHT_BLUE)} "
+                  f"--[{colorize(fact.predicate, Colors.BRIGHT_CYAN)}]--> "
+                  f"{colorize(fact.object, Colors.BRIGHT_GREEN)}")
+            print(f"     {colorize(f'Confidence: {fact.confidence:.1%}', confidence_color)} "
+                  f"{colorize(f'| Importance: {fact.importance:.1f}', Colors.DIM)} "
+                  f"{colorize(f'| Used: {fact.access_count}x', Colors.DIM)}")
+            
+            displayed += 1
+            if displayed >= 10:  # Limit display
+                remaining = len(facts) - displayed
+                if remaining > 0:
+                    print(f"\n  {colorize(f'... and {remaining} more facts', Colors.DIM, italic=True)}")
+                break
+    
+    def _cmd_links(self, args: List[str]) -> None:
+        """Visualize memory links."""
+        if not hasattr(self.session, 'memory') or not self.session.memory:
+            display_error("Memory system not available")
+            return
+        
+        visualization = self.session.visualize_memory_links()
+        if visualization:
+            print(f"\n{colorize(f'{Symbols.LINK} Memory Link Visualization', Colors.BRIGHT_MAGENTA, bold=True)}")
+            print(create_divider(60, "─", Colors.MAGENTA))
+            print(visualization)
+        else:
+            display_info("No memory links to visualize")
+    
+    def _cmd_scratchpad(self, args: List[str]) -> None:
+        """Show reasoning traces for a specific interaction or all interactions."""
+        
+        # If a response ID is provided, show specific interaction scratchpad
+        if args:
+            response_id = args[0]
+            from abstractllm.utils.response_helpers import scratchpad_command
+            scratchpad_command(response_id)
+            return
+            
+        # Otherwise, show general reasoning traces summary
+        if not hasattr(self.session, 'memory') or not self.session.memory:
+            display_error("Memory system not available")
+            return
+        
+        try:
+            stats = self.session.memory.get_statistics()
+            
+            # Debug: Check if stats is actually a dictionary
+            if not isinstance(stats, dict):
+                display_error("Memory statistics not available")
+                return
+                
+        except Exception as e:
+            display_error(f"Failed to get memory statistics: {str(e)}")
+            return
+        
+        print(f"\n{colorize(f'{Symbols.BRAIN} Reasoning Traces', Colors.BRIGHT_CYAN, bold=True)}")
+        print(create_divider(60, "─", Colors.CYAN))
+        
+        total_cycles = stats.get('total_react_cycles', 0)
+        successful_cycles = stats.get('successful_cycles', 0)
+        
+        print(f"  {colorize('Total ReAct Cycles:', Colors.BRIGHT_GREEN)} {total_cycles}")
+        print(f"  {colorize('Successful Cycles:', Colors.BRIGHT_GREEN)} {successful_cycles}")
+        
+        print(f"\n{colorize('Usage:', Colors.BRIGHT_YELLOW)}")
+        print(f"  {colorize('/scratch RESPONSE_ID', Colors.BRIGHT_BLUE)} - Show specific interaction scratchpad")
+        print(f"  {colorize('Response IDs are shown in the metrics line after each response', Colors.DIM)}")
+        
+        # Show current cycle if available  
+        if hasattr(self.session, 'current_cycle') and self.session.current_cycle:
+            cycle = self.session.current_cycle
+            print(f"\n{colorize('Current Cycle:', Colors.BRIGHT_YELLOW)}")
+            print(f"    {colorize('ID:', Colors.BRIGHT_BLUE)} {cycle.cycle_id}")
+            print(f"    {colorize('Query:', Colors.WHITE)} {cycle.query[:80]}...")
+            if hasattr(cycle, 'thoughts'):
+                print(f"    {colorize('Thoughts:', Colors.GREEN)} {len(cycle.thoughts)}")
+            if hasattr(cycle, 'actions'):
+                print(f"    {colorize('Actions:', Colors.YELLOW)} {len(cycle.actions)}")
+            if hasattr(cycle, 'observations'):
+                print(f"    {colorize('Observations:', Colors.CYAN)} {len(cycle.observations)}")
+    
+    def _cmd_history(self, args: List[str]) -> None:
+        """Show command history."""
+        if not self.command_history:
+            display_info("No command history available")
+            return
+        
+        print(f"\n{colorize(f'{Symbols.CLOCK} Command History', Colors.BRIGHT_WHITE, bold=True)}")
+        print(create_divider(60, "─", Colors.WHITE))
+        
+        # Show last 10 commands
+        recent_commands = self.command_history[-10:]
+        for i, cmd_info in enumerate(recent_commands, 1):
+            timestamp = cmd_info['timestamp'][:19]  # Remove microseconds
+            command = cmd_info['command']
+            print(f"  {i:2d}. {colorize(timestamp, Colors.DIM)} {colorize(command, Colors.BRIGHT_GREEN)}")
+    
+    def _cmd_clear(self, args: List[str]) -> None:
+        """Clear conversation history."""
+        self.session.messages.clear()
+        self.session._last_assistant_idx = -1
+        display_success("Conversation history cleared")
+    
+    def _cmd_reset(self, args: List[str]) -> None:
+        """Reset entire session."""
+        print(f"{colorize('⚠️  This will reset ALL session data (messages, memory, history)', Colors.BRIGHT_RED)}")
+        confirm = input(f"{colorize('Continue? [y/N]: ', Colors.BRIGHT_YELLOW)}")
+        
+        if confirm.lower() in ['y', 'yes']:
+            # Clear messages
+            self.session.messages.clear()
+            self.session._last_assistant_idx = -1
+            
+            # Reset memory if available
+            if hasattr(self.session, 'memory') and self.session.memory:
+                # Create new memory instance
+                from abstractllm.memory import HierarchicalMemory
+                self.session.memory = HierarchicalMemory()
+            
+            # Clear command history
+            self.command_history.clear()
+            
+            display_success("Session completely reset")
+        else:
+            display_info("Reset cancelled")
+    
+    def _cmd_status(self, args: List[str]) -> None:
+        """Show session status."""
+        print(f"\n{colorize(f'{Symbols.INFO} Session Status', Colors.BRIGHT_BLUE, bold=True)}")
+        print(create_divider(60, "─", Colors.BLUE))
+        
+        # Basic session info
+        print(f"  {colorize('Session ID:', Colors.BRIGHT_GREEN)} {self.session.id}")
+        print(f"  {colorize('Created:', Colors.BRIGHT_GREEN)} {self.session.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"  {colorize('Messages:', Colors.BRIGHT_GREEN)} {len(self.session.messages)}")
+        print(f"  {colorize('Tools:', Colors.BRIGHT_GREEN)} {len(self.session.tools) if self.session.tools else 0}")
+        
+        # Provider info
+        if hasattr(self.session, '_provider') and self.session._provider:
+            provider = self.session._provider
+            provider_name = provider.__class__.__name__.replace('Provider', '')
+            print(f"  {colorize('Provider:', Colors.BRIGHT_CYAN)} {provider_name}")
+            
+            # Model info
+            if hasattr(provider, 'config_manager'):
+                model = provider.config_manager.get_param('model')
+                if model:
+                    print(f"  {colorize('Model:', Colors.BRIGHT_CYAN)} {model}")
+        
+        # Memory status
+        memory_status = "Enabled" if hasattr(self.session, 'memory') and self.session.memory else "Disabled"
+        memory_color = Colors.BRIGHT_GREEN if memory_status == "Enabled" else Colors.BRIGHT_RED
+        print(f"  {colorize('Memory:', memory_color)} {memory_status}")
+        
+        # Command history
+        print(f"  {colorize('Commands run:', Colors.BRIGHT_MAGENTA)} {len(self.command_history)}")
+    
+    def _cmd_stats(self, args: List[str]) -> None:
+        """Show detailed statistics."""
+        self._cmd_status(args)
+        if hasattr(self.session, 'memory') and self.session.memory:
+            print()
+            self._cmd_memory(args)
+    
+    def _cmd_config(self, args: List[str]) -> None:
+        """Show current configuration."""
+        print(f"\n{colorize(f'{Symbols.GEAR} Configuration', Colors.BRIGHT_GREEN, bold=True)}")
+        print(create_divider(60, "─", Colors.GREEN))
+        
+        # Provider config
+        if hasattr(self.session, '_provider') and self.session._provider:
+            provider = self.session._provider
+            if hasattr(provider, 'config_manager'):
+                try:
+                    # Get config items safely
+                    config_items = []
+                    if hasattr(provider.config_manager, '_config'):
+                        config = provider.config_manager._config
+                        for key, value in config.items():
+                            if 'key' in str(key).lower():  # Hide API keys
+                                value = "***HIDDEN***"
+                            config_items.append((key, value))
+                    
+                    if config_items:
+                        for key, value in config_items:
+                            print(f"  {colorize(f'{key}:', Colors.BRIGHT_BLUE)} {colorize(str(value), Colors.WHITE)}")
+                    else:
+                        print(f"  {colorize('No configuration items available', Colors.DIM)}")
+                        
+                except Exception as e:
+                    print(f"  {colorize('Config access error:', Colors.BRIGHT_RED)} {str(e)}")
+        
+        # Session config
+        print(f"\n{colorize('Session Config:', Colors.BRIGHT_YELLOW)}")
+        if hasattr(self.session, 'max_tool_calls'):
+            print(f"  {colorize('Max tool calls:', Colors.BRIGHT_BLUE)} {colorize(str(self.session.max_tool_calls), Colors.WHITE)}")
+        
+        print(f"  {colorize('System prompt:', Colors.BRIGHT_BLUE)} {colorize('Set' if self.session.system_prompt else 'None', Colors.WHITE)}")
+    
+    def _cmd_exit(self, args: List[str]) -> None:
+        """Exit interactive mode."""
+        display_success("Goodbye!")
+        raise KeyboardInterrupt()  # Will be caught by interactive mode
+
+
+def create_command_processor(session, display_func=None) -> CommandProcessor:
+    """Create a command processor for the session."""
+    return CommandProcessor(session, display_func)

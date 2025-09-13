@@ -30,7 +30,10 @@
       "Read(//opt/anaconda3/lib/**)",
       "Bash(echo $PATH)",
       "Bash(chmod:*)",
-      "Bash(./run_isolated.sh python:*)"
+      "Bash(./run_isolated.sh python:*)",
+      "Read(//private/tmp/**)",
+      "Bash(cat:*)",
+      "Bash(timeout:*)"
     ],
     "deny": []
   },

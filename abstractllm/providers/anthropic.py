@@ -284,6 +284,10 @@ class AnthropicProvider(BaseProvider):
         max_tokens = self.config_manager.get_param(ModelParameter.MAX_TOKENS)
         api_key = self.config_manager.get_param(ModelParameter.API_KEY)
         
+        # Get SOTA parameters (Anthropic supports subset of OpenAI parameters)
+        top_p = self.config_manager.get_param(ModelParameter.TOP_P)
+        stop = self.config_manager.get_param(ModelParameter.STOP)
+        
         # Check for API key
         if not api_key:
             log_api_key_missing("Anthropic", "ANTHROPIC_API_KEY")
@@ -406,6 +410,12 @@ class AnthropicProvider(BaseProvider):
                 "temperature": temperature if temperature is not None else 0.7,
                 "stream": stream
             }
+            
+            # Add SOTA parameters if specified
+            if top_p is not None:
+                message_params["top_p"] = top_p
+            if stop is not None:
+                message_params["stop_sequences"] = stop if isinstance(stop, list) else [stop]
             
             if enhanced_system_prompt:
                 message_params["system"] = enhanced_system_prompt
@@ -610,6 +620,10 @@ class AnthropicProvider(BaseProvider):
         max_tokens = self.config_manager.get_param(ModelParameter.MAX_TOKENS)
         api_key = self.config_manager.get_param(ModelParameter.API_KEY)
         
+        # Get SOTA parameters (Anthropic supports subset of OpenAI parameters)
+        top_p = self.config_manager.get_param(ModelParameter.TOP_P)
+        stop = self.config_manager.get_param(ModelParameter.STOP)
+        
         # Check for API key
         if not api_key:
             log_api_key_missing("Anthropic", "ANTHROPIC_API_KEY")
@@ -732,6 +746,12 @@ class AnthropicProvider(BaseProvider):
                 "temperature": temperature if temperature is not None else 0.7,
                 "stream": stream
             }
+            
+            # Add SOTA parameters if specified
+            if top_p is not None:
+                message_params["top_p"] = top_p
+            if stop is not None:
+                message_params["stop_sequences"] = stop if isinstance(stop, list) else [stop]
             
             if enhanced_system_prompt:
                 message_params["system"] = enhanced_system_prompt

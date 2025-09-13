@@ -846,9 +846,19 @@ class MLXProvider(BaseProvider):
             "top_p": filtered_kwargs.get("top_p", self.config_manager.get_param(ModelParameter.TOP_P, 0.95))
         }
         
-        # Add repetition_penalty if provided - it will be passed to model config
+        # Add SOTA parameters if provided
         if "repetition_penalty" in filtered_kwargs:
             params["repetition_penalty"] = filtered_kwargs["repetition_penalty"]
+        
+        # Add seed for reproducible generation
+        seed = self.config_manager.get_param(ModelParameter.SEED)
+        if seed is not None:
+            params["seed"] = seed
+        
+        # Add other local model parameters
+        top_k = self.config_manager.get_param(ModelParameter.TOP_K)
+        if top_k is not None:
+            params["top_k"] = top_k
         
         return params
 
