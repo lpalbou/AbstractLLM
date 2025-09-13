@@ -234,6 +234,13 @@ class OpenAIProvider(BaseProvider):
         max_tokens = self.config_manager.get_param(ModelParameter.MAX_TOKENS)
         api_key = self.config_manager.get_param(ModelParameter.API_KEY)
         
+        # Get SOTA parameters
+        seed = self.config_manager.get_param(ModelParameter.SEED)
+        top_p = self.config_manager.get_param(ModelParameter.TOP_P)
+        frequency_penalty = self.config_manager.get_param(ModelParameter.FREQUENCY_PENALTY)
+        presence_penalty = self.config_manager.get_param(ModelParameter.PRESENCE_PENALTY)
+        stop = self.config_manager.get_param(ModelParameter.STOP)
+        
         # Check for API key
         if not api_key:
             log_api_key_missing("OpenAI", "OPENAI_API_KEY")
@@ -339,6 +346,18 @@ class OpenAIProvider(BaseProvider):
                 api_params["temperature"] = temperature
             if max_tokens is not None:
                 api_params["max_tokens"] = max_tokens
+            
+            # Add SOTA parameters if specified
+            if seed is not None:
+                api_params["seed"] = seed
+            if top_p is not None:
+                api_params["top_p"] = top_p
+            if frequency_penalty is not None:
+                api_params["frequency_penalty"] = frequency_penalty
+            if presence_penalty is not None:
+                api_params["presence_penalty"] = presence_penalty
+            if stop is not None:
+                api_params["stop"] = stop
             
             # Add tools if available
             if formatted_tools:
@@ -520,6 +539,13 @@ class OpenAIProvider(BaseProvider):
         max_tokens = self.config_manager.get_param(ModelParameter.MAX_TOKENS)
         api_key = self.config_manager.get_param(ModelParameter.API_KEY)
         
+        # Get SOTA parameters
+        seed = self.config_manager.get_param(ModelParameter.SEED)
+        top_p = self.config_manager.get_param(ModelParameter.TOP_P)
+        frequency_penalty = self.config_manager.get_param(ModelParameter.FREQUENCY_PENALTY)
+        presence_penalty = self.config_manager.get_param(ModelParameter.PRESENCE_PENALTY)
+        stop = self.config_manager.get_param(ModelParameter.STOP)
+        
         # Check for API key
         if not api_key:
             log_api_key_missing("OpenAI", "OPENAI_API_KEY")
@@ -630,6 +656,18 @@ class OpenAIProvider(BaseProvider):
                 api_params["temperature"] = temperature
             if max_tokens is not None:
                 api_params["max_tokens"] = max_tokens
+            
+            # Add SOTA parameters if specified
+            if seed is not None:
+                api_params["seed"] = seed
+            if top_p is not None:
+                api_params["top_p"] = top_p
+            if frequency_penalty is not None:
+                api_params["frequency_penalty"] = frequency_penalty
+            if presence_penalty is not None:
+                api_params["presence_penalty"] = presence_penalty
+            if stop is not None:
+                api_params["stop"] = stop
             
             # Add tools if available
             if formatted_tools:

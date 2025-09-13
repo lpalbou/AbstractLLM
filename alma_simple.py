@@ -15,6 +15,11 @@ from abstractllm.factory import create_session
 from abstractllm.structured_response import StructuredResponseConfig, ResponseFormat
 from abstractllm.tools.common_tools import read_file, list_files, search_files
 from abstractllm.utils.logging import configure_logging
+from abstractllm.interface import ModelParameter
+from abstractllm.utils.display import display_response, display_error, display_thinking, display_success, Colors, Symbols
+from abstractllm.types import GenerateResponse
+from abstractllm.utils.response_helpers import enhance_string_response, save_interaction_context
+from abstractllm.utils.commands import create_command_processor
 import argparse
 import sys
 import logging
@@ -25,7 +30,8 @@ GREEN = '\033[32m'
 RESET = '\033[0m'
 
 
-def create_agent(provider="ollama", model="qwen3:4b", memory_path=None, max_tool_calls=25):
+def create_agent(provider="ollama", model="qwen3:4b", memory_path=None, max_tool_calls=25, 
+                 seed=None, top_p=None, max_input_tokens=None, frequency_penalty=None, presence_penalty=None):
     """Create an enhanced agent with all SOTA features."""
     
     print(f"{BLUE}🧠 Creating intelligent agent with:{RESET}")
@@ -35,22 +41,36 @@ def create_agent(provider="ollama", model="qwen3:4b", memory_path=None, max_tool
     print(f"  • Tool capabilities")
     print(f"  • Retry strategies\n")
     
-    session = create_session(
-        provider,
-        model=model,
-        enable_memory=True,
-        enable_retry=True,
-        persist_memory=memory_path,
-        memory_config={
+    # Build configuration with SOTA parameters
+    config = {
+        'model': model,
+        'enable_memory': True,
+        'enable_retry': True,
+        'persist_memory': memory_path,
+        'memory_config': {
             'working_memory_size': 10,
             'consolidation_threshold': 5
         },
-        tools=[read_file, list_files, search_files],
-        system_prompt="You are an intelligent AI assistant with memory and reasoning capabilities.",
-        max_tokens=2048,
-        temperature=0.7,
-        max_tool_calls=max_tool_calls
-    )
+        'tools': [read_file, list_files, search_files],
+        'system_prompt': "You are an intelligent AI assistant with memory and reasoning capabilities.",
+        'max_tokens': 2048,
+        'temperature': 0.7,
+        'max_tool_calls': max_tool_calls
+    }
+    
+    # Add SOTA parameters if specified
+    if seed is not None:
+        config[ModelParameter.SEED] = seed
+    if top_p is not None:
+        config[ModelParameter.TOP_P] = top_p
+    if max_input_tokens is not None:
+        config[ModelParameter.MAX_INPUT_TOKENS] = max_input_tokens
+    if frequency_penalty is not None:
+        config[ModelParameter.FREQUENCY_PENALTY] = frequency_penalty
+    if presence_penalty is not None:
+        config[ModelParameter.PRESENCE_PENALTY] = presence_penalty
+    
+    session = create_session(provider, **config)
     
     if memory_path:
         print(f"{GREEN}💾 Memory persisted to: {memory_path}{RESET}\n")
@@ -59,7 +79,10 @@ def create_agent(provider="ollama", model="qwen3:4b", memory_path=None, max_tool
 
 
 def run_query(session, prompt, structured_output=None):
-    """Execute a query with the agent."""
+    """Execute a query with the agent and display beautiful results."""
+    
+    # Show thinking indicator
+    display_thinking("Processing your query...")
     
     # Configure structured output if requested
     config = None
@@ -71,15 +94,43 @@ def run_query(session, prompt, structured_output=None):
             temperature_override=0.0
         )
     
-    # Execute with all features
-    response = session.generate(
-        prompt=prompt,
-        use_memory_context=True,    # Inject relevant memories
-        create_react_cycle=True,     # Create ReAct cycle with scratchpad
-        structured_config=config     # Structured output if configured
-    )
-    
-    return response
+    try:
+        # Try SOTA features first, fallback to simple generation
+        try:
+            response = session.generate(
+                prompt=prompt,
+                use_memory_context=True,    # Inject relevant memories
+                create_react_cycle=True,     # Create ReAct cycle with scratchpad
+                structured_config=config     # Structured output if configured
+            )
+        except Exception as sota_error:
+            # Fallback to simple generation without SOTA features
+            print(f"{Colors.DIM}Note: Using simplified mode due to session compatibility{Colors.RESET}")
+            response = session.generate_with_tools(
+                prompt=prompt,
+                max_tool_calls=session.max_tool_calls if hasattr(session, 'max_tool_calls') else 25
+            )
+        
+        # Convert string responses to enhanced GenerateResponse objects
+        if isinstance(response, str):
+            response = enhance_string_response(
+                content=response,
+                model=getattr(session._provider, 'config_manager', {}).get_param('model') if hasattr(session, '_provider') else 'unknown'
+            )
+        
+        # Save interaction context for facts/scratchpad commands
+        if isinstance(response, GenerateResponse):
+            save_interaction_context(response, prompt)
+            display_response(response)
+        else:
+            # Ultimate fallback
+            print(f"\n{Colors.BRIGHT_GREEN}Response:{Colors.RESET} {response}")
+        
+        return response
+        
+    except Exception as e:
+        display_error(str(e))
+        return None
 
 
 def show_memory_insights(session):
@@ -116,33 +167,36 @@ def show_memory_insights(session):
 
 
 def interactive_mode(session):
-    """Run interactive chat with the agent."""
+    """Run enhanced interactive chat with slash command support."""
     
-    print(f"\n{BLUE}💬 Interactive mode. Type 'exit' to quit, 'memory' for insights.{RESET}\n")
+    # Create command processor
+    cmd_processor = create_command_processor(session)
+    
+    print(f"\n{Colors.BRIGHT_BLUE}{Symbols.SPARKLES} Enhanced Interactive Mode{Colors.RESET}")
+    print(f"{Colors.CYAN}{'─' * 50}{Colors.RESET}")
+    print(f"{Colors.DIM}Type {Colors.BRIGHT_BLUE}/help{Colors.DIM} for commands or ask questions directly.{Colors.RESET}")
+    print(f"{Colors.DIM}Use {Colors.BRIGHT_BLUE}/exit{Colors.DIM} to quit.{Colors.RESET}\n")
     
     while True:
         try:
-            user_input = input("You: ").strip()
+            user_input = input(f"{Colors.BRIGHT_GREEN}alma>{Colors.RESET} ").strip()
             
-            if user_input.lower() == 'exit':
-                break
-            elif user_input.lower() == 'memory':
-                show_memory_insights(session)
-                continue
-            elif not user_input:
+            if not user_input:
                 continue
             
-            # Generate response
+            # Process slash commands
+            if cmd_processor.process_command(user_input):
+                continue
+            
+            # Regular query - generate response
             response = run_query(session, user_input)
             
-            # Display response
-            print(f"\nAssistant: {response}\n")
-            
         except KeyboardInterrupt:
-            print("\n\nGoodbye!")
+            print(f"\n\n{Colors.BRIGHT_GREEN}{Symbols.CHECKMARK} Goodbye!{Colors.RESET}")
             break
         except Exception as e:
-            print(f"\nError: {e}\n")
+            display_error(f"Unexpected error: {str(e)}")
+            print(f"{Colors.DIM}You can continue or type {Colors.BRIGHT_BLUE}/exit{Colors.DIM} to quit.{Colors.RESET}")
 
 
 def main():
@@ -164,6 +218,12 @@ Examples:
   
   %(prog)s --structured json --prompt "List 3 colors with hex codes"
     Get structured JSON output
+  
+  %(prog)s --provider openai --seed 12345 --top-p 0.8 --prompt "Generate text"
+    Use SOTA parameters for reproducible, controlled generation
+  
+  %(prog)s --provider openai --frequency-penalty 1.0 --presence-penalty 0.5
+    Use OpenAI-specific parameters for content control
 """
     )
     
@@ -208,6 +268,37 @@ Examples:
         help="Maximum number of tool call iterations (default: 25)"
     )
     
+    # SOTA parameters
+    parser.add_argument(
+        "--seed",
+        type=int,
+        help="Random seed for reproducible generation"
+    )
+    
+    parser.add_argument(
+        "--top-p",
+        type=float,
+        help="Nucleus sampling parameter (0.0-1.0)"
+    )
+    
+    parser.add_argument(
+        "--max-input-tokens",
+        type=int,
+        help="Maximum input context length"
+    )
+    
+    parser.add_argument(
+        "--frequency-penalty",
+        type=float,
+        help="Frequency penalty (-2.0 to 2.0, OpenAI only)"
+    )
+    
+    parser.add_argument(
+        "--presence-penalty", 
+        type=float,
+        help="Presence penalty (-2.0 to 2.0, OpenAI only)"
+    )
+    
     args = parser.parse_args()
     
     # Configure logging
@@ -221,22 +312,29 @@ Examples:
         provider=args.provider,
         model=args.model,
         memory_path=args.memory,
-        max_tool_calls=args.max_tool_calls
+        max_tool_calls=args.max_tool_calls,
+        seed=args.seed,
+        top_p=getattr(args, 'top_p', None),
+        max_input_tokens=getattr(args, 'max_input_tokens', None),
+        frequency_penalty=getattr(args, 'frequency_penalty', None),
+        presence_penalty=getattr(args, 'presence_penalty', None)
     )
     
     # Execute single prompt or start interactive mode
     if args.prompt:
-        print(f"\n{BLUE}Query:{RESET} {args.prompt}\n")
+        print(f"\n{Colors.BRIGHT_CYAN}{Symbols.TARGET} Query:{Colors.RESET} {Colors.WHITE}{args.prompt}{Colors.RESET}\n")
         response = run_query(session, args.prompt, args.structured)
-        print(f"{GREEN}Response:{RESET} {response}")
-        show_memory_insights(session)
+        
+        # Only show memory insights if response was successful
+        if response is not None:
+            show_memory_insights(session)
     else:
         interactive_mode(session)
     
     # Save memory if persisting
-    if args.memory and session.memory:
+    if args.memory and hasattr(session, 'memory') and session.memory:
         session.memory.save_to_disk()
-        print(f"\n{GREEN}💾 Memory saved to {args.memory}{RESET}")
+        print(f"\n{Colors.BRIGHT_GREEN}{Symbols.CHECKMARK} Memory saved to {args.memory}{Colors.RESET}")
 
 
 if __name__ == "__main__":

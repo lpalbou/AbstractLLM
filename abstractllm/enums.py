@@ -26,6 +26,11 @@ class ModelParameter(str, Enum):
     TOP_K = "top_k"  # Top-k sampling parameter
     REPETITION_PENALTY = "repetition_penalty"  # Penalty for repeating tokens
     
+    # Context and token management
+    MAX_INPUT_TOKENS = "max_input_tokens"  # Maximum input context length
+    CONTEXT_WINDOW = "context_window"  # Total context window size
+    TRUNCATION_STRATEGY = "truncation_strategy"  # How to handle context overflow
+    
     # Model loading parameters (for local models)
     DEVICE = "device"  # Device to load the model on (cpu, cuda, etc.)
     DEVICE_MAP = "device_map"  # Device mapping for model sharding
