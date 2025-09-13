@@ -11,7 +11,7 @@ This example shows how to create an intelligent agent with:
 - Structured responses
 """
 
-from abstractllm.factory_enhanced import create_enhanced_session
+from abstractllm.factory import create_session
 from abstractllm.structured_response import StructuredResponseConfig, ResponseFormat
 from abstractllm.tools.common_tools import read_file, list_files, search_files
 from abstractllm.utils.logging import configure_logging
@@ -35,7 +35,7 @@ def create_agent(provider="ollama", model="qwen3:4b", memory_path=None):
     print(f"  • Tool capabilities")
     print(f"  • Retry strategies\n")
     
-    session = create_enhanced_session(
+    session = create_session(
         provider,
         model=model,
         enable_memory=True,
@@ -91,16 +91,16 @@ def show_memory_insights(session):
     stats = memory.get_statistics()
     
     print(f"\n{BLUE}📊 Memory Insights:{RESET}")
-    print(f"  • Working Memory: {stats['working_memory_size']} items")
-    print(f"  • Episodic Memory: {stats['episodic_memory_size']} experiences")
-    print(f"  • Knowledge Graph: {stats['total_facts']} facts")
+    print(f"  • Working Memory: {stats['memory_distribution']['working_memory']} items")
+    print(f"  • Episodic Memory: {stats['memory_distribution']['episodic_memory']} experiences")
+    print(f"  • Knowledge Graph: {stats['knowledge_graph']['total_facts']} facts")
     print(f"  • ReAct Cycles: {stats['total_react_cycles']} ({stats['successful_cycles']} successful)")
-    print(f"  • Bidirectional Links: {stats['total_links']}")
+    print(f"  • Bidirectional Links: {stats['link_statistics']['total_links']}")
     
     # Show sample facts from knowledge graph
-    if memory.semantic_memory:
+    if memory.knowledge_graph.facts:
         print(f"\n  {GREEN}Sample Knowledge Graph Triples:{RESET}")
-        for i, (fact_id, fact) in enumerate(list(memory.semantic_memory.items())[:5]):
+        for i, (fact_id, fact) in enumerate(list(memory.knowledge_graph.facts.items())[:5]):
             print(f"    {i+1}. {fact.subject} --[{fact.predicate}]--> {fact.object}")
     
     # Show current ReAct cycle if active

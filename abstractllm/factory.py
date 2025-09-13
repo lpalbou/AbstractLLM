@@ -193,19 +193,24 @@ def create_llm(provider: str, **config) -> AbstractLLMInterface:
 
 def create_session(provider: str, **config) -> Session :
     """
-    Create a Session with an LLM provider instance.
+    Create a Session with an LLM provider instance with support for enhanced features.
     
     This function follows the same design pattern as create_llm, using the same configuration
-    system but creating a Session object instead of a direct provider instance.
+    system but creating a Session object instead of a direct provider instance. It supports
+    both basic and enhanced session features including hierarchical memory and ReAct cycles.
     
     Args:
         provider: The provider name ('openai', 'anthropic', 'ollama', 'huggingface', 'mlx')
         **config: Provider and session configuration parameters, including:
-            - ModelParameter.MODEL: Model name to use
-            - ModelParameter.SYSTEM_PROMPT: System prompt for the session
+            - ModelParameter.MODEL or "model": Model name to use
+            - ModelParameter.SYSTEM_PROMPT or "system_prompt": System prompt for the session
             - ModelParameter.TEMPERATURE: Temperature for generation
             - ModelParameter.MAX_TOKENS: Maximum tokens for generation
             - "tools": List of tools to register with the session
+            - "enable_memory": Enable hierarchical memory system (default: False for compatibility)
+            - "memory_config": Configuration dict for memory system
+            - "enable_retry": Enable retry strategies (default: False for compatibility)
+            - "persist_memory": Path to persist memory across sessions
             - Additional provider-specific configuration parameters
         
     Returns:
@@ -221,7 +226,7 @@ def create_session(provider: str, **config) -> Session :
         from abstractllm.interface import ModelParameter
         from abstractllm.tools.common_tools import list_files, read_file
         
-        # Create a session with OpenAI
+        # Create a basic session with OpenAI
         session = create_session(
             provider="openai",
             **{
@@ -232,12 +237,20 @@ def create_session(provider: str, **config) -> Session :
             }
         )
         
-        # Generate a response
-        response = session.generate("What files are in the current directory?")
+        # Create an enhanced session with memory
+        session = create_session(
+            provider="ollama",
+            model="qwen3:4b",
+            system_prompt="You are an intelligent assistant with memory.",
+            tools=[list_files, read_file],
+            enable_memory=True,
+            persist_memory="./agent_memory.json"
+        )
         ```
     """
     # Import here to avoid circular imports
     from abstractllm.interface import ModelParameter
+    from pathlib import Path
     
     # Extract session-specific parameters from config
     system_prompt = config.pop(ModelParameter.SYSTEM_PROMPT, None)
@@ -248,18 +261,38 @@ def create_session(provider: str, **config) -> Session :
     # Extract tools parameter
     tools = config.pop("tools", None)
     
+    # Extract enhanced session parameters
+    enable_memory = config.pop("enable_memory", False)
+    memory_config = config.pop("memory_config", None)
+    enable_retry = config.pop("enable_retry", False)
+    persist_memory = config.pop("persist_memory", None)
+    
+    # Convert persist_memory to Path if it's a string
+    if persist_memory and isinstance(persist_memory, str):
+        persist_memory = Path(persist_memory)
+    
     # Create provider metadata dictionary
     provider_metadata = config.pop("metadata", {})
+    
+    # Extract model parameter (support both ModelParameter.MODEL and "model")
+    model = config.pop("model", None)
+    if model:
+        config[ModelParameter.MODEL] = model
     
     # Create the LLM provider with remaining config
     provider_instance = create_llm(provider, **config)
     
-    # Create the session
+    # Create the session with enhanced features
     session = Session(
         system_prompt=system_prompt,
         provider=provider_instance,
+        provider_config=config,
         metadata=provider_metadata,
-        tools=tools
+        tools=tools,
+        enable_memory=enable_memory,
+        memory_config=memory_config,
+        enable_retry=enable_retry,
+        persist_memory=persist_memory
     )
     
     return session

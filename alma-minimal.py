@@ -7,7 +7,7 @@ It supports text generation and tool usage in a simple REPL interface.
 """
 
 # Always use enhanced features - no backward compatibility needed
-from abstractllm.factory_enhanced import create_enhanced_session
+from abstractllm.factory import create_session
 from abstractllm.structured_response import StructuredResponseConfig, ResponseFormat
 from abstractllm.tools.common_tools import read_file, list_files, search_files
 from abstractllm.utils.logging import configure_logging, log_step
@@ -549,7 +549,7 @@ def main():
     # Always create enhanced session with all SOTA features
     print(f"{BLUE_ITALIC}🧠 Creating intelligent agent with memory and reasoning{RESET}")
     
-    session = create_enhanced_session(
+    session = create_session(
         args.provider,
         model=args.model,
         enable_memory=True,
@@ -575,14 +575,14 @@ def main():
         if session.memory:
             print(f"\n{BLUE_ITALIC}📊 Memory Insights:{RESET}")
             stats = session.memory.get_statistics()
-            print(f"  Knowledge Graph: {stats['total_facts']} facts")
+            print(f"  Knowledge Graph: {stats['knowledge_graph']['total_facts']} facts")
             print(f"  ReAct Cycles: {stats['total_react_cycles']} completed")
-            print(f"  Memory Links: {stats['total_links']} connections")
+            print(f"  Memory Links: {stats['link_statistics']['total_links']} connections")
             
             # Show sample facts if any
-            if session.memory.semantic_memory:
+            if session.memory.knowledge_graph.facts:
                 print(f"\n  {GREEN_BOLD}Sample Knowledge Triples:{RESET}")
-                for i, (_, fact) in enumerate(list(session.memory.semantic_memory.items())[:3]):
+                for i, (_, fact) in enumerate(list(session.memory.knowledge_graph.facts.items())[:3]):
                     print(f"    • {fact.subject} --[{fact.predicate}]--> {fact.object}")
         return
 

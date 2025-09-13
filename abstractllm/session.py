@@ -75,7 +75,7 @@ except ImportError as e:
 
 # Try importing SOTA improvements (optional)
 try:
-    from abstractllm.memory_v2 import HierarchicalMemory, ReActCycle, MemoryComponent
+    from abstractllm.memory import HierarchicalMemory, ReActCycle, MemoryComponent
     from abstractllm.retry_strategies import RetryManager, RetryConfig, with_retry
     from abstractllm.structured_response import (
         StructuredResponseHandler, 
@@ -2141,7 +2141,7 @@ class Session:
         
         # SOTA Enhancement: Track memory state before generation
         if self.enable_memory:
-            self.facts_before_generation = len(self.memory.semantic_memory) if self.memory else 0
+            self.facts_before_generation = len(self.memory.knowledge_graph.facts) if self.memory else 0
         
         # SOTA Enhancement: Start ReAct cycle if enabled
         if self.enable_memory and create_react_cycle and prompt:
@@ -2396,7 +2396,7 @@ class Session:
         
         if self.enable_memory and prompt:
             # Track facts extracted before adding new messages
-            facts_before = len(self.memory.semantic_memory)
+            facts_before = len(self.memory.knowledge_graph.facts)
             
             # Add to chat history (this triggers fact extraction)
             msg_id = self.memory.add_chat_message(
@@ -2414,13 +2414,13 @@ class Session:
             )
             
             # Calculate facts extracted during this generation
-            facts_after = len(self.memory.semantic_memory)
+            facts_after = len(self.memory.knowledge_graph.facts)
             new_facts_count = facts_after - self.facts_before_generation
             
             # Get the actual facts that were extracted
             if new_facts_count > 0:
                 # Get the most recent facts
-                all_facts = list(self.memory.semantic_memory.values())
+                all_facts = list(self.memory.knowledge_graph.facts.values())
                 extracted_facts = all_facts[-new_facts_count:]
             
             # Complete ReAct cycle

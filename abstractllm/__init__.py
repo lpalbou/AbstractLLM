@@ -18,7 +18,7 @@ from abstractllm.utils.logging import configure_logging
 
 # Enhanced features (now integrated into main Session class)
 from abstractllm.session import create_enhanced_session
-from abstractllm.memory_v2 import HierarchicalMemory
+from abstractllm.memory import HierarchicalMemory
 from abstractllm.retry_strategies import RetryManager, RetryConfig, with_retry
 from abstractllm.structured_response import (
     StructuredResponseHandler,
