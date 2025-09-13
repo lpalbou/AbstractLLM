@@ -331,11 +331,12 @@ class OpenAIProvider(BaseProvider):
             api_params = {
                 "model": model,
                 "messages": messages,
-                "temperature": temperature,
                 "stream": stream
             }
             
-            # Only include max_tokens if it has a valid value
+            # Only include parameters if they have valid values (GPT-5 models reject null values)
+            if temperature is not None:
+                api_params["temperature"] = temperature
             if max_tokens is not None:
                 api_params["max_tokens"] = max_tokens
             
@@ -621,11 +622,12 @@ class OpenAIProvider(BaseProvider):
             api_params = {
                 "model": model,
                 "messages": messages,
-                "temperature": temperature,
                 "stream": stream
             }
             
-            # Only include max_tokens if it has a valid value
+            # Only include parameters if they have valid values (GPT-5 models reject null values)
+            if temperature is not None:
+                api_params["temperature"] = temperature
             if max_tokens is not None:
                 api_params["max_tokens"] = max_tokens
             
