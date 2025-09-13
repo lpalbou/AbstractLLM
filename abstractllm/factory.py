@@ -211,6 +211,7 @@ def create_session(provider: str, **config) -> Session :
             - "memory_config": Configuration dict for memory system
             - "enable_retry": Enable retry strategies (default: False for compatibility)
             - "persist_memory": Path to persist memory across sessions
+            - "max_tool_calls": Maximum number of tool call iterations per generation (default: 25)
             - Additional provider-specific configuration parameters
         
     Returns:
@@ -266,6 +267,7 @@ def create_session(provider: str, **config) -> Session :
     memory_config = config.pop("memory_config", None)
     enable_retry = config.pop("enable_retry", False)
     persist_memory = config.pop("persist_memory", None)
+    max_tool_calls = config.pop("max_tool_calls", 25)  # Default to 25
     
     # Convert persist_memory to Path if it's a string
     if persist_memory and isinstance(persist_memory, str):
@@ -292,7 +294,8 @@ def create_session(provider: str, **config) -> Session :
         enable_memory=enable_memory,
         memory_config=memory_config,
         enable_retry=enable_retry,
-        persist_memory=persist_memory
+        persist_memory=persist_memory,
+        max_tool_calls=max_tool_calls
     )
     
     return session

@@ -25,7 +25,7 @@ GREEN = '\033[32m'
 RESET = '\033[0m'
 
 
-def create_agent(provider="ollama", model="qwen3:4b", memory_path=None):
+def create_agent(provider="ollama", model="qwen3:4b", memory_path=None, max_tool_calls=25):
     """Create an enhanced agent with all SOTA features."""
     
     print(f"{BLUE}🧠 Creating intelligent agent with:{RESET}")
@@ -48,7 +48,8 @@ def create_agent(provider="ollama", model="qwen3:4b", memory_path=None):
         tools=[read_file, list_files, search_files],
         system_prompt="You are an intelligent AI assistant with memory and reasoning capabilities.",
         max_tokens=2048,
-        temperature=0.7
+        temperature=0.7,
+        max_tool_calls=max_tool_calls
     )
     
     if memory_path:
@@ -200,6 +201,13 @@ Examples:
         help="Enable detailed logging"
     )
     
+    parser.add_argument(
+        "--max-tool-calls",
+        type=int,
+        default=25,
+        help="Maximum number of tool call iterations (default: 25)"
+    )
+    
     args = parser.parse_args()
     
     # Configure logging
@@ -212,7 +220,8 @@ Examples:
     session = create_agent(
         provider=args.provider,
         model=args.model,
-        memory_path=args.memory
+        memory_path=args.memory,
+        max_tool_calls=args.max_tool_calls
     )
     
     # Execute single prompt or start interactive mode

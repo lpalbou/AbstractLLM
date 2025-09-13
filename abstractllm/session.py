@@ -304,7 +304,8 @@ class Session:
                  memory_config: Optional[Dict[str, Any]] = None,
                  enable_retry: bool = True,
                  retry_config: Optional[RetryConfig] = None,
-                 persist_memory: Optional[Path] = None):
+                 persist_memory: Optional[Path] = None,
+                 max_tool_calls: int = 25):
         """
         Initialize a comprehensive session with optional SOTA features.
         
@@ -321,6 +322,7 @@ class Session:
             enable_retry: Enable retry strategies (if available)
             retry_config: Retry configuration
             persist_memory: Path to persist memory
+            max_tool_calls: Maximum number of tool call iterations per generation (default: 25)
                   
         Raises:
             ValueError: If tools are provided but tool support is not available
@@ -339,6 +341,9 @@ class Session:
         
         # Track last assistant message index for tool results
         self._last_assistant_idx = -1
+        
+        # Store max_tool_calls configuration
+        self.max_tool_calls = max_tool_calls
         
         # Initialize the provider if specified
         self._provider: Optional[AbstractLLMInterface] = None
@@ -1444,7 +1449,7 @@ class Session:
         top_p: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
         presence_penalty: Optional[float] = None,
-        max_tool_calls: int = 10,
+        max_tool_calls: Optional[int] = None,
         adjust_system_prompt: bool = False,  # DISABLED - was breaking tool definitions
         system_prompt: Optional[str] = None,
         files: Optional[List[Union[str, Path]]] = None,
@@ -1485,6 +1490,10 @@ class Session:
         # Ensure we have tools available
         if not TOOLS_AVAILABLE:
             raise ValueError(TOOLS_ERROR_MESSAGE)
+        
+        # Use session's default max_tool_calls if not specified
+        if max_tool_calls is None:
+            max_tool_calls = self.max_tool_calls
         
         # Store the original prompt and system prompt for follow-up requests
         original_prompt = prompt if prompt else ""
@@ -2084,7 +2093,7 @@ class Session:
         presence_penalty: Optional[float] = None,
         tool_functions: Optional[Dict[str, Callable[..., Any]]] = None,
         tools: Optional[List[Union[Dict[str, Any], Callable]]] = None,  # Added for consistency
-        max_tool_calls: int = 10,
+        max_tool_calls: Optional[int] = None,
         adjust_system_prompt: bool = False,  # DISABLED - was breaking tool definitions
         stream: bool = False,
         files: Optional[List[Union[str, Path]]] = None,
@@ -2133,6 +2142,10 @@ class Session:
         provider_instance = self._get_provider(provider)
         provider_name = self._get_provider_name(provider_instance)
         logger.info(f"Using provider: {provider_name}")
+        
+        # Use session's default max_tool_calls if not specified
+        if max_tool_calls is None:
+            max_tool_calls = self.max_tool_calls
         
         # SOTA Enhancement: Initialize telemetry tracking
         generation_start_time = datetime.now()

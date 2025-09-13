@@ -332,9 +332,12 @@ class OpenAIProvider(BaseProvider):
                 "model": model,
                 "messages": messages,
                 "temperature": temperature,
-                "max_tokens": max_tokens,
                 "stream": stream
             }
+            
+            # Only include max_tokens if it has a valid value
+            if max_tokens is not None:
+                api_params["max_tokens"] = max_tokens
             
             # Add tools if available
             if formatted_tools:
@@ -557,13 +560,27 @@ class OpenAIProvider(BaseProvider):
                 provider="openai"
             )
         
+        # Handle tools using base class methods
+        enhanced_system_prompt = system_prompt or self.config_manager.get_param(ModelParameter.SYSTEM_PROMPT)
+        formatted_tools = None
+        tool_mode = "none"
+        
+        if tools:
+            # Use base class method to prepare tool context
+            enhanced_system_prompt, tool_defs, tool_mode = self._prepare_tool_context(tools, enhanced_system_prompt)
+            
+            # If native mode, format tools for OpenAI API
+            if tool_mode == "native" and tool_defs:
+                handler = self._get_tool_handler()
+                if handler:
+                    formatted_tools = tool_defs  # Tool defs are already formatted by _prepare_tool_context
+        
         # Prepare messages
         messages = []
         
-        # Add system message if provided (either from config or parameter)
-        system_prompt = system_prompt or self.config_manager.get_param(ModelParameter.SYSTEM_PROMPT)
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
+        # Add system message if provided
+        if enhanced_system_prompt:
+            messages.append({"role": "system", "content": enhanced_system_prompt})
         
         # Prepare user message with files if any
         if processed_files:
@@ -589,7 +606,7 @@ class OpenAIProvider(BaseProvider):
             temperature=temperature,
             max_tokens=max_tokens,
             has_files=bool(files),
-            tool_mode=tool_mode if tools else None,
+            tool_mode=tool_mode,
             endpoint="https://api.openai.com/v1/chat/completions"
         )
         
@@ -605,9 +622,12 @@ class OpenAIProvider(BaseProvider):
                 "model": model,
                 "messages": messages,
                 "temperature": temperature,
-                "max_tokens": max_tokens,
                 "stream": stream
             }
+            
+            # Only include max_tokens if it has a valid value
+            if max_tokens is not None:
+                api_params["max_tokens"] = max_tokens
             
             # Add tools if available
             if formatted_tools:
