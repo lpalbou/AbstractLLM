@@ -73,6 +73,23 @@ from abstractllm.tools.registry import (
     execute_tools
 )
 
+# Enhanced features (conditionally imported)
+try:
+    from abstractllm.tools.enhanced import (
+        tool,
+        EnhancedToolDefinition,
+        ToolChoice,
+        ToolContext,
+        ToolValidationError,
+        inject_context,
+        create_tool_from_function,
+    )
+    ENHANCED_TOOLS_AVAILABLE = True
+except ImportError:
+    # Fallback if dependencies not available
+    tool = register  # Use basic register as fallback
+    ENHANCED_TOOLS_AVAILABLE = False
+
 __all__ = [
     # Core types
     "ToolDefinition",
@@ -96,5 +113,20 @@ __all__ = [
     "register",
     "get_registry",
     "execute_tool",
-    "execute_tools"
+    "execute_tools",
+    
+    # Enhanced features
+    "tool",  # Enhanced decorator
+    "ENHANCED_TOOLS_AVAILABLE",  # Feature flag
 ]
+
+# Conditionally add enhanced exports if available
+if ENHANCED_TOOLS_AVAILABLE:
+    __all__.extend([
+        "EnhancedToolDefinition",
+        "ToolChoice",
+        "ToolContext", 
+        "ToolValidationError",
+        "inject_context",
+        "create_tool_from_function",
+    ])

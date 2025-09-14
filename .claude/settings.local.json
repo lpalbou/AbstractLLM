@@ -33,7 +33,8 @@
       "Bash(./run_isolated.sh python:*)",
       "Read(//private/tmp/**)",
       "Bash(cat:*)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(xargs:*)"
     ],
     "deny": []
   },
