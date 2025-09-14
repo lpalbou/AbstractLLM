@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "abstractllm"
-version = "0.5.3"
+version = "1.0.0"
 authors = [
     { name = "Laurent-Philippe Albou", email = "lpalbou@gmail.com" },
 ]
