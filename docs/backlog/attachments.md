@@ -141,9 +141,9 @@ response = session.generate(
 )
 ```
 
-### 5. **SOTA Practices Integration**
+### 5. **Current Practices Integration**
 
-Based on research of current SOTA practices:
+Based on research of current practices:
 
 #### **RAG-Style Attachment Handling**
 ```python
