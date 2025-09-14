@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "abstractllm"
-version = "1.0.2"
+version = "1.0.3"
 authors = [
     { name = "Laurent-Philippe Albou", email = "lpalbou@gmail.com" },
 ]
@@ -89,6 +89,9 @@ dev = [
     "black>=23.0.0",
     "isort>=5.0.0",
 ]
+
+[project.scripts]
+alma = "abstractllm.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["abstractllm"] 

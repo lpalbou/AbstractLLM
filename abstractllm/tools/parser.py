@@ -411,7 +411,14 @@ def _parse_special_token(response: str) -> List[ToolCall]:
             elif json_str.endswith('}}>'):
                 json_str = json_str[:-1]  # Remove extra >
             
-            data = json.loads(json_str)
+            # Try normal JSON parsing first
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError:
+                # Fallback: fix common LLM JSON issues (unescaped newlines)
+                fixed_json = json_str.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+                data = json.loads(fixed_json)
+            
             if isinstance(data, dict) and "name" in data:
                 tool_calls.append(ToolCall(
                     name=data["name"],

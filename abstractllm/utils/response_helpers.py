@@ -270,7 +270,8 @@ def scratchpad_command(cycle_id: str) -> None:
         # Display header
         short_id = cycle_id.replace('cycle_', '')
         print(f"\n{Colors.BRIGHT_CYAN}🧠 ReAct Scratchpad - Interaction {short_id}{Colors.RESET}")
-        print(f"{Colors.CYAN}{'═' * 80}{Colors.RESET}")
+        # Add spacing for better readability
+        print()
         
         # 1. ORIGINAL QUERY
         print(f"\n{Colors.BRIGHT_BLUE}📋 ORIGINAL QUERY{Colors.RESET}")
@@ -416,7 +417,8 @@ def scratchpad_command(cycle_id: str) -> None:
         # Metadata footer
         print(f"\n{Colors.DIM}{'─' * 80}{Colors.RESET}")
         print(f"{Colors.DIM}Interaction ID: {short_id} | Timestamp: {timestamp} | Duration: {reasoning_time:.2f}s{Colors.RESET}")
-        print(f"{Colors.CYAN}{'═' * 80}{Colors.RESET}")
+        # Add spacing for better readability
+        print()
         
     except FileNotFoundError:
         display_error(f"Interaction {cycle_id.replace('cycle_', '')} not found")

@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2025-09-14
+
+### Added
+- **Global ALMA Command**: Added `alma` console script that provides global access to the intelligent agent
+- **CLI Module**: New `abstractllm.cli` module that integrates all SOTA features from alma-simple.py
+- **Universal Agent Access**: Users can now run `alma` from anywhere after installing AbstractLLM
+- **Full Feature Integration**: The global command includes hierarchical memory, ReAct reasoning, knowledge graphs, and tool support
+
+### Changed
+- **Package Distribution**: Enhanced package to include console script entry point
+- **User Experience**: Simplified access to the intelligent agent capabilities without needing to clone the repository
+
+### Fixed
+- **Tool Call Parsing**: Enhanced JSON parsing robustness for LLM-generated tool calls with unescaped newlines
+- **Write File Tool**: Fixed tool call parsing when content contains literal newlines or special characters
+
+### Installation
+After upgrading to v1.0.3, users can install and use the global command:
+```bash
+pip install abstractllm==1.0.3
+alma --help
+alma --prompt "Hello, I'm testing the global command"
+alma  # Interactive mode with memory and reasoning
+```
+
 ## [1.0.2] - 2025-09-14
 
 ### Fixed
