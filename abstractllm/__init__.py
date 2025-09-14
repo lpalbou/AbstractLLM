@@ -2,7 +2,7 @@
 AbstractLLM: A unified interface for interacting with various LLM providers.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 from abstractllm.interface import (
     AbstractLLMInterface,

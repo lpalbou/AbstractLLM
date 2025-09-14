@@ -6,7 +6,7 @@
 
 A unified interface for Large Language Models with memory, reasoning, and tool capabilities.
 
-Version: 1.0.0
+Version: 1.0.1
 
 ## Overview
 
