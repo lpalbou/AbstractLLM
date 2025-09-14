@@ -149,7 +149,7 @@ config = StructuredResponseConfig(
 )
 ```
 
-### 2.3 Advanced Memory System (`memory.py`)
+### 2.3 Memory System (`memory.py`) - Alpha Testing
 
 #### Three-Tier Memory Architecture
 
@@ -189,9 +189,9 @@ context = memory.get_context(include_knowledge=True)
 ## 3. Provider-Specific Implementation Details
 
 ### 3.1 OpenAI
-- ✅ Native tool support via `tools` parameter
-- ✅ Native JSON mode via `response_format`
-- ✅ JSON Schema support in GPT-4o
+- ✅ Enhanced tool support via manual provider improvements
+- ✅ JSON mode support via `response_format` 
+- ✅ JSON Schema support in GPT-4o through custom implementation
 - ⚠️ Tool choice forcing available but not yet integrated
 
 ### 3.2 Anthropic
