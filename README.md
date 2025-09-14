@@ -62,8 +62,10 @@ pip install "abstractllm[mlx]"          # Apple Silicon MLX support
 pip install "abstractllm[tools]"        # Enhanced tool system
 
 # Comprehensive installation (recommended)
-pip install "abstractllm[all]"          # All providers except MLX
+pip install "abstractllm[all]"          # All providers (MLX will install on Apple Silicon only)
 ```
+
+**Note**: The `[all]` extra includes MLX dependencies which are Apple Silicon specific. On non-Apple platforms, MLX dependencies will be installed but MLX functionality will not be available.
 
 ## Quick Start
 
