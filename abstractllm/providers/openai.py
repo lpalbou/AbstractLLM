@@ -490,7 +490,12 @@ class OpenAIProvider(BaseProvider):
                         model=model,
                         usage=completion.usage.model_dump() if hasattr(completion, 'usage') else None
                     )
-                    return response_text
+                    # Return GenerateResponse object for consistency with other providers
+                    return GenerateResponse(
+                        content=response_text,
+                        model=model,
+                        usage=completion.usage.model_dump() if hasattr(completion, 'usage') else None
+                    )
                 
         except Exception as e:
             raise ProviderAPIError(
@@ -800,7 +805,12 @@ class OpenAIProvider(BaseProvider):
                         model=model,
                         usage=completion.usage.model_dump() if hasattr(completion, 'usage') else None
                     )
-                    return response_text
+                    # Return GenerateResponse object for consistency with other providers
+                    return GenerateResponse(
+                        content=response_text,
+                        model=model,
+                        usage=completion.usage.model_dump() if hasattr(completion, 'usage') else None
+                    )
                 
         except Exception as e:
             raise ProviderAPIError(
