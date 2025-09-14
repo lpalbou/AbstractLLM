@@ -90,6 +90,8 @@ class CommandProcessor:
             display_error(f"Unknown command: {cmd}")
             print(f"{Colors.DIM}Type {colorize('/help', Colors.BRIGHT_BLUE)} for available commands{Colors.RESET}")
         
+        # Add empty line after command for better spacing
+        print()
         return True
     
     def _cmd_help(self, args: List[str]) -> None:
@@ -139,7 +141,7 @@ class CommandProcessor:
         for example in examples:
             print(f"  {colorize(example, Colors.BRIGHT_BLUE)}")
         
-        print(f"\n{create_divider(60, '═', Colors.BRIGHT_BLACK)}")
+        # Add spacing after help for better readability
     
     def _cmd_memory(self, args: List[str]) -> None:
         """Show memory system insights."""
@@ -824,7 +826,7 @@ class CommandProcessor:
             display_title = f"Complete Conversation ({len(messages)} messages)"
         
         print(f"\n{colorize(f'{Symbols.CHAT} {display_title}', Colors.BRIGHT_CYAN, bold=True)}")
-        print(create_divider(80, "═", Colors.CYAN))
+        # Add spacing after status for better readability
         
         # Group messages into interactions
         interactions = self._group_messages_into_interactions(messages)
@@ -869,7 +871,7 @@ class CommandProcessor:
                     print(self._format_message_content(assistant_content))
         
         # Summary footer
-        print(f"\n{create_divider(80, '═', Colors.BRIGHT_BLACK)}")
+        # Add spacing after history for better readability
         total_interactions = len(interactions)
         if count and total_interactions > count:
             print(f"{colorize(f'Showing last {count} of {total_interactions} total interactions', Colors.DIM)}")
@@ -1045,7 +1047,8 @@ class CommandProcessor:
     def _cmd_exit(self, args: List[str]) -> None:
         """Exit interactive mode."""
         display_success("Goodbye!")
-        raise KeyboardInterrupt()  # Will be caught by interactive mode
+        # Use a custom exception to differentiate from Ctrl+C
+        raise SystemExit(0)  # Will be caught by interactive mode
 
 
 def create_command_processor(session, display_func=None) -> CommandProcessor:

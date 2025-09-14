@@ -353,8 +353,8 @@ def display_response(response: Any, show_content: bool = True) -> None:
     if metrics_line:
         print(f"\n{metrics_line}")
     
-    # Final separator
-    print(f"\n{create_divider(70, '═', Colors.BRIGHT_BLACK)}")
+    # Add spacing after response for better readability
+    print()
 
 
 def display_error(error: str, details: Optional[str] = None) -> None:
@@ -366,7 +366,8 @@ def display_error(error: str, details: Optional[str] = None) -> None:
     if details:
         print(f"  {colorize('Details:', Colors.BRIGHT_RED)} {colorize(details, Colors.DIM)}")
     
-    print(f"\n{create_divider(50, '═', Colors.BRIGHT_BLACK)}")
+    # Add spacing after error for better readability
+    print()
 
 
 def display_thinking(message: str) -> None:
