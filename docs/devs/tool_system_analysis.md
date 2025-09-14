@@ -27,7 +27,7 @@ The foundation remains built on Python dataclasses with significant improvements
 
 ### 2. Universal Tool Handler (`tools/handler.py`)
 
-**Revolutionary improvement**: Context-aware tool handling that adapts to model capabilities:
+**Enhancement**: Context-aware tool handling that adapts to model capabilities:
 
 - **Architecture Detection**: Automatically detects model architecture (Qwen, Llama, Gemma, etc.)
 - **Capability-Based Mode Selection**: 
@@ -37,7 +37,7 @@ The foundation remains built on Python dataclasses with significant improvements
 
 ### 3. Robust Tool Call Parser (`tools/parser.py`)
 
-**Major breakthrough**: Ultra-robust parsing that handles real-world LLM inconsistencies:
+**Improvement**: Robust parsing that handles real-world LLM inconsistencies:
 
 #### Multi-Strategy Parsing Approach:
 1. **Strategy 1**: Properly closed tags `<|tool_call|>...json...</|tool_call|>`
@@ -56,7 +56,7 @@ The foundation remains built on Python dataclasses with significant improvements
 
 ### 4. Architecture-Specific Tool Prompting
 
-**Game-changing feature**: Each model architecture gets optimized prompts:
+**Feature**: Each model architecture gets optimized prompts:
 
 #### Qwen Style (Special Token):
 ```
@@ -169,13 +169,13 @@ Example 2: <|tool_call|>{"name": "read_file", "arguments": {"file_path": "exampl
 
 **Issue**: Tool calls like `<|tool_call|>{"name": "read_file", ...}|>` were not being detected due to wrong closing tag (`|>` instead of `</|tool_call|>`).
 
-**Root Cause**: Regex patterns were too strict, requiring perfect closing tags.
+**Root Cause**: Regex patterns were too strict, requiring correct closing tags.
 
 **Solution**: Implemented ultra-robust parsing:
 - Prioritize start tag detection + valid JSON
 - Handle various malformed endings (`|>`, `}>`, missing tags)
 - Multiple fallback strategies
-- Focus on JSON validity over tag perfection
+- Focus on JSON validity over tag correctness
 
 ### 6. **Model Size vs. Capability Trade-offs**
 
@@ -199,7 +199,7 @@ Example 2: <|tool_call|>{"name": "read_file", "arguments": {"file_path": "exampl
 
 ### 3. **Real-World Resilience**
 - Handles LLM inconsistencies and errors
-- Flexible parsing that prioritizes intent over perfect formatting
+- Flexible parsing that prioritizes intent over strict formatting
 - Extensive testing with actual model outputs
 
 ### 4. **Developer Experience**
@@ -261,7 +261,7 @@ Enhanced security measures:
 
 ## Conclusion
 
-The AbstractLLM tool system has evolved from a basic implementation into a battle-tested, production-ready framework. Through extensive real-world testing, we've identified and solved critical issues around:
+The AbstractLLM tool system has evolved from a basic implementation into a more robust framework. Through testing and iteration, we've identified and addressed issues around:
 
 - **System prompt preservation**: Ensuring tool definitions aren't destroyed
 - **Universal logging**: Providing visibility across all providers

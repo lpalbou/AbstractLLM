@@ -2,7 +2,7 @@
 
 ## Overview
 
-AbstractLLM now includes state-of-the-art (SOTA) features for building autonomous agents with memory, retry strategies, and structured responses. These features are available through the `EnhancedSession` class and can be enabled in `alma-minimal.py` using the `--enhanced` flag.
+AbstractLLM now includes enhanced features for building agents with memory, retry strategies, and structured responses. These features are available through the `EnhancedSession` class and can be enabled in `alma-minimal.py` using the `--enhanced` flag.
 
 ## Features
 
