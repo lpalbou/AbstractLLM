@@ -1196,6 +1196,11 @@ class MLXProvider(BaseProvider):
                 # Note: MLX-LM handles repetition penalty through the model config, not generation parameters
                 logger.info(f"Using Gemma model - repetition penalty handled by model config")
             
+            # Capture verbatim context sent to LLM
+            import json
+            verbatim_context = json.dumps(generate_kwargs, indent=2, ensure_ascii=False, default=str)
+            self._capture_verbatim_context(f"MLX LOCAL MODEL\n\nGENERATION PARAMETERS:\n{verbatim_context}")
+
             # Generate text
             output = generate_text(**generate_kwargs)
             
@@ -1434,8 +1439,13 @@ class MLXProvider(BaseProvider):
                 # Note: MLX-LM handles repetition penalty through the model config, not generation parameters
                 logger.info(f"Using Gemma model - repetition penalty handled by model config")
             
+            # Capture verbatim context sent to LLM
+            import json
+            verbatim_context = json.dumps(stream_kwargs, indent=2, ensure_ascii=False, default=str)
+            self._capture_verbatim_context(f"MLX LOCAL MODEL (streaming)\n\nGENERATION PARAMETERS:\n{verbatim_context}")
+
             current_text = ""
-            
+
             # Stream tokens from the model using stream_generate
             for response in stream_generate(**stream_kwargs):
                 current_text = response.text  # stream_generate yields response objects with .text attribute

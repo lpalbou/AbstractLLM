@@ -363,6 +363,11 @@ class OpenAIProvider(BaseProvider):
             if formatted_tools:
                 api_params["tools"] = formatted_tools
             
+            # Capture verbatim context sent to LLM
+            import json
+            verbatim_context = json.dumps(api_params, indent=2, ensure_ascii=False)
+            self._capture_verbatim_context(f"OPENAI API ENDPOINT: chat/completions\n\nREQUEST PAYLOAD:\n{verbatim_context}")
+
             # Make the API call
             completion = client.chat.completions.create(**api_params)
             
@@ -678,6 +683,11 @@ class OpenAIProvider(BaseProvider):
             if formatted_tools:
                 api_params["tools"] = formatted_tools
             
+            # Capture verbatim context sent to LLM
+            import json
+            verbatim_context = json.dumps(api_params, indent=2, ensure_ascii=False)
+            self._capture_verbatim_context(f"OPENAI API ENDPOINT: chat/completions\n\nREQUEST PAYLOAD:\n{verbatim_context}")
+
             # Make the API call
             completion = await client.chat.completions.create(**api_params)
             

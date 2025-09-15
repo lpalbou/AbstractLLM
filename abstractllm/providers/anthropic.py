@@ -435,6 +435,12 @@ class AnthropicProvider(BaseProvider):
                     # Remove 'stream' flag before calling the stream method
                     sync_params = message_params.copy()
                     sync_params.pop("stream", None)
+
+                    # Capture verbatim context sent to LLM
+                    import json
+                    verbatim_context = json.dumps(sync_params, indent=2, ensure_ascii=False)
+                    self._capture_verbatim_context(f"ANTHROPIC API ENDPOINT: messages (streaming)\n\nREQUEST PAYLOAD:\n{verbatim_context}")
+
                     with client.messages.stream(**sync_params) as stream:
                         for chunk in stream:
                             if hasattr(chunk, 'delta') and hasattr(chunk.delta, 'text'):
@@ -513,6 +519,11 @@ class AnthropicProvider(BaseProvider):
                 
                 return response_generator()
             else:
+                # Capture verbatim context sent to LLM
+                import json
+                verbatim_context = json.dumps(message_params, indent=2, ensure_ascii=False)
+                self._capture_verbatim_context(f"ANTHROPIC API ENDPOINT: messages\n\nREQUEST PAYLOAD:\n{verbatim_context}")
+
                 response = client.messages.create(**message_params)
                 
                 # Extract content from response
@@ -849,6 +860,11 @@ class AnthropicProvider(BaseProvider):
                 
                 return async_generator()
             else:
+                # Capture verbatim context sent to LLM
+                import json
+                verbatim_context = json.dumps(message_params, indent=2, ensure_ascii=False)
+                self._capture_verbatim_context(f"ANTHROPIC API ENDPOINT: messages (async)\n\nREQUEST PAYLOAD:\n{verbatim_context}")
+
                 response = await client.messages.create(**message_params)
                 
                 # Extract content from response
