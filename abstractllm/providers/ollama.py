@@ -641,6 +641,10 @@ class OllamaProvider(BaseProvider):
                     current_tool_calls = []
                     current_content = ""
                     
+                    # Capture verbatim context sent to LLM
+                    verbatim_context = json.dumps(request_data, indent=2, ensure_ascii=False)
+                    self._capture_verbatim_context(f"ENDPOINT: {endpoint}\n\nREQUEST PAYLOAD:\n{verbatim_context}")
+
                     response = requests.post(endpoint, json=request_data, stream=True)
                     response.raise_for_status()
                     
@@ -721,6 +725,10 @@ class OllamaProvider(BaseProvider):
                 
                 return response_generator()
             else:
+                # Capture verbatim context sent to LLM
+                verbatim_context = json.dumps(request_data, indent=2, ensure_ascii=False)
+                self._capture_verbatim_context(f"ENDPOINT: {endpoint}\n\nREQUEST PAYLOAD:\n{verbatim_context}")
+
                 response = requests.post(endpoint, json=request_data)
                 response.raise_for_status()
                 
@@ -1031,6 +1039,10 @@ class OllamaProvider(BaseProvider):
         log_request_url("ollama", endpoint)
         
         
+        # Capture verbatim context sent to LLM
+        verbatim_context = json.dumps(request_data, indent=2, ensure_ascii=False)
+        self._capture_verbatim_context(f"ENDPOINT: {endpoint}\n\nREQUEST PAYLOAD:\n{verbatim_context}")
+
         try:
             async with aiohttp.ClientSession() as session:
                 if stream:

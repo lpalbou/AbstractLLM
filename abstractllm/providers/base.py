@@ -59,6 +59,10 @@ class BaseProvider(AbstractLLMInterface, ABC):
         super().__init__(config)
         self.provider_name = self.__class__.__name__.replace("Provider", "").lower()
         self._tool_handler: Optional[UniversalToolHandler] = None
+
+        # Verbatim context capture for exact LLM input tracking
+        self._last_verbatim_context: Optional[str] = None
+        self._last_context_timestamp: Optional[str] = None
     
     def generate(self, 
                 prompt: str, 
@@ -707,4 +711,36 @@ IMPORTANT: The above files are already loaded in your context. Do NOT use tools 
             model=model,
             finish_reason=finish_reason,
             tool_calls=tool_calls
-        ) 
+        )
+
+    def _capture_verbatim_context(self, context: str) -> None:
+        """
+        Capture the exact verbatim context sent to the LLM.
+
+        This method should be called by providers right before sending the context
+        to the LLM to capture the exact format and content that will be processed.
+
+        Args:
+            context: The exact string/format sent to the LLM
+        """
+        from datetime import datetime
+
+        self._last_verbatim_context = context
+        self._last_context_timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+
+    def get_last_verbatim_context(self) -> Optional[Dict[str, str]]:
+        """
+        Get the last verbatim context that was sent to the LLM.
+
+        Returns:
+            Dictionary with 'context' and 'timestamp' keys, or None if no context captured
+        """
+        if self._last_verbatim_context is None:
+            return None
+
+        return {
+            'context': self._last_verbatim_context,
+            'timestamp': self._last_context_timestamp,
+            'provider': self.provider_name,
+            'model': self.config_manager.get_param(ModelParameter.MODEL)
+        } 

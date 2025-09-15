@@ -48,6 +48,7 @@ class CommandProcessor:
             'status': self._cmd_status,
             'stats': self._cmd_stats,
             'config': self._cmd_config,
+            'context': self._cmd_context,
             'exit': self._cmd_exit,
             'quit': self._cmd_exit,
             'q': self._cmd_exit,
@@ -101,7 +102,8 @@ class CommandProcessor:
         
         commands_info = [
             ("Memory Management", [
-                ("/memory, /mem", "Show memory system insights"),
+                ("/memory, /mem", "Show memory insights & context size"),
+                ("/memory <number>", "Set max input tokens"),
                 ("/save <file>", "Save complete session state"),
                 ("/load <file>", "Load complete session state"),
                 ("/export <file>", "Export memory to JSON"),
@@ -113,6 +115,7 @@ class CommandProcessor:
             ("Session Control", [
                 ("/history", "Show command history"),
                 ("/last [count]", "Replay conversation messages"),
+                ("/context", "Show full context sent to LLM"),
                 ("/clear", "Clear conversation history"),
                 ("/reset", "Reset entire session"),
                 ("/status", "Show session status"),
@@ -133,8 +136,9 @@ class CommandProcessor:
         print(f"\n{colorize('Usage Examples:', Colors.BRIGHT_YELLOW, bold=True)}")
         examples = [
             "/save my_session.pkl",
-            "/load my_session.pkl", 
+            "/load my_session.pkl",
             "/last 3",
+            "/context",
             "/facts machine learning",
             "/export memory_backup.json"
         ]
@@ -144,27 +148,94 @@ class CommandProcessor:
         # Add spacing after help for better readability
     
     def _cmd_memory(self, args: List[str]) -> None:
-        """Show memory system insights."""
+        """Show memory system insights or set max tokens."""
+        # Check if setting max tokens
+        if args and args[0].isdigit():
+            new_max_tokens = int(args[0])
+            # Set max tokens in session config
+            if hasattr(self.session, '_provider') and self.session._provider:
+                if hasattr(self.session._provider, 'config_manager'):
+                    from abstractllm.interface import ModelParameter
+                    self.session._provider.config_manager.update_config({
+                        ModelParameter.MAX_INPUT_TOKENS: new_max_tokens
+                    })
+                    display_success(f"Max input tokens set to {new_max_tokens:,}")
+                else:
+                    display_error("Provider does not support configuration changes")
+            else:
+                display_error("No provider available to configure")
+            return
+
         if not hasattr(self.session, 'memory') or not self.session.memory:
             display_error("Memory system not available")
             return
-        
+
         memory = self.session.memory
         try:
             stats = memory.get_statistics()
-            
+
             # Debug: Check if stats is actually a dictionary
             if not isinstance(stats, dict):
                 display_error(f"Memory statistics returned {type(stats).__name__} instead of dict: {str(stats)[:200]}...")
                 return
-                
+
         except Exception as e:
             display_error(f"Failed to get memory statistics: {str(e)}")
             return
         
         print(f"\n{colorize(f'{Symbols.BRAIN} Memory System Overview', Colors.BRIGHT_BLUE, bold=True)}")
         print(create_divider(60, "─", Colors.BLUE))
-        
+
+        # Context size information
+        from abstractllm.utils.context_logging import get_context_logger
+        logger = get_context_logger()
+
+        # Get last context size
+        if logger.last_context:
+            # Calculate sizes
+            context_str = json.dumps(logger.last_context, ensure_ascii=False)
+            char_count = len(context_str)
+            # Estimate tokens (roughly 4 chars per token)
+            token_count = char_count // 4
+
+            print(f"  {colorize('Last Context Size:', Colors.BRIGHT_CYAN)}")
+            print(f"    • Characters: {colorize(f'{char_count:,}', Colors.WHITE)}")
+            print(f"    • Tokens (est): {colorize(f'{token_count:,}', Colors.WHITE)}")
+
+        # Get model capabilities for max tokens
+        if hasattr(self.session, '_provider') and self.session._provider:
+            provider = self.session._provider
+            model_name = None
+            max_input_tokens = None
+
+            # Get model name
+            if hasattr(provider, 'config_manager'):
+                from abstractllm.interface import ModelParameter
+                model_name = provider.config_manager.get_param(ModelParameter.MODEL)
+                max_input_tokens = provider.config_manager.get_param(ModelParameter.MAX_INPUT_TOKENS)
+
+            # Get capabilities from model_capabilities.json
+            if model_name:
+                try:
+                    from abstractllm.architectures.detection import get_model_capabilities
+                    capabilities = get_model_capabilities(model_name)
+                    if capabilities:
+                        context_length = capabilities.get('context_length', 'Unknown')
+                        max_output = capabilities.get('max_output_tokens', 'Unknown')
+
+                        print(f"  {colorize('Model Limits:', Colors.BRIGHT_MAGENTA)}")
+                        print(f"    • Context Length: {colorize(f'{context_length:,}' if isinstance(context_length, int) else context_length, Colors.WHITE)}")
+                        print(f"    • Max Output: {colorize(f'{max_output:,}' if isinstance(max_output, int) else max_output, Colors.WHITE)}")
+
+                        # Show configured max if different from model default
+                        if max_input_tokens and max_input_tokens != context_length:
+                            print(f"    • Configured Max: {colorize(f'{max_input_tokens:,}', Colors.BRIGHT_YELLOW)} (use /memory <number> to change)")
+                except Exception as e:
+                    # Silently skip if capabilities can't be loaded
+                    pass
+
+        print()  # Add spacing
+
         # Memory distribution - check if keys exist
         if 'memory_distribution' in stats and isinstance(stats['memory_distribution'], dict):
             dist = stats['memory_distribution']
@@ -707,11 +778,10 @@ class CommandProcessor:
                   f"{colorize(f'| Used: {fact.access_count}x', Colors.DIM)}")
             
             displayed += 1
-            if displayed >= 10:  # Limit display
-                remaining = len(facts) - displayed
-                if remaining > 0:
-                    print(f"\n  {colorize(f'... and {remaining} more facts', Colors.DIM, italic=True)}")
-                break
+
+        # Show total count (removed artificial limit)
+        if displayed > 0:
+            print(f"\n{colorize(f'Total: {displayed} facts displayed', Colors.DIM, italic=True)}")
     
     def _cmd_links(self, args: List[str]) -> None:
         """Visualize memory links."""
@@ -1043,7 +1113,41 @@ class CommandProcessor:
             print(f"  {colorize('Max tool calls:', Colors.BRIGHT_BLUE)} {colorize(str(self.session.max_tool_calls), Colors.WHITE)}")
         
         print(f"  {colorize('System prompt:', Colors.BRIGHT_BLUE)} {colorize('Set' if self.session.system_prompt else 'None', Colors.WHITE)}")
-    
+
+    def _cmd_context(self, args: List[str]) -> None:
+        """Show the exact verbatim context sent to the LLM."""
+        # First try to get verbatim context from the provider
+        if hasattr(self.session, '_provider') and hasattr(self.session._provider, 'get_last_verbatim_context'):
+            verbatim_data = self.session._provider.get_last_verbatim_context()
+
+            if verbatim_data:
+                print(f"\n╔══════════════ EXACT VERBATIM LLM INPUT ══════════════╗")
+                print(f"║ Timestamp: {verbatim_data['timestamp']}")
+                print(f"║ Model: {verbatim_data['model']}")
+                print(f"║ Provider: {verbatim_data['provider']}")
+                print(f"╚═══════════════════════════════════════════════════════╝")
+                print()
+                print(verbatim_data['context'])
+                return
+
+        # Fallback to old context logging system
+        from abstractllm.utils.context_logging import get_context_logger
+
+        logger = get_context_logger()
+
+        # Determine format
+        format = "full"
+        if args:
+            if args[0] in ["compact", "debug"]:
+                format = args[0]
+
+        context = logger.get_last_context(format)
+
+        if context:
+            print(context)
+        else:
+            display_info("No context has been sent to the LLM yet in this session")
+
     def _cmd_exit(self, args: List[str]) -> None:
         """Exit interactive mode."""
         display_success("Goodbye!")

@@ -29,6 +29,7 @@ import time
 from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability
 from abstractllm.exceptions import UnsupportedFeatureError
 from abstractllm.enums import MessageRole
+from abstractllm.utils.context_logging import log_llm_interaction
 
 # Handle circular imports with TYPE_CHECKING
 if TYPE_CHECKING:
@@ -1528,7 +1529,22 @@ class Session:
             logger.debug(f"Session: Using initial phase system prompt")
         
         logger.info(f"Generating initial response with tools. Provider: {provider_name}")
-        
+
+        # Log full context before generation - EXACT verbatim what goes to LLM
+        model_name = self._get_provider_model(provider_instance)
+        log_llm_interaction(
+            prompt=original_prompt,  # Exact prompt sent to LLM, including all metadata
+            system_prompt=current_system_prompt,
+            messages=provider_messages,
+            memory_context=None,  # Don't separate - show everything as it actually was sent
+            tools=tools if tools is not None else self.tools,
+            response=None,  # Will be updated after generation
+            model=model_name,
+            provider=provider_name,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+
         # 1) Initial generate with tools
         response = provider_instance.generate(
             prompt=original_prompt,
@@ -1543,7 +1559,22 @@ class Session:
             files=files,
             **kwargs
         )
-        
+
+        # Log response
+        response_content = response.content if hasattr(response, 'content') else str(response)
+        log_llm_interaction(
+            prompt=original_prompt,  # Exact prompt sent to LLM, including all metadata
+            system_prompt=current_system_prompt,
+            messages=provider_messages,
+            memory_context=None,  # Don't separate - show everything as it actually was sent
+            tools=tools if tools is not None else self.tools,
+            response=response_content,
+            model=model_name,
+            provider=provider_name,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+
         logger.info(f"Received initial response from LLM, type: {type(response)}")
         if hasattr(response, 'has_tool_calls'):
             logger.info(f"Response has_tool_calls method, result: {response.has_tool_calls()}")

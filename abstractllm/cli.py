@@ -280,29 +280,40 @@ def show_memory_insights(session):
 
 def interactive_mode(session):
     """Run enhanced interactive chat with slash command support."""
-    
+    from abstractllm.utils.enhanced_input import get_enhanced_input, format_input_info
+
     # Create command processor
     cmd_processor = create_command_processor(session)
-    
+
     print(f"\n{Colors.BRIGHT_BLUE}{Symbols.SPARKLES} Enhanced Interactive Mode{Colors.RESET}")
     print(f"{Colors.CYAN}{'─' * 50}{Colors.RESET}")
     print(f"{Colors.DIM}Type {Colors.BRIGHT_BLUE}/help{Colors.DIM} for commands or ask questions directly.{Colors.RESET}")
-    print(f"{Colors.DIM}Use {Colors.BRIGHT_BLUE}/exit{Colors.DIM} to quit.{Colors.RESET}\n")
-    
+    print(f"{Colors.DIM}Use {Colors.BRIGHT_BLUE}/exit{Colors.DIM} to quit.{Colors.RESET}")
+    print(f"{Colors.DIM}Enter your query and press {Colors.BRIGHT_BLUE}Enter{Colors.DIM} to submit (supports up to 8k tokens).{Colors.RESET}\n")
+
     while True:
         try:
-            user_input = input(f"{Colors.BRIGHT_GREEN}alma>{Colors.RESET} ").strip()
-            
+            # Use simple long input with 8k token support
+            user_input = get_enhanced_input(
+                prompt=f"{Colors.BRIGHT_GREEN}alma>{Colors.RESET} ",
+                max_chars=32768  # ~8k tokens
+            )
+
             if not user_input:
                 continue
-            
+
+            # Show input info for multi-line inputs
+            if '\n' in user_input or len(user_input) > 500:
+                info = format_input_info(user_input)
+                print(f"{Colors.DIM}{info}{Colors.RESET}")
+
             # Process slash commands
             if cmd_processor.process_command(user_input):
                 continue
-            
+
             # Regular query - generate response
             response = run_query(session, user_input)
-            
+
         except KeyboardInterrupt:
             print(f"\n\n{Colors.BRIGHT_GREEN}{Symbols.CHECKMARK} Goodbye!{Colors.RESET}")
             break

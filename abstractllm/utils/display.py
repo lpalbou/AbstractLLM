@@ -200,13 +200,19 @@ def format_tools_execution(tools_executed: List[Dict[str, Any]]) -> str:
 
 def format_metrics_line(response: Any) -> str:
     """Create a single compact italic metrics line."""
+    from datetime import datetime
+
     # Always show response ID if available, even without usage data
     if not hasattr(response, 'react_cycle_id') or not response.react_cycle_id:
         return ""
-    
+
     usage = response.usage if hasattr(response, 'usage') else None
     metrics_parts = []
-    
+
+    # Add timestamp first
+    timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+    metrics_parts.append(f"Time: {timestamp}")
+
     # Interaction ID - always show if available
     cycle_id = response.react_cycle_id[-8:]  # Last 8 chars for display
     metrics_parts.append(f"ID: {cycle_id}")

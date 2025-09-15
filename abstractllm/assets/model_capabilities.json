@@ -403,6 +403,17 @@
       "notes": "4-bit precision, optimized for efficiency. Prompted tool support.",
       "source": "Alibaba official docs"
     },
+    "qwen3-coder-30b": {
+      "context_length": 32768,
+      "max_output_tokens": 8192,
+      "tool_support": "prompted",
+      "structured_output": "prompted",
+      "parallel_tools": true,
+      "vision_support": false,
+      "audio_support": false,
+      "notes": "Code-focused model with prompted tool support for Ollama compatibility",
+      "source": "Alibaba official docs"
+    },
     "qwen2-vl": {
       "context_length": 32768,
       "max_output_tokens": 8192,
@@ -622,7 +633,7 @@
       "source": "Google docs"
     },
     "gemma3": {
-      "context_length": 8192,
+      "context_length": 128000,
       "max_output_tokens": 8192,
       "tool_support": "native",
       "structured_output": "native",

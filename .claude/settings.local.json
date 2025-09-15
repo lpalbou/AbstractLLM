@@ -34,7 +34,8 @@
       "Read(//private/tmp/**)",
       "Bash(cat:*)",
       "Bash(timeout:*)",
-      "Bash(xargs:*)"
+      "Bash(xargs:*)",
+      "WebFetch(domain:stackoverflow.com)"
     ],
     "deny": []
   },
