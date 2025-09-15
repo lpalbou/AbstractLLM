@@ -37,7 +37,8 @@
       "Bash(xargs:*)",
       "WebFetch(domain:stackoverflow.com)",
       "Read(//Users/albou/projects/forgellm/**)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "WebFetch(domain:platform.openai.com)"
     ],
     "deny": []
   },

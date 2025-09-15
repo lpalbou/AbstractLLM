@@ -53,6 +53,8 @@ class CommandProcessor:
             'seed': self._cmd_seed,
             'temperature': self._cmd_temperature,
             'temp': self._cmd_temperature,
+            'system': self._cmd_system,
+            'tools': self._cmd_tools,
             'exit': self._cmd_exit,
             'quit': self._cmd_exit,
             'q': self._cmd_exit,
@@ -123,6 +125,8 @@ class CommandProcessor:
                 ("/context", "Show full context sent to LLM"),
                 ("/seed [number|random]", "Set/show random seed for deterministic generation"),
                 ("/temperature, /temp", "Set/show temperature for generation randomness"),
+                ("/system [prompt]", "Set/show system prompt for the session"),
+                ("/tools [tool_name]", "Show registered tools or toggle a specific tool"),
                 ("/clear", "Clear conversation history"),
                 ("/reset", "Reset entire session"),
                 ("/status", "Show session status"),
@@ -146,6 +150,8 @@ class CommandProcessor:
             "/load my_session.pkl",
             "/memory 16384",
             "/temperature 0.3",
+            "/system You are a helpful coding assistant",
+            "/tools read_file",
             "/working",
             "/facts machine learning",
             "/links",
@@ -1463,6 +1469,128 @@ class CommandProcessor:
             display_error(f"Invalid temperature value: '{args[0]}'. Use a decimal number")
             print(f"{colorize('Usage:', Colors.DIM)} /temperature 0.7, /temperature 0.0 (deterministic)")
             print(f"{colorize('Examples:', Colors.DIM)} 0.0=deterministic, 0.3=focused, 0.7=balanced, 1.0=creative")
+
+    def _cmd_system(self, args: List[str]) -> None:
+        """Show or set system prompt."""
+        if not args:
+            # Show current system prompt
+            if hasattr(self.session, 'system_prompt') and self.session.system_prompt:
+                print(f"{colorize('🎯 Current system prompt:', Colors.BRIGHT_CYAN)}")
+                print(f"{colorize('─' * 50, Colors.DIM)}")
+                print(f"{colorize(self.session.system_prompt, Colors.WHITE)}")
+                print(f"{colorize('─' * 50, Colors.DIM)}")
+                print(f"{colorize('Length:', Colors.DIM)} {len(self.session.system_prompt)} characters")
+            else:
+                print(f"{colorize('🎯 System prompt:', Colors.BRIGHT_CYAN)} {colorize('Not set (using default)', Colors.WHITE)}")
+            return
+
+        # Set new system prompt (join all args to handle multi-word prompts)
+        new_prompt = ' '.join(args)
+
+        if not new_prompt.strip():
+            display_error("System prompt cannot be empty")
+            print(f"{colorize('Usage:', Colors.DIM)} /system Your custom system prompt here")
+            return
+
+        # Update system prompt
+        self.session.system_prompt = new_prompt
+
+        # Provide feedback
+        display_success(f"🎯 System prompt updated")
+        print(f"{colorize('New prompt (first 100 chars):', Colors.DIM)} {new_prompt[:100]}{'...' if len(new_prompt) > 100 else ''}")
+        print(f"{colorize('Length:', Colors.DIM)} {len(new_prompt)} characters")
+        print(f"{colorize('💡 Tip:', Colors.BRIGHT_YELLOW)} System prompt affects all future messages in this session")
+
+    def _cmd_tools(self, args: List[str]) -> None:
+        """Show registered tools or toggle a specific tool."""
+        # Check if tools functionality is available
+        try:
+            from abstractllm.tools import ToolDefinition
+            from abstractllm.session import TOOLS_AVAILABLE
+            if not TOOLS_AVAILABLE:
+                display_error("Tools functionality is not available. Install required dependencies.")
+                return
+        except ImportError:
+            display_error("Tools functionality is not available. Install required dependencies.")
+            return
+
+        if not args:
+            # Show all registered tools
+            if not hasattr(self.session, 'tools') or not self.session.tools:
+                print(f"{colorize('🔧 Registered tools:', Colors.BRIGHT_CYAN)} {colorize('None', Colors.WHITE)}")
+                print(f"{colorize('💡 Tip:', Colors.BRIGHT_YELLOW)} Add tools using session.add_tool() or the tools parameter")
+                return
+
+            print(f"{colorize('🔧 Registered tools:', Colors.BRIGHT_CYAN)} {colorize(str(len(self.session.tools)), Colors.WHITE)}")
+            print(f"{colorize('─' * 60, Colors.DIM)}")
+
+            for i, tool in enumerate(self.session.tools, 1):
+                # Check if tool is active (present in both tools list and implementations)
+                is_active = hasattr(tool, 'name') and tool.name in getattr(self.session, '_tool_implementations', {})
+                status_icon = "✅" if is_active else "❌"
+                status_text = colorize("ACTIVE", Colors.BRIGHT_GREEN) if is_active else colorize("INACTIVE", Colors.BRIGHT_RED)
+
+                tool_name = getattr(tool, 'name', 'Unknown')
+                tool_desc = getattr(tool, 'description', 'No description')
+
+                print(f"  {i}. {status_icon} {colorize(tool_name, Colors.BRIGHT_WHITE)} - {status_text}")
+                print(f"     {colorize(tool_desc, Colors.DIM)}")
+
+                # Show parameters if available
+                if hasattr(tool, 'parameters') and tool.parameters:
+                    param_names = list(tool.parameters.keys()) if isinstance(tool.parameters, dict) else []
+                    if param_names:
+                        params_str = ", ".join(param_names[:3])
+                        if len(param_names) > 3:
+                            params_str += f", ... (+{len(param_names) - 3} more)"
+                        print(f"     {colorize('Parameters:', Colors.DIM)} {params_str}")
+                print()
+
+            print(f"{colorize('💡 Usage:', Colors.BRIGHT_YELLOW)} /tools <tool_name> to toggle a specific tool")
+            return
+
+        # Toggle specific tool
+        tool_name = args[0]
+
+        if not hasattr(self.session, 'tools') or not self.session.tools:
+            display_error(f"No tools registered. Cannot toggle '{tool_name}'")
+            return
+
+        # Find the tool by name
+        target_tool = None
+        for tool in self.session.tools:
+            if hasattr(tool, 'name') and tool.name == tool_name:
+                target_tool = tool
+                break
+
+        if not target_tool:
+            display_error(f"Tool '{tool_name}' not found")
+            available_tools = [getattr(t, 'name', 'Unknown') for t in self.session.tools if hasattr(t, 'name')]
+            if available_tools:
+                print(f"{colorize('Available tools:', Colors.DIM)} {', '.join(available_tools)}")
+            return
+
+        # Check current status and toggle
+        is_currently_active = tool_name in getattr(self.session, '_tool_implementations', {})
+
+        if is_currently_active:
+            # Deactivate tool: remove from implementations but keep in tools list
+            if hasattr(self.session, '_tool_implementations') and tool_name in self.session._tool_implementations:
+                del self.session._tool_implementations[tool_name]
+            display_success(f"🔧 Tool '{tool_name}' deactivated")
+            print(f"{colorize('Status:', Colors.DIM)} Tool is now inactive and won't be available for use")
+        else:
+            # Reactivate tool: add back to implementations if we have the definition
+            if hasattr(target_tool, 'function') and callable(target_tool.function):
+                # Re-register the function implementation
+                if not hasattr(self.session, '_tool_implementations'):
+                    self.session._tool_implementations = {}
+                self.session._tool_implementations[tool_name] = target_tool.function
+                display_success(f"🔧 Tool '{tool_name}' activated")
+                print(f"{colorize('Status:', Colors.DIM)} Tool is now active and available for use")
+            else:
+                display_error(f"Cannot reactivate '{tool_name}': original function not available")
+                print(f"{colorize('Note:', Colors.DIM)} Tool definition exists but function implementation is missing")
 
     def _cmd_exit(self, args: List[str]) -> None:
         """Exit interactive mode."""
