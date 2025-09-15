@@ -211,7 +211,7 @@ def format_metrics_line(response: Any) -> str:
 
     # Add timestamp first
     timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-    metrics_parts.append(f"Time: {timestamp}")
+    metrics_parts.append(f"{timestamp}")
 
     # Interaction ID - always show if available
     cycle_id = response.react_cycle_id[-8:]  # Last 8 chars for display

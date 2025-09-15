@@ -1119,13 +1119,13 @@ class HierarchicalMemory:
         
         final_context = "\\n".join(context_parts)
         
-        # Truncate if still too long
+        # If context exceeds token limit, prioritize most relevant content instead of truncating
         final_tokens = estimate_tokens(final_context)
         if final_tokens > max_tokens:
-            # Proportional truncation
-            truncation_ratio = max_tokens / final_tokens
-            final_context = final_context[:int(len(final_context) * truncation_ratio)]
-            final_context += "\\n... (truncated for token limit)"
+            # NOTE: Rather than truncating, we should prioritize the most relevant content
+            # For now, warn but don't truncate to maintain verbatim requirement
+            logger.warning(f"Memory context ({final_tokens} tokens) exceeds limit ({max_tokens} tokens). "
+                          f"Consider increasing max_tokens or improving relevance filtering.")
         
         return final_context
     

@@ -1148,7 +1148,7 @@ class Session:
         tool_trace = {
             "name": tool_call.name,
             "arguments": tool_call.arguments if hasattr(tool_call, 'arguments') else {},
-            "result": str(result.get("output", result.get("error", result)))[:500],  # Truncate for readability
+            "result": str(result.get("output", result.get("error", result))),  # FULL VERBATIM - NO TRUNCATION
             "success": success,
             "execution_time": execution_time,
             "timestamp": datetime.now().isoformat(),

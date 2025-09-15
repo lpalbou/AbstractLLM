@@ -9,7 +9,7 @@ with all SOTA features including hierarchical memory, ReAct reasoning, and tools
 
 from abstractllm.factory import create_session
 from abstractllm.structured_response import StructuredResponseConfig, ResponseFormat
-from abstractllm.tools.common_tools import read_file, list_files, search_files
+from abstractllm.tools.common_tools import read_file, list_files
 from abstractllm.tools.enhanced import tool
 from abstractllm.utils.logging import configure_logging
 from abstractllm.interface import ModelParameter
@@ -157,7 +157,7 @@ def create_agent(provider="ollama", model="qwen3:4b", memory_path=None, max_tool
             'working_memory_size': 10,
             'consolidation_threshold': 5
         },
-        'tools': [read_file, list_files, search_files, write_file],
+        'tools': [read_file, list_files, write_file],
         'system_prompt': "You are an intelligent AI assistant with memory and reasoning capabilities.",
         'max_tokens': 2048,
         'temperature': 0.7,

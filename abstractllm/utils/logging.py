@@ -383,11 +383,8 @@ def log_response(provider: str, response: str, log_dir: Optional[str] = None, mo
     # Log to console if enabled
     if any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
         logger.debug(f"RESPONSE [{provider}]: {timestamp}")
-        if len(response) > 10000:
-            truncated_response = response[:10000] + f"... [truncated, total length: {len(response)} chars]"
-            logger.debug(f"Response: {truncated_response}")
-        else:
-            logger.debug(f"Response: {response}")
+        # Log FULL VERBATIM response - NO TRUNCATION
+        logger.debug(f"Response: {response}")
     
     # Find matching request (most recent one for this provider)
     matching_request = None

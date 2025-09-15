@@ -433,10 +433,8 @@ def fetch_url(url: str, timeout: int = 10) -> str:
         
         # Handle different content types
         if 'text/' in content_type or 'application/json' in content_type:
-            content = response.text[:10000]  # Limit to first 10KB
-            if len(response.text) > 10000:
-                content += "\n\n[Content truncated - showing first 10KB]"
-            results.append(content)
+            # Return FULL VERBATIM content - NO TRUNCATION
+            results.append(response.text)
         else:
             results.append(f"[Binary content - {content_type}]")
         
@@ -507,9 +505,7 @@ def fetch_and_parse_html(url: str, extract_text: bool = True, extract_links: boo
             chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
             text = ' '.join(chunk for chunk in chunks if chunk)
             
-            # Limit text length
-            if len(text) > 5000:
-                text = text[:5000] + "\n\n[Text truncated - showing first 5000 characters]"
+            # Return FULL VERBATIM text - NO TRUNCATION
             
             results.append("Extracted Text:")
             results.append(text)
@@ -517,7 +513,7 @@ def fetch_and_parse_html(url: str, extract_text: bool = True, extract_links: boo
         if extract_links:
             results.append("\nExtracted Links:")
             links = soup.find_all('a', href=True)
-            for i, link in enumerate(links[:20], 1):  # Limit to first 20 links
+            for i, link in enumerate(links, 1):  # ALL links - NO TRUNCATION
                 href = link['href']
                 link_text = link.get_text().strip()
                 
@@ -527,8 +523,7 @@ def fetch_and_parse_html(url: str, extract_text: bool = True, extract_links: boo
                 
                 results.append(f"{i}. {link_text} - {href}")
             
-            if len(links) > 20:
-                results.append(f"... and {len(links) - 20} more links")
+            # Show ALL links - NO "more links" truncation message
         
         return "\n".join(results)
         

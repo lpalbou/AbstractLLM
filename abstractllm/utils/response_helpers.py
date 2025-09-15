@@ -329,28 +329,22 @@ def scratchpad_command(cycle_id: str) -> None:
                 print(f"\n{Colors.BRIGHT_MAGENTA}  Cycle {i}:{Colors.RESET}")
                 print(f"  {Colors.BRIGHT_GREEN}🎯 ACT:{Colors.RESET} {Colors.BRIGHT_CYAN}{tool_name}{Colors.RESET}")
                 
-                # Show tool arguments if available
+                # Show tool arguments if available (FULL VERBATIM - NO TRUNCATION)
                 if tool_args and isinstance(tool_args, dict):
                     for arg_name, arg_value in tool_args.items():
-                        if isinstance(arg_value, str) and len(arg_value) > 100:
-                            arg_display = f"{arg_value[:100]}..."
-                        else:
-                            arg_display = str(arg_value)
+                        # Show complete argument value without any truncation
+                        arg_display = str(arg_value)
                         print(f"    {Colors.DIM}├─ {arg_name}:{Colors.RESET} {arg_display}")
                 
                 print(f"\n  {Colors.BRIGHT_BLUE}👁️  OBSERVE:{Colors.RESET}")
                 print(f"  {Colors.DIM}{'┌' + '─' * 60}{Colors.RESET}")
                 
-                # Format observation with proper indentation
+                # Format observation with proper indentation (FULL VERBATIM - NO TRUNCATION)
                 if isinstance(tool_result, str):
                     result_lines = tool_result.split('\n')
-                    for j, line in enumerate(result_lines):
-                        if j < 20:  # Limit to first 20 lines
-                            print(f"  {Colors.DIM}│{Colors.RESET} {line}")
-                        elif j == 20:
-                            remaining = len(result_lines) - 20
-                            print(f"  {Colors.DIM}│{Colors.RESET} {Colors.DIM}... ({remaining} more lines){Colors.RESET}")
-                            break
+                    # Show ALL lines without any truncation
+                    for line in result_lines:
+                        print(f"  {Colors.DIM}│{Colors.RESET} {line}")
                 else:
                     print(f"  {Colors.DIM}│{Colors.RESET} {str(tool_result)}")
                 
@@ -456,7 +450,7 @@ def _parse_reasoning_phases(think_content: str) -> list:
             'content': paragraph
         })
     
-    return phases[:10]  # Limit to 10 phases for readability
+    return phases  # Return ALL phases without any limit for complete verbatim content
 
 
 # Make these available as global functions for CLI use

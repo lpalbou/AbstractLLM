@@ -35,7 +35,9 @@
       "Bash(cat:*)",
       "Bash(timeout:*)",
       "Bash(xargs:*)",
-      "WebFetch(domain:stackoverflow.com)"
+      "WebFetch(domain:stackoverflow.com)",
+      "Read(//Users/albou/projects/forgellm/**)",
+      "Bash(git add:*)"
     ],
     "deny": []
   },

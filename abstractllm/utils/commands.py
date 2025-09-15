@@ -932,8 +932,8 @@ class CommandProcessor:
         print(f"• Use {colorize('/facts', Colors.BRIGHT_BLUE)} to see the knowledge these links connect")
     
     def _cmd_scratchpad(self, args: List[str]) -> None:
-        """Show reasoning traces for a specific interaction or all interactions."""
-        
+        """Show reasoning traces for a specific interaction or list all available scratchpads."""
+
         # If a response ID is provided, show specific interaction scratchpad
         if args:
             response_id = args[0]
@@ -943,49 +943,128 @@ class CommandProcessor:
             from abstractllm.utils.response_helpers import scratchpad_command
             scratchpad_command(response_id)
             return
-            
-        # Otherwise, show general reasoning traces summary
+
+        # Otherwise, show list of all available scratchpads
         if not hasattr(self.session, 'memory') or not self.session.memory:
             display_error("Memory system not available")
             return
-        
-        try:
-            stats = self.session.memory.get_statistics()
-            
-            # Debug: Check if stats is actually a dictionary
-            if not isinstance(stats, dict):
-                display_error("Memory statistics not available")
-                return
-                
-        except Exception as e:
-            display_error(f"Failed to get memory statistics: {str(e)}")
+
+        memory = self.session.memory
+
+        print(f"\n{colorize(f'{Symbols.BRAIN} Available Scratchpads', Colors.BRIGHT_CYAN, bold=True)}")
+        print(create_divider(70, "─", Colors.CYAN))
+
+        # Get all react cycles
+        react_cycles = memory.react_cycles if hasattr(memory, 'react_cycles') else {}
+
+        if not react_cycles:
+            print(f"{colorize('📝 No scratchpads available yet', Colors.BRIGHT_YELLOW)}")
+            print(f"{colorize('Scratchpads are created automatically during reasoning sessions', Colors.DIM)}")
+            print(f"\n{colorize('💡 How to create scratchpads:', Colors.BRIGHT_YELLOW)}")
+            print(f"• Ask complex questions that require reasoning")
+            print(f"• Use tools or request multi-step analysis")
+            print(f"• Enable memory with enable_memory=True")
             return
-        
-        print(f"\n{colorize(f'{Symbols.BRAIN} Reasoning Traces', Colors.BRIGHT_CYAN, bold=True)}")
-        print(create_divider(60, "─", Colors.CYAN))
-        
-        total_cycles = stats.get('total_react_cycles', 0)
-        successful_cycles = stats.get('successful_cycles', 0)
-        
-        print(f"  {colorize('Total ReAct Cycles:', Colors.BRIGHT_GREEN)} {total_cycles}")
-        print(f"  {colorize('Successful Cycles:', Colors.BRIGHT_GREEN)} {successful_cycles}")
-        
-        print(f"\n{colorize('Usage:', Colors.BRIGHT_YELLOW)}")
-        print(f"  {colorize('/scratch RESPONSE_ID', Colors.BRIGHT_BLUE)} - Show specific interaction scratchpad")
-        print(f"  {colorize('Response IDs are shown in the metrics line after each response', Colors.DIM)}")
-        
-        # Show current cycle if available  
-        if hasattr(self.session, 'current_cycle') and self.session.current_cycle:
-            cycle = self.session.current_cycle
-            print(f"\n{colorize('Current Cycle:', Colors.BRIGHT_YELLOW)}")
-            print(f"    {colorize('ID:', Colors.BRIGHT_BLUE)} {cycle.cycle_id}")
-            print(f"    {colorize('Query:', Colors.WHITE)} {cycle.query[:80]}...")
-            if hasattr(cycle, 'thoughts'):
-                print(f"    {colorize('Thoughts:', Colors.GREEN)} {len(cycle.thoughts)}")
-            if hasattr(cycle, 'actions'):
-                print(f"    {colorize('Actions:', Colors.YELLOW)} {len(cycle.actions)}")
-            if hasattr(cycle, 'observations'):
-                print(f"    {colorize('Observations:', Colors.CYAN)} {len(cycle.observations)}")
+
+        # Sort cycles by creation time (most recent first)
+        sorted_cycles = sorted(
+            react_cycles.items(),
+            key=lambda x: x[1].start_time if hasattr(x[1], 'start_time') else datetime.min,
+            reverse=True
+        )
+
+        print(f"{colorize('Total Scratchpads:', Colors.BRIGHT_GREEN)} {len(react_cycles)}")
+        print(f"{colorize('Click on any ID below to view detailed reasoning traces', Colors.DIM)}")
+        print()
+
+        # Display each scratchpad with rich information
+        for i, (cycle_id, cycle) in enumerate(sorted_cycles):
+            # Format the cycle ID for easy copying
+            short_id = cycle_id.replace('cycle_', '') if cycle_id.startswith('cycle_') else cycle_id
+
+            # Get timestamp
+            if hasattr(cycle, 'start_time') and cycle.start_time:
+                try:
+                    if isinstance(cycle.start_time, str):
+                        timestamp = datetime.fromisoformat(cycle.start_time)
+                    else:
+                        timestamp = cycle.start_time
+                    time_str = timestamp.strftime('%H:%M:%S')
+                    date_str = timestamp.strftime('%Y-%m-%d')
+
+                    # Color code by age
+                    now = datetime.now()
+                    age_hours = (now - timestamp).total_seconds() / 3600
+                    if age_hours < 1:
+                        time_color = Colors.BRIGHT_GREEN  # Recent
+                    elif age_hours < 24:
+                        time_color = Colors.BRIGHT_YELLOW  # Today
+                    else:
+                        time_color = Colors.DIM  # Older
+                except:
+                    time_str = "Unknown"
+                    date_str = ""
+                    time_color = Colors.DIM
+            else:
+                time_str = "Unknown"
+                date_str = ""
+                time_color = Colors.DIM
+
+            # Get query preview
+            query = getattr(cycle, 'query', 'No query available')
+            if len(query) > 60:
+                query_preview = query[:57] + "..."
+            else:
+                query_preview = query
+
+            # Get cycle statistics
+            thoughts_count = len(getattr(cycle, 'thoughts', []))
+            actions_count = len(getattr(cycle, 'actions', []))
+            observations_count = len(getattr(cycle, 'observations', []))
+
+            # Status indicator
+            if hasattr(cycle, 'success') and cycle.success is not None:
+                status_icon = "✅" if cycle.success else "❌"
+                status_color = Colors.BRIGHT_GREEN if cycle.success else Colors.BRIGHT_RED
+            else:
+                status_icon = "🔄"
+                status_color = Colors.BRIGHT_YELLOW
+
+            # Display the scratchpad entry
+            print(f"  {i+1:2d}. {colorize(status_icon, status_color)} {colorize(f'ID: {short_id}', Colors.BRIGHT_BLUE)}")
+            print(f"      {colorize('Time:', Colors.DIM)} {colorize(time_str, time_color)} {colorize(date_str, time_color)}")
+            print(f"      {colorize('Query:', Colors.DIM)} {colorize(query_preview, Colors.WHITE)}")
+
+            # Activity summary with icons
+            activity_parts = []
+            if thoughts_count > 0:
+                activity_parts.append(f"{colorize('💭', Colors.BLUE)} {thoughts_count} thoughts")
+            if actions_count > 0:
+                activity_parts.append(f"{colorize('⚡', Colors.YELLOW)} {actions_count} actions")
+            if observations_count > 0:
+                activity_parts.append(f"{colorize('👁️', Colors.CYAN)} {observations_count} observations")
+
+            if activity_parts:
+                activity_str = " • ".join(activity_parts)
+                print(f"      {colorize('Activity:', Colors.DIM)} {activity_str}")
+            else:
+                print(f"      {colorize('Activity:', Colors.DIM)} {colorize('No reasoning steps recorded', Colors.DIM)}")
+
+            print()  # Spacing between entries
+
+        # Usage instructions
+        print(create_divider(70, "─", Colors.CYAN))
+        print(f"{colorize('💡 Usage Instructions:', Colors.BRIGHT_YELLOW)}")
+        print(f"  {colorize('/scratch <ID>', Colors.BRIGHT_BLUE)} - View detailed reasoning for specific scratchpad")
+        print(f"  {colorize('Example:', Colors.DIM)} /scratch {sorted_cycles[0][1].cycle_id.replace('cycle_', '') if sorted_cycles else 'abc123'}")
+        print(f"  {colorize('Tip:', Colors.DIM)} Copy the ID from the list above and paste it after /scratch")
+
+        # Current cycle information
+        if hasattr(memory, 'current_cycle') and memory.current_cycle:
+            current_cycle = memory.current_cycle
+            current_id = current_cycle.cycle_id.replace('cycle_', '')
+            print(f"\n{colorize('🔄 Current Active Cycle:', Colors.BRIGHT_YELLOW)} {colorize(current_id, Colors.BRIGHT_BLUE)}")
+            print(f"   {colorize('Use /scratch ' + current_id + ' to view current reasoning', Colors.DIM)}")
     
     def _cmd_history(self, args: List[str]) -> None:
         """Show command history."""
