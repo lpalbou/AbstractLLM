@@ -5,6 +5,94 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2025-01-15
+
+### Added
+#### CLI Enhancements
+- **New `/temperature` Command**: Complete temperature control with show/set functionality and range validation (0.0-2.0)
+- **Temperature Alias**: Added `/temp` as shorthand for `/temperature` command
+- **Memory Exploration Commands**: Added `/working` command to inspect working memory contents (recent active items)
+- **Enhanced `/links` Command**: Comprehensive memory links visualization with explanations and statistics
+- **Updated Help System**: Enhanced `/help` documentation with new commands and usage examples
+
+#### Memory System Improvements
+- **Working Memory Inspection**: Users can now view recent active items in working memory with timestamps and importance scores
+- **Memory Links Understanding**: Detailed explanations of how memory components connect and relate to each other
+- **Educational Content**: Rich explanations help users understand AI memory architecture and reasoning processes
+
+#### Parameter Management
+- **Deterministic Generation Fix**: Resolved temperature null issue in Ollama requests caused by None value overwrites
+- **Context Length Control**: Fixed `/mem` command integration with AbstractLLM's MAX_INPUT_TOKENS parameter
+- **User Configuration Priority**: Ollama provider now respects user-configured token limits over model defaults
+
+### Changed
+#### CLI User Experience
+- **Temperature Control**: Automatic temperature adjustment to 0.0 when seed is set for true determinism
+- **Smart Mode Detection**: Temperature ranges automatically categorized (deterministic, focused, balanced, creative)
+- **Memory Display Format**: Context usage now shows clear `<used tokens> / <max tokens>` format with color-coded percentages
+- **Command Documentation**: Improved help text with better categorization and practical examples
+
+#### Memory System Architecture
+- **Enhanced Link Visualization**: Links now include type breakdown, statistics, and educational explanations
+- **Working Memory Display**: Rich formatting with item types, timestamps, importance scores, and capacity usage
+- **Memory Component Integration**: Better separation and explanation of different memory stores
+
+### Fixed
+#### Critical Parameter Issues
+- **Temperature Null Bug**: Fixed Ollama provider ignoring user-set temperature values due to kwargs override issue
+- **Max Tokens Integration**: Resolved `/mem` command not properly setting context limits in Ollama requests
+- **Configuration Preservation**: Prevented None values in kwargs from overwriting existing configuration
+
+#### Memory Access
+- **Working Memory Visibility**: Previously inaccessible working memory contents now fully explorable
+- **Link System Understanding**: Enhanced `/links` command from basic visualization to comprehensive explanation
+- **Memory Navigation**: Complete toolkit for exploring all memory components with clear documentation
+
+#### Session State Management
+- **Deterministic Generation**: Fixed session ID and timestamp randomness affecting reproducibility
+- **Memory Consistency**: Enhanced memory system to use deterministic values when seed is set
+- **Cross-Session Persistence**: Improved memory state consistency across multiple sessions
+
+### Technical Details
+#### Files Modified
+- `abstractllm/utils/commands.py` - Added `/temperature` and `/working` commands, enhanced `/links` and `/help`
+- `abstractllm/providers/ollama.py` - Fixed kwargs None value override issue, added user token limit support
+- `abstractllm/session.py` - Enhanced deterministic mode detection and memory initialization
+- `abstractllm/memory.py` - Added session reference support for deterministic behavior
+
+#### New Features Implementation
+- **Temperature Command**: Complete show/set functionality with validation, mode detection, and educational feedback
+- **Working Memory Command**: Inspection of recent active items with rich formatting and explanations
+- **Enhanced Links Command**: Educational content about memory connections with statistics and type breakdown
+- **Improved Help System**: Updated documentation covering all memory exploration commands
+
+#### Bug Fixes Applied
+- **Parameter Override Protection**: Filter None values from kwargs before updating configuration
+- **Context Length Handling**: Check user-configured MAX_INPUT_TOKENS before falling back to model defaults
+- **Memory State Determinism**: Use session reference to detect deterministic mode for consistent IDs and timestamps
+
+### Usage Examples
+```bash
+# New temperature control
+alma> /temperature 0.3
+alma> /temp  # Show current temperature
+
+# Memory exploration
+alma> /working  # View recent active items
+alma> /links    # Understand memory connections
+alma> /mem 16384  # Set context limit (now works correctly)
+
+# Deterministic generation (now fully working)
+alma> /seed 123  # Automatically sets temperature to 0.0
+alma> /temperature 0.5  # Can adjust independently
+```
+
+### Migration Notes
+- All new commands are additive - no breaking changes to existing functionality
+- Temperature and memory commands work across all providers
+- Enhanced help system provides comprehensive documentation for memory exploration
+- Previous memory exploration limitations now resolved with new `/working` command
+
 ## [1.0.3] - 2025-09-14
 
 ### Added

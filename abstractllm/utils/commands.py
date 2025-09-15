@@ -38,6 +38,7 @@ class CommandProcessor:
             'export': self._cmd_export,
             'import': self._cmd_import,
             'facts': self._cmd_facts,
+            'working': self._cmd_working,
             'links': self._cmd_links,
             'scratchpad': self._cmd_scratchpad,
             'scratch': self._cmd_scratchpad,
@@ -49,6 +50,9 @@ class CommandProcessor:
             'stats': self._cmd_stats,
             'config': self._cmd_config,
             'context': self._cmd_context,
+            'seed': self._cmd_seed,
+            'temperature': self._cmd_temperature,
+            'temp': self._cmd_temperature,
             'exit': self._cmd_exit,
             'quit': self._cmd_exit,
             'q': self._cmd_exit,
@@ -109,13 +113,16 @@ class CommandProcessor:
                 ("/export <file>", "Export memory to JSON"),
                 ("/import <file>", "Import memory from JSON"),
                 ("/facts [query]", "Show extracted facts"),
-                ("/links", "Visualize memory links"),
+                ("/working", "Show working memory contents (recent active items)"),
+                ("/links", "Visualize memory links between components"),
                 ("/scratchpad, /scratch", "Show reasoning traces")
             ]),
             ("Session Control", [
                 ("/history", "Show command history"),
                 ("/last [count]", "Replay conversation messages"),
                 ("/context", "Show full context sent to LLM"),
+                ("/seed [number|random]", "Set/show random seed for deterministic generation"),
+                ("/temperature, /temp", "Set/show temperature for generation randomness"),
                 ("/clear", "Clear conversation history"),
                 ("/reset", "Reset entire session"),
                 ("/status", "Show session status"),
@@ -137,9 +144,14 @@ class CommandProcessor:
         examples = [
             "/save my_session.pkl",
             "/load my_session.pkl",
+            "/memory 16384",
+            "/temperature 0.3",
+            "/working",
+            "/facts machine learning",
+            "/links",
+            "/seed 42",
             "/last 3",
             "/context",
-            "/facts machine learning",
             "/export memory_backup.json"
         ]
         for example in examples:
@@ -190,49 +202,68 @@ class CommandProcessor:
         from abstractllm.utils.context_logging import get_context_logger
         logger = get_context_logger()
 
-        # Get last context size
+        # Get context usage and limits
+        used_tokens = 0
+        max_tokens = "Unknown"
+
+        # Calculate used tokens from last context
         if logger.last_context:
-            # Calculate sizes
             context_str = json.dumps(logger.last_context, ensure_ascii=False)
             char_count = len(context_str)
             # Estimate tokens (roughly 4 chars per token)
-            token_count = char_count // 4
+            used_tokens = char_count // 4
 
-            print(f"  {colorize('Last Context Size:', Colors.BRIGHT_CYAN)}")
-            print(f"    • Characters: {colorize(f'{char_count:,}', Colors.WHITE)}")
-            print(f"    • Tokens (est): {colorize(f'{token_count:,}', Colors.WHITE)}")
-
-        # Get model capabilities for max tokens
+        # Get configured or model max tokens
         if hasattr(self.session, '_provider') and self.session._provider:
             provider = self.session._provider
             model_name = None
-            max_input_tokens = None
+            user_max_tokens = None
 
-            # Get model name
+            # Get model name and user configuration
             if hasattr(provider, 'config_manager'):
                 from abstractllm.interface import ModelParameter
                 model_name = provider.config_manager.get_param(ModelParameter.MODEL)
-                max_input_tokens = provider.config_manager.get_param(ModelParameter.MAX_INPUT_TOKENS)
+                user_max_tokens = provider.config_manager.get_param(ModelParameter.MAX_INPUT_TOKENS)
 
-            # Get capabilities from model_capabilities.json
+            # Determine the actual max tokens being used
+            if user_max_tokens:
+                max_tokens = user_max_tokens
+                source = "user-configured"
+            elif model_name:
+                try:
+                    from abstractllm.architectures.detection import get_model_capabilities
+                    capabilities = get_model_capabilities(model_name)
+                    if capabilities:
+                        context_length = capabilities.get('context_length')
+                        if context_length and isinstance(context_length, int):
+                            max_tokens = context_length
+                            source = "model default"
+                except Exception:
+                    pass
+
+            # Display context usage in the requested format
+            print(f"  {colorize('Context Usage:', Colors.BRIGHT_CYAN)}")
+            if isinstance(max_tokens, int):
+                usage_ratio = (used_tokens / max_tokens) * 100 if max_tokens > 0 else 0
+                usage_color = Colors.GREEN if usage_ratio < 50 else Colors.YELLOW if usage_ratio < 80 else Colors.RED
+                print(f"    • Tokens: {colorize(f'{used_tokens:,}', Colors.WHITE)} / {colorize(f'{max_tokens:,}', Colors.WHITE)} ({colorize(f'{usage_ratio:.1f}%', usage_color)})")
+                print(f"    • Source: {colorize(source, Colors.DIM)}")
+            else:
+                print(f"    • Tokens: {colorize(f'{used_tokens:,}', Colors.WHITE)} / {colorize(str(max_tokens), Colors.DIM)}")
+
+            # Show max output tokens if available
             if model_name:
                 try:
                     from abstractllm.architectures.detection import get_model_capabilities
                     capabilities = get_model_capabilities(model_name)
                     if capabilities:
-                        context_length = capabilities.get('context_length', 'Unknown')
                         max_output = capabilities.get('max_output_tokens', 'Unknown')
-
-                        print(f"  {colorize('Model Limits:', Colors.BRIGHT_MAGENTA)}")
-                        print(f"    • Context Length: {colorize(f'{context_length:,}' if isinstance(context_length, int) else context_length, Colors.WHITE)}")
-                        print(f"    • Max Output: {colorize(f'{max_output:,}' if isinstance(max_output, int) else max_output, Colors.WHITE)}")
-
-                        # Show configured max if different from model default
-                        if max_input_tokens and max_input_tokens != context_length:
-                            print(f"    • Configured Max: {colorize(f'{max_input_tokens:,}', Colors.BRIGHT_YELLOW)} (use /memory <number> to change)")
-                except Exception as e:
-                    # Silently skip if capabilities can't be loaded
+                        if max_output != 'Unknown':
+                            print(f"    • Max Output: {colorize(f'{max_output:,}' if isinstance(max_output, int) else max_output, Colors.WHITE)}")
+                except Exception:
                     pass
+
+            print(f"    • {colorize('Change limit:', Colors.DIM)} /mem <number>")
 
         print()  # Add spacing
 
@@ -782,20 +813,123 @@ class CommandProcessor:
         # Show total count (removed artificial limit)
         if displayed > 0:
             print(f"\n{colorize(f'Total: {displayed} facts displayed', Colors.DIM, italic=True)}")
-    
-    def _cmd_links(self, args: List[str]) -> None:
-        """Visualize memory links."""
+
+    def _cmd_working(self, args: List[str]) -> None:
+        """Show working memory contents (most recent, active items)."""
         if not hasattr(self.session, 'memory') or not self.session.memory:
             display_error("Memory system not available")
             return
-        
+
+        memory = self.session.memory
+        working_items = memory.working_memory
+
+        print(f"\n{colorize(f'{Symbols.BRAIN} Working Memory Contents', Colors.BRIGHT_CYAN, bold=True)}")
+        print(create_divider(60, "─", Colors.CYAN))
+
+        if not working_items:
+            display_info("Working memory is empty")
+            return
+
+        print(f"{colorize('Most recent active items:', Colors.BRIGHT_YELLOW)}")
+        print(f"{colorize(f'Capacity: {len(working_items)}/{memory.working_memory_size} items', Colors.DIM)}")
+        print()
+
+        # Sort by timestamp (most recent first)
+        sorted_items = sorted(working_items, key=lambda x: x.get('timestamp', ''), reverse=True)
+
+        for i, item in enumerate(sorted_items):
+            # Format timestamp
+            timestamp = item.get('timestamp', 'Unknown')
+            if timestamp != 'Unknown':
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(timestamp)
+                    timestamp = dt.strftime('%H:%M:%S')
+                except:
+                    timestamp = timestamp[:19] if len(timestamp) > 19 else timestamp
+
+            # Get item type and content
+            item_type = item.get('type', 'item')
+            content = item.get('content', str(item))
+
+            # Truncate long content
+            if len(content) > 100:
+                content = content[:97] + "..."
+
+            # Color code by type
+            type_colors = {
+                'message': Colors.BRIGHT_GREEN,
+                'thought': Colors.BRIGHT_BLUE,
+                'action': Colors.BRIGHT_YELLOW,
+                'observation': Colors.BRIGHT_CYAN,
+                'consolidation': Colors.BRIGHT_MAGENTA
+            }
+            type_color = type_colors.get(item_type, Colors.WHITE)
+
+            # Display item
+            print(f"  {i+1}. {colorize(f'[{item_type.upper()}]', type_color)} "
+                  f"{colorize(timestamp, Colors.DIM)} - {content}")
+
+            # Show importance if available
+            importance = item.get('importance')
+            if importance is not None:
+                importance_color = Colors.BRIGHT_GREEN if importance > 0.7 else Colors.BRIGHT_YELLOW if importance > 0.4 else Colors.DIM
+                print(f"     {colorize(f'Importance: {importance:.1f}', importance_color)}")
+
+        print(f"\n{colorize('💡 Tip:', Colors.BRIGHT_YELLOW)} Working memory stores the most recent active items")
+        print(f"{colorize('Items are automatically moved to episodic memory when capacity is exceeded', Colors.DIM)}")
+
+    def _cmd_links(self, args: List[str]) -> None:
+        """Visualize memory links between different memory components."""
+        if not hasattr(self.session, 'memory') or not self.session.memory:
+            display_error("Memory system not available")
+            return
+
+        memory = self.session.memory
+
+        print(f"\n{colorize(f'{Symbols.LINK} Memory Links System', Colors.BRIGHT_MAGENTA, bold=True)}")
+        print(create_divider(60, "─", Colors.MAGENTA))
+
+        # Explain what links are
+        print(f"{colorize('What are Memory Links?', Colors.BRIGHT_YELLOW)}")
+        print(f"Memory links connect related items across different memory stores:")
+        print(f"• {colorize('Facts ↔ Working Memory', Colors.BRIGHT_CYAN)} - Facts referenced in recent conversations")
+        print(f"• {colorize('ReAct Cycles ↔ Facts', Colors.BRIGHT_BLUE)} - Knowledge used during reasoning")
+        print(f"• {colorize('Chat Messages ↔ Facts', Colors.BRIGHT_GREEN)} - Facts extracted from messages")
+        print(f"• {colorize('Cross-references', Colors.BRIGHT_WHITE)} - Related concepts and themes")
+
+        # Get link statistics
+        total_links = len(memory.links)
+        if total_links == 0:
+            print(f"\n{colorize('Status:', Colors.BRIGHT_YELLOW)} No memory links created yet")
+            print(f"{colorize('Links are created automatically as you have conversations and the system learns connections', Colors.DIM)}")
+            return
+
+        print(f"\n{colorize(f'Current Links: {total_links} active connections', Colors.BRIGHT_CYAN)}")
+
+        # Show link breakdown by type
+        link_types = {}
+        for link in memory.links:
+            link_type = f"{link.source_type.value} → {link.target_type.value}"
+            link_types[link_type] = link_types.get(link_type, 0) + 1
+
+        if link_types:
+            print(f"\n{colorize('Link Types:', Colors.BRIGHT_YELLOW)}")
+            for link_type, count in sorted(link_types.items(), key=lambda x: x[1], reverse=True):
+                print(f"  • {colorize(link_type, Colors.BRIGHT_WHITE)}: {colorize(str(count), Colors.BRIGHT_CYAN)} connections")
+
+        # Show visualization
         visualization = self.session.visualize_memory_links()
         if visualization:
-            print(f"\n{colorize(f'{Symbols.LINK} Memory Link Visualization', Colors.BRIGHT_MAGENTA, bold=True)}")
-            print(create_divider(60, "─", Colors.MAGENTA))
+            print(f"\n{colorize('Link Visualization:', Colors.BRIGHT_YELLOW)}")
             print(visualization)
-        else:
-            display_info("No memory links to visualize")
+
+        # Usage tips
+        print(f"\n{colorize('💡 Usage Tips:', Colors.BRIGHT_YELLOW)}")
+        print(f"• Links help the AI remember context and make connections")
+        print(f"• Stronger links (more ●) indicate more important relationships")
+        print(f"• Links are created automatically based on conversation patterns")
+        print(f"• Use {colorize('/facts', Colors.BRIGHT_BLUE)} to see the knowledge these links connect")
     
     def _cmd_scratchpad(self, args: List[str]) -> None:
         """Show reasoning traces for a specific interaction or all interactions."""
@@ -1147,6 +1281,109 @@ class CommandProcessor:
             print(context)
         else:
             display_info("No context has been sent to the LLM yet in this session")
+
+    def _cmd_seed(self, args: List[str]) -> None:
+        """Show or set random seed for deterministic generation."""
+        from abstractllm.interface import ModelParameter
+
+        if not args:
+            # Show current seed
+            current_seed = self.session._provider.config_manager.get_param(ModelParameter.SEED)
+            if current_seed is not None:
+                print(f"{colorize('🎲 Current seed:', Colors.BRIGHT_CYAN)} {colorize(str(current_seed), Colors.WHITE)}")
+                print(f"{colorize('Mode:', Colors.DIM)} Deterministic generation")
+            else:
+                print(f"{colorize('🎲 Current seed:', Colors.BRIGHT_CYAN)} {colorize('None (random)', Colors.WHITE)}")
+                print(f"{colorize('Mode:', Colors.DIM)} Random generation")
+            return
+
+        seed_arg = args[0].lower()
+
+        if seed_arg in ["random", "none", "null", "off"]:
+            # Disable seed (random generation) and restore original temperature
+            self.session._provider.config_manager.update_config({
+                ModelParameter.SEED: None,
+                ModelParameter.TEMPERATURE: 0.7  # Restore CLI default
+            })
+            display_success(f"🎲 Seed disabled - switched to random generation")
+            print(f"{colorize('🔧 Restored:', Colors.BRIGHT_CYAN)} Temperature reset to 0.7 (CLI default)")
+        else:
+            # Set specific seed
+            try:
+                seed_value = int(seed_arg)
+
+                # Get current temperature to check if it's too high for determinism
+                current_temp = self.session._provider.config_manager.get_param(ModelParameter.TEMPERATURE)
+
+                # Set seed
+                self.session._provider.config_manager.update_config({ModelParameter.SEED: seed_value})
+
+                # For true determinism, also set temperature to 0
+                if current_temp is None or current_temp > 0.1:
+                    self.session._provider.config_manager.update_config({ModelParameter.TEMPERATURE: 0.0})
+                    display_success(f"🎲 Seed set to {seed_value} and temperature set to 0.0 for deterministic generation")
+                    print(f"{colorize('🔧 Auto-adjustment:', Colors.BRIGHT_CYAN)} Temperature changed from {current_temp} to 0.0 for true determinism")
+                else:
+                    display_success(f"🎲 Seed set to {seed_value} - deterministic generation enabled")
+
+                # Show tips about deterministic generation
+                print(f"{colorize('💡 Tip:', Colors.BRIGHT_YELLOW)} With seed={seed_value} + temperature=0.0, identical prompts will produce identical outputs")
+                print(f"{colorize('📝 Note:', Colors.DIM)} Use '/seed random' to restore random generation and original temperature")
+            except ValueError:
+                display_error(f"Invalid seed value: '{args[0]}'. Use a number or 'random'")
+                print(f"{colorize('Usage:', Colors.DIM)} /seed 42, /seed random")
+
+    def _cmd_temperature(self, args: List[str]) -> None:
+        """Show or set temperature for generation randomness."""
+        from abstractllm.interface import ModelParameter
+
+        if not args:
+            # Show current temperature
+            current_temp = self.session._provider.config_manager.get_param(ModelParameter.TEMPERATURE)
+            if current_temp is not None:
+                print(f"{colorize('🌡️ Current temperature:', Colors.BRIGHT_CYAN)} {colorize(str(current_temp), Colors.WHITE)}")
+                if current_temp == 0.0:
+                    print(f"{colorize('Mode:', Colors.DIM)} Deterministic generation (no randomness)")
+                elif current_temp < 0.3:
+                    print(f"{colorize('Mode:', Colors.DIM)} Low randomness (focused)")
+                elif current_temp < 0.7:
+                    print(f"{colorize('Mode:', Colors.DIM)} Medium randomness (balanced)")
+                else:
+                    print(f"{colorize('Mode:', Colors.DIM)} High randomness (creative)")
+            else:
+                print(f"{colorize('🌡️ Current temperature:', Colors.BRIGHT_CYAN)} {colorize('Not set (using provider default)', Colors.WHITE)}")
+            return
+
+        # Set temperature
+        try:
+            temp_value = float(args[0])
+
+            # Validate temperature range
+            if temp_value < 0.0 or temp_value > 2.0:
+                display_error(f"Temperature must be between 0.0 and 2.0, got {temp_value}")
+                print(f"{colorize('Valid range:', Colors.DIM)} 0.0 (deterministic) to 2.0 (very creative)")
+                return
+
+            # Update temperature
+            self.session._provider.config_manager.update_config({ModelParameter.TEMPERATURE: temp_value})
+
+            # Provide feedback about the change
+            if temp_value == 0.0:
+                display_success(f"🌡️ Temperature set to {temp_value} - deterministic generation")
+                print(f"{colorize('💡 Tip:', Colors.BRIGHT_YELLOW)} Use with /seed for fully reproducible outputs")
+            elif temp_value < 0.3:
+                display_success(f"🌡️ Temperature set to {temp_value} - low randomness (focused responses)")
+            elif temp_value < 0.7:
+                display_success(f"🌡️ Temperature set to {temp_value} - medium randomness (balanced)")
+            else:
+                display_success(f"🌡️ Temperature set to {temp_value} - high randomness (creative responses)")
+
+            print(f"{colorize('📝 Note:', Colors.DIM)} Higher values = more creative but less predictable")
+
+        except ValueError:
+            display_error(f"Invalid temperature value: '{args[0]}'. Use a decimal number")
+            print(f"{colorize('Usage:', Colors.DIM)} /temperature 0.7, /temperature 0.0 (deterministic)")
+            print(f"{colorize('Examples:', Colors.DIM)} 0.0=deterministic, 0.3=focused, 0.7=balanced, 1.0=creative")
 
     def _cmd_exit(self, args: List[str]) -> None:
         """Exit interactive mode."""

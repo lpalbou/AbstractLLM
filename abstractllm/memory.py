@@ -644,19 +644,21 @@ class HierarchicalMemory:
     Inspired by A-Mem, RAISE, and MemGPT architectures with enhancements.
     """
     
-    def __init__(self, 
+    def __init__(self,
                  working_memory_size: int = 10,
                  episodic_consolidation_threshold: int = 5,
                  persist_path: Optional[Path] = None,
-                 enable_cross_session_persistence: bool = True):
+                 enable_cross_session_persistence: bool = True,
+                 session: Optional[Any] = None):
         """
         Initialize the hierarchical memory system.
-        
+
         Args:
             working_memory_size: Max items in working memory before consolidation
             episodic_consolidation_threshold: When to move items to episodic memory
             persist_path: Path for persistent storage across sessions
             enable_cross_session_persistence: Whether to enable cross-session knowledge
+            session: Optional session reference for deterministic mode detection
         """
         # Memory stores
         self.working_memory: List[Dict[str, Any]] = []  # Most recent, active items
@@ -679,10 +681,23 @@ class HierarchicalMemory:
         self.episodic_consolidation_threshold = episodic_consolidation_threshold
         self.persist_path = Path(persist_path) if persist_path else None
         self.enable_cross_session_persistence = enable_cross_session_persistence
-        
-        # Session metadata
-        self.session_id = f"session_{uuid.uuid4().hex[:8]}"
-        self.session_start = datetime.now()
+
+        # Store session reference for deterministic mode detection
+        self._session = session
+
+        # Session metadata - use deterministic values if in deterministic mode
+        if self._is_deterministic_mode():
+            # Generate deterministic session ID based on seed
+            seed = self._get_current_seed()
+            import hashlib
+            seed_str = str(seed) if seed is not None else "default"
+            self.session_id = hashlib.md5(f"memory_{seed_str}".encode()).hexdigest()[:16]
+            # Use fixed timestamp for deterministic generation
+            self.session_start = datetime.fromtimestamp(1609459200)  # 2021-01-01 00:00:00 UTC
+        else:
+            # Use random values for normal operation
+            self.session_id = f"session_{uuid.uuid4().hex[:8]}"
+            self.session_start = datetime.now()
         self.total_queries = 0
         self.successful_queries = 0
         
@@ -695,7 +710,28 @@ class HierarchicalMemory:
             self._load_cross_session_knowledge()
         elif self.persist_path and self.persist_path.exists():
             self.load_from_disk()
-    
+
+    def _is_deterministic_mode(self) -> bool:
+        """Check if the session is in deterministic mode (seed is set)."""
+        if not self._session or not hasattr(self._session, '_provider') or not self._session._provider:
+            return False
+        try:
+            from abstractllm.interface import ModelParameter
+            seed = self._session._provider.config_manager.get_param(ModelParameter.SEED)
+            return seed is not None
+        except:
+            return False
+
+    def _get_current_seed(self) -> Optional[int]:
+        """Get the current seed value if set."""
+        if not self._session or not hasattr(self._session, '_provider') or not self._session._provider:
+            return None
+        try:
+            from abstractllm.interface import ModelParameter
+            return self._session._provider.config_manager.get_param(ModelParameter.SEED)
+        except:
+            return None
+
     # ========== CORE MEMORY OPERATIONS ==========
     
     def start_react_cycle(self, query: str, max_iterations: int = 10) -> ReActCycle:
@@ -707,24 +743,53 @@ class HierarchicalMemory:
         
         # Create new cycle
         cycle = ReActCycle(query=query, max_iterations=max_iterations)
+
+        # Override cycle ID for deterministic generation
+        if self._is_deterministic_mode():
+            seed = self._get_current_seed()
+            import hashlib
+            seed_str = str(seed) if seed is not None else "default"
+            # Use total_queries for uniqueness within same session
+            deterministic_id = hashlib.md5(f"cycle_{seed_str}_{self.total_queries}".encode()).hexdigest()[:8]
+            cycle.cycle_id = f"cycle_{deterministic_id}"
+
         self.current_cycle = cycle
         self.react_cycles[cycle.cycle_id] = cycle
         self.total_queries += 1
-        
+
         logger.info(f"Started ReAct cycle {cycle.cycle_id} for query: {query[:100]}")
         return cycle
     
-    def add_chat_message(self, role: str, content: str, 
+    def add_chat_message(self, role: str, content: str,
                         cycle_id: Optional[str] = None,
                         metadata: Optional[Dict[str, Any]] = None) -> str:
         """Add a chat message with enhanced tracking and fact extraction."""
-        message_id = f"msg_{uuid.uuid4().hex[:8]}"
+        # Generate deterministic message ID if in deterministic mode
+        if self._is_deterministic_mode():
+            seed = self._get_current_seed()
+            import hashlib
+            seed_str = str(seed) if seed is not None else "default"
+            # Use message count for uniqueness
+            message_count = len(self.chat_history)
+            deterministic_id = hashlib.md5(f"msg_{seed_str}_{message_count}".encode()).hexdigest()[:8]
+            message_id = f"msg_{deterministic_id}"
+        else:
+            message_id = f"msg_{uuid.uuid4().hex[:8]}"
         
+        # Generate deterministic timestamp if in deterministic mode
+        if self._is_deterministic_mode():
+            # Use session start time + message count for deterministic timestamps
+            message_count = len(self.chat_history)
+            deterministic_timestamp = self.session_start + timedelta(seconds=message_count)
+            timestamp = deterministic_timestamp.isoformat()
+        else:
+            timestamp = datetime.now().isoformat()
+
         message = {
             "id": message_id,
             "role": role,
             "content": content,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": timestamp,
             "cycle_id": cycle_id,
             "session_id": self.session_id,
             "fact_ids": [],  # Will be populated by fact extraction
@@ -959,10 +1024,12 @@ class HierarchicalMemory:
         def estimate_tokens(text: str) -> int:
             return len(text.split()) * 1.3  # Rough token estimation
         
-        # Add session context
-        session_info = f"Session: {self.session_id} (Started: {self.session_start.strftime('%Y-%m-%d %H:%M')})"
-        context_parts.append(session_info)
-        estimated_tokens += estimate_tokens(session_info)
+        # Add session context (skip for deterministic generation to avoid random IDs)
+        if not self._is_deterministic_mode():
+            # Only add session info if not in deterministic mode
+            session_info = f"Session: {self.session_id} (Started: {self.session_start.strftime('%Y-%m-%d %H:%M')})"
+            context_parts.append(session_info)
+            estimated_tokens += estimate_tokens(session_info)
         
         # Add recent working memory (most relevant)
         if self.working_memory:
@@ -978,7 +1045,11 @@ class HierarchicalMemory:
         
         # Add current ReAct cycle reasoning if available
         if include_reasoning and self.current_cycle and estimated_tokens < max_tokens * 0.4:
-            reasoning_section = [f"\\n--- Current Reasoning (Cycle {self.current_cycle.cycle_id}) ---"]
+            # Use generic label in deterministic mode instead of random cycle ID
+            if self._is_deterministic_mode():
+                reasoning_section = [f"\\n--- Current Reasoning ---"]
+            else:
+                reasoning_section = [f"\\n--- Current Reasoning (Cycle {self.current_cycle.cycle_id}) ---"]
             
             # Add recent thoughts
             if self.current_cycle.thoughts:

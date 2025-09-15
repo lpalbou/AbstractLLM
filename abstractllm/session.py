@@ -328,25 +328,7 @@ class Session:
         Raises:
             ValueError: If tools are provided but tool support is not available
         """
-        # Core session initialization
-        self.messages: List[Message] = []
-        self.system_prompt = system_prompt
-        self.metadata = metadata or {}
-        self.id = str(uuid.uuid4())
-        self.created_at = datetime.now()
-        self.last_updated = self.created_at
-        self.tools: List["ToolDefinition"] = []
-        
-        # Store the original function implementations for tools
-        self._tool_implementations: Dict[str, Callable[..., Any]] = {}
-        
-        # Track last assistant message index for tool results
-        self._last_assistant_idx = -1
-        
-        # Store max_tool_calls configuration
-        self.max_tool_calls = max_tool_calls
-        
-        # Initialize the provider if specified
+        # Initialize the provider first so we can check for deterministic mode
         self._provider: Optional[AbstractLLMInterface] = None
         if provider is not None:
             if isinstance(provider, str):
@@ -354,6 +336,37 @@ class Session:
                 self._provider = create_llm(provider, **(provider_config or {}))
             else:
                 self._provider = provider
+
+        # Core session initialization - use deterministic values if seed is set
+        self.messages: List[Message] = []
+        self.system_prompt = system_prompt
+        self.metadata = metadata or {}
+
+        # Use deterministic values if seed is set
+        if self._is_deterministic_mode():
+            # Generate deterministic session ID based on seed
+            seed = self._get_current_seed()
+            import hashlib
+            seed_str = str(seed) if seed is not None else "default"
+            self.id = hashlib.md5(f"session_{seed_str}".encode()).hexdigest()
+            # Use fixed timestamp for deterministic generation
+            self.created_at = datetime.fromtimestamp(1609459200)  # 2021-01-01 00:00:00 UTC
+        else:
+            # Use random values for normal operation
+            self.id = str(uuid.uuid4())
+            self.created_at = datetime.now()
+
+        self.last_updated = self.created_at
+        self.tools: List["ToolDefinition"] = []
+
+        # Store the original function implementations for tools
+        self._tool_implementations: Dict[str, Callable[..., Any]] = {}
+
+        # Track last assistant message index for tool results
+        self._last_assistant_idx = -1
+
+        # Store max_tool_calls configuration
+        self.max_tool_calls = max_tool_calls
         
         # Add system message if provided
         if system_prompt:
@@ -379,7 +392,8 @@ class Session:
                 self.memory = HierarchicalMemory(
                     working_memory_size=memory_cfg.get('working_memory_size', 10),
                     episodic_consolidation_threshold=memory_cfg.get('consolidation_threshold', 5),
-                    persist_path=persist_memory
+                    persist_path=persist_memory,
+                    session=self
                 )
                 logger.debug("Hierarchical memory initialized")
             except Exception as e:
@@ -415,7 +429,7 @@ class Session:
         if SOTA_FEATURES_AVAILABLE and persist_memory:
             try:
                 memory_folder = persist_memory.parent if persist_memory else Path("./memory")
-                session_id = self.memory.session_id if self.memory else f"session_{uuid.uuid4().hex[:8]}"
+                session_id = self.memory.session_id if self.memory else f"session_{self.id[:8]}"
                 self.scratchpad = get_scratchpad_manager(session_id, memory_folder)
                 logger.debug("Scratchpad manager initialized")
             except Exception as e:
@@ -423,7 +437,26 @@ class Session:
                 self.scratchpad = None
         else:
             self.scratchpad = None
-    
+
+    def _is_deterministic_mode(self) -> bool:
+        """Check if the session is in deterministic mode (seed is set)."""
+        if not self._provider:
+            return False
+        try:
+            seed = self._provider.config_manager.get_param(ModelParameter.SEED)
+            return seed is not None
+        except:
+            return False
+
+    def _get_current_seed(self) -> Optional[int]:
+        """Get the current seed value if set."""
+        if not self._provider:
+            return None
+        try:
+            return self._provider.config_manager.get_param(ModelParameter.SEED)
+        except:
+            return None
+
     @property
     def provider(self) -> Optional[AbstractLLMInterface]:
         """Get the current provider instance."""

@@ -223,17 +223,24 @@ class OllamaProvider(BaseProvider):
         Returns:
             Dictionary of request data for the chat API endpoint
         """
-        # Get context length for the model
-        from abstractllm.architectures.detection import get_context_length
-        context_length = get_context_length(model)
-        
+        # Check for user-configured max input tokens first
+        user_max_tokens = self.config_manager.get_param(ModelParameter.MAX_INPUT_TOKENS)
+
+        if user_max_tokens:
+            # User has set a specific context limit
+            context_length = user_max_tokens
+            logger.info(f"Using user-configured context size: {context_length:,} tokens for {model}")
+        else:
+            # Fall back to model's default context length
+            from abstractllm.architectures.detection import get_context_length
+            context_length = get_context_length(model)
+            logger.info(f"Using model default context size: {context_length:,} tokens for {model}")
+
         # Apply reasonable maximum to prevent memory issues
         MAX_SAFE_CONTEXT = 1_000_000  # 1M tokens max
         if context_length > MAX_SAFE_CONTEXT:
-            logger.warning(f"Model {model} reports context length of {context_length:,} tokens, capping at {MAX_SAFE_CONTEXT:,} for safety")
+            logger.warning(f"Context length of {context_length:,} tokens exceeds safe limit, capping at {MAX_SAFE_CONTEXT:,}")
             context_length = MAX_SAFE_CONTEXT
-        
-        logger.info(f"Setting context size to {context_length:,} tokens for {model}")
         
         # Base request structure
         request_data = {
@@ -245,6 +252,12 @@ class OllamaProvider(BaseProvider):
                 "num_ctx": context_length  # Set context size to model's full capacity
             }
         }
+
+        # Add seed for deterministic generation if specified
+        seed = self.config_manager.get_param(ModelParameter.SEED)
+        if seed is not None:
+            request_data["options"]["seed"] = seed
+            logger.info(f"Set Ollama seed to {seed} for deterministic generation")
         
         # Prepare messages
         if provided_messages:
@@ -383,17 +396,24 @@ class OllamaProvider(BaseProvider):
         Returns:
             Dictionary of request data for the generate API endpoint
         """
-        # Get context length for the model
-        from abstractllm.architectures.detection import get_context_length
-        context_length = get_context_length(model)
-        
+        # Check for user-configured max input tokens first
+        user_max_tokens = self.config_manager.get_param(ModelParameter.MAX_INPUT_TOKENS)
+
+        if user_max_tokens:
+            # User has set a specific context limit
+            context_length = user_max_tokens
+            logger.info(f"Using user-configured context size: {context_length:,} tokens for {model}")
+        else:
+            # Fall back to model's default context length
+            from abstractllm.architectures.detection import get_context_length
+            context_length = get_context_length(model)
+            logger.info(f"Using model default context size: {context_length:,} tokens for {model}")
+
         # Apply reasonable maximum to prevent memory issues
         MAX_SAFE_CONTEXT = 1_000_000  # 1M tokens max
         if context_length > MAX_SAFE_CONTEXT:
-            logger.warning(f"Model {model} reports context length of {context_length:,} tokens, capping at {MAX_SAFE_CONTEXT:,} for safety")
+            logger.warning(f"Context length of {context_length:,} tokens exceeds safe limit, capping at {MAX_SAFE_CONTEXT:,}")
             context_length = MAX_SAFE_CONTEXT
-        
-        logger.info(f"Setting context size to {context_length:,} tokens for {model}")
         
         # Base request structure
         request_data = {
@@ -405,6 +425,12 @@ class OllamaProvider(BaseProvider):
                 "num_ctx": context_length  # Set context size to model's full capacity
             }
         }
+
+        # Add seed for deterministic generation if specified
+        seed = self.config_manager.get_param(ModelParameter.SEED)
+        if seed is not None:
+            request_data["options"]["seed"] = seed
+            logger.info(f"Set Ollama seed to {seed} for deterministic generation")
         
         # Add system prompt if provided
         if system_prompt:
@@ -458,9 +484,12 @@ class OllamaProvider(BaseProvider):
         # Extract messages if provided (for conversation history)
         messages = kwargs.pop('messages', None)
         
-        # Update config with any remaining kwargs
+        # Update config with any remaining kwargs (filter out None values)
         if kwargs:
-            self.config_manager.update_config(kwargs)
+            # Filter out None values to avoid overriding existing config
+            filtered_kwargs = {k: v for k, v in kwargs.items() if v is not None}
+            if filtered_kwargs:
+                self.config_manager.update_config(filtered_kwargs)
         
         # Track timing for metrics
         start_time = time.time()
@@ -883,9 +912,12 @@ class OllamaProvider(BaseProvider):
         # Extract messages if provided (for conversation history)
         messages = kwargs.pop('messages', None)
         
-        # Update config with any remaining kwargs
+        # Update config with any remaining kwargs (filter out None values)
         if kwargs:
-            self.config_manager.update_config(kwargs)
+            # Filter out None values to avoid overriding existing config
+            filtered_kwargs = {k: v for k, v in kwargs.items() if v is not None}
+            if filtered_kwargs:
+                self.config_manager.update_config(filtered_kwargs)
         
         # Track timing for metrics
         start_time = time.time()

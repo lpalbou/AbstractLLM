@@ -1180,6 +1180,12 @@ class MLXProvider(BaseProvider):
 #            print(f"📊 Length: {len(formatted_prompt)} characters")
 #            print("="*80 + "\n")
             
+            # Set seed for deterministic generation (similar to ForgeLLM approach)
+            seed = self.config_manager.get_param(ModelParameter.SEED)
+            if seed is not None:
+                mx.random.seed(seed)
+                logger.info(f"Set MLX random seed to {seed} for deterministic generation")
+
             # Generate with MLX
             generate_kwargs = {
                 "model": self._model,
@@ -1423,7 +1429,13 @@ class MLXProvider(BaseProvider):
             print("="*80)
             print(f"📊 Length: {len(formatted_prompt)} characters")
             print("="*80 + "\n")
-            
+
+            # Set seed for deterministic generation (similar to ForgeLLM approach)
+            seed = self.config_manager.get_param(ModelParameter.SEED)
+            if seed is not None:
+                mx.random.seed(seed)
+                logger.info(f"Set MLX random seed to {seed} for deterministic generation")
+
             # Stream tokens from the model using stream_generate
             stream_kwargs = {
                 "model": self._model,
