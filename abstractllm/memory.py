@@ -1026,8 +1026,11 @@ class HierarchicalMemory:
         
         # Add session context (skip for deterministic generation to avoid random IDs)
         if not self._is_deterministic_mode():
-            # Only add session info if not in deterministic mode
-            session_info = f"Session: {self.session_id} (Started: {self.session_start.strftime('%Y-%m-%d %H:%M')})"
+            # Use current timestamp instead of session start for temporal anchoring
+            current_time = datetime.now()
+            # Strip "session_" prefix to save tokens, use concise date format
+            display_session_id = self.session_id.replace("session_", "")
+            session_info = f"Session: {display_session_id}, {current_time.strftime('%Y/%m/%d %H:%M')}"
             context_parts.append(session_info)
             estimated_tokens += estimate_tokens(session_info)
         
@@ -1036,9 +1039,20 @@ class HierarchicalMemory:
             working_section = ["\\n--- Recent Context ---"]
             for item in self.working_memory[-3:]:  # Last 3 items
                 if "content" in item and estimated_tokens < max_tokens * 0.3:
-                    content_preview = item["content"][:150]
-                    working_section.append(f"- [{item.get('role', 'unknown')}] {content_preview}")
-                    estimated_tokens += estimate_tokens(content_preview)
+                    # Get message timestamp and format it concisely
+                    message_time = ""
+                    if "timestamp" in item:
+                        try:
+                            timestamp = datetime.fromisoformat(item["timestamp"])
+                            message_time = f", {timestamp.strftime('%H:%M')}"
+                        except:
+                            pass
+
+                    # Use FULL content - NO TRUNCATION for verbatim requirement
+                    content = item["content"]
+                    role = item.get('role', 'unknown')
+                    working_section.append(f"- [{role}{message_time}] {content}")
+                    estimated_tokens += estimate_tokens(content)
             
             if len(working_section) > 1:
                 context_parts.extend(working_section)
