@@ -1015,7 +1015,10 @@ class HierarchicalMemory:
         return results
     
     def get_context_for_query(self, query: str, max_tokens: int = 2000,
-                             include_reasoning: bool = True) -> str:
+                             include_reasoning: bool = True,
+                             max_facts: int = 5,
+                             min_confidence: float = 0.3,
+                             min_occurrences: int = 1) -> str:
         """Get comprehensive context for LLM prompting with token management."""
         context_parts = []
         estimated_tokens = 0
@@ -1086,13 +1089,24 @@ class HierarchicalMemory:
             if len(reasoning_section) > 1:
                 context_parts.extend(reasoning_section)
         
-        # Query relevant facts from knowledge graph
+        # Query relevant facts from knowledge graph with configurable parameters
         query_results = self.query_memory(query, include_links=False)
         if query_results["facts"] and estimated_tokens < max_tokens * 0.6:
             facts_section = ["\\n--- Relevant Knowledge ---"]
-            
-            # Add most relevant facts
-            for fact_dict in query_results["facts"][:5]:
+
+            # Filter facts by confidence and occurrences, then take top N
+            filtered_facts = []
+            for fact_dict in query_results["facts"]:
+                fact = Fact.from_dict(fact_dict)
+                # Apply confidence filter
+                if fact.confidence >= min_confidence:
+                    # Apply occurrences filter (if fact has this attribute)
+                    fact_occurrences = getattr(fact, 'occurrences', 1)
+                    if fact_occurrences >= min_occurrences:
+                        filtered_facts.append(fact_dict)
+
+            # Take top max_facts results
+            for fact_dict in filtered_facts[:max_facts]:
                 if estimated_tokens < max_tokens * 0.6:
                     fact = Fact.from_dict(fact_dict)
                     fact_text = f"- {fact} (confidence: {fact.confidence:.2f})"

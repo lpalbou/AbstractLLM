@@ -53,7 +53,9 @@ class CommandProcessor:
             'seed': self._cmd_seed,
             'temperature': self._cmd_temperature,
             'temp': self._cmd_temperature,
+            'memory-facts': self._cmd_memory_facts,
             'system': self._cmd_system,
+            'stream': self._cmd_stream,
             'tools': self._cmd_tools,
             'exit': self._cmd_exit,
             'quit': self._cmd_exit,
@@ -125,7 +127,9 @@ class CommandProcessor:
                 ("/context", "Show full context sent to LLM"),
                 ("/seed [number|random]", "Set/show random seed for deterministic generation"),
                 ("/temperature, /temp", "Set/show temperature for generation randomness"),
+                ("/memory-facts [max conf occur]", "Configure facts inclusion in memory context"),
                 ("/system [prompt]", "Set/show system prompt for the session"),
+                ("/stream [on|off]", "Toggle streaming mode for responses and ReAct loops"),
                 ("/tools [tool_name]", "Show registered tools or toggle a specific tool"),
                 ("/clear", "Clear conversation history"),
                 ("/reset", "Reset entire session"),
@@ -150,7 +154,9 @@ class CommandProcessor:
             "/load my_session.pkl",
             "/memory 16384",
             "/temperature 0.3",
+            "/memory-facts 10 0.3 1",
             "/system You are a helpful coding assistant",
+            "/stream on",
             "/tools read_file",
             "/working",
             "/facts machine learning",
@@ -199,6 +205,10 @@ class CommandProcessor:
 
         except Exception as e:
             display_error(f"Failed to get memory statistics: {str(e)}")
+            # Add debug info for streaming mode troubleshooting
+            print(f"{colorize('Debug:', Colors.DIM)} Session has memory: {hasattr(self.session, 'memory')}")
+            if hasattr(self.session, 'memory'):
+                print(f"{colorize('Debug:', Colors.DIM)} Memory object: {type(self.session.memory).__name__}")
             return
         
         print(f"\n{colorize(f'{Symbols.BRAIN} Memory System Overview', Colors.BRIGHT_BLUE, bold=True)}")
@@ -214,10 +224,30 @@ class CommandProcessor:
 
         # Calculate used tokens from last context
         if logger.last_context:
-            context_str = json.dumps(logger.last_context, ensure_ascii=False)
-            char_count = len(context_str)
-            # Estimate tokens (roughly 4 chars per token)
-            used_tokens = char_count // 4
+            try:
+                context_str = json.dumps(logger.last_context, ensure_ascii=False)
+                char_count = len(context_str)
+                # Estimate tokens (roughly 4 chars per token)
+                used_tokens = char_count // 4
+            except Exception as e:
+                # Context exists but couldn't be serialized - use fallback
+                used_tokens = 0
+        else:
+            # No context available - this might happen in streaming mode
+            print(f"{colorize('Debug:', Colors.DIM)} Context logger has no last_context (streaming mode issue?)")
+            # Try to get token count from provider directly
+            if hasattr(self.session, '_provider') and hasattr(self.session._provider, '_last_verbatim_context'):
+                try:
+                    context = self.session._provider._last_verbatim_context
+                    if context:
+                        used_tokens = len(str(context)) // 4
+                        print(f"{colorize('Debug:', Colors.DIM)} Used provider context fallback: {used_tokens} tokens")
+                    else:
+                        print(f"{colorize('Debug:', Colors.DIM)} Provider has no verbatim context either")
+                except Exception as e:
+                    print(f"{colorize('Debug:', Colors.DIM)} Provider context fallback failed: {e}")
+            else:
+                print(f"{colorize('Debug:', Colors.DIM)} Provider has no verbatim context capability")
 
         # Get configured or model max tokens
         if hasattr(self.session, '_provider') and self.session._provider:
@@ -342,7 +372,8 @@ class CommandProcessor:
                 'metadata': self.session.metadata,
                 'command_history': self.command_history,
                 'provider_config': getattr(self.session, 'provider_config', {}),
-                'tools': [tool.__name__ if callable(tool) else str(tool) for tool in self.session.tools] if self.session.tools else []
+                'tools': [tool.__name__ if callable(tool) else str(tool) for tool in self.session.tools] if self.session.tools else [],
+                'default_streaming': getattr(self.session, 'default_streaming', False)
             }
             
             # Add memory state if available
@@ -513,6 +544,9 @@ class CommandProcessor:
             
             if 'command_history' in session_state:
                 self.command_history = session_state['command_history']
+
+            if 'default_streaming' in session_state:
+                self.session.default_streaming = session_state['default_streaming']
             
             # Restore memory if available
             if 'memory_snapshot' in session_state and hasattr(self.session, 'memory') and self.session.memory:
@@ -1330,7 +1364,11 @@ class CommandProcessor:
         print(f"\n{colorize('Session Config:', Colors.BRIGHT_YELLOW)}")
         if hasattr(self.session, 'max_tool_calls'):
             print(f"  {colorize('Max tool calls:', Colors.BRIGHT_BLUE)} {colorize(str(self.session.max_tool_calls), Colors.WHITE)}")
-        
+
+        streaming_status = getattr(self.session, 'default_streaming', False)
+        streaming_text = colorize("ENABLED", Colors.BRIGHT_GREEN) if streaming_status else colorize("DISABLED", Colors.BRIGHT_RED)
+        print(f"  {colorize('Default streaming:', Colors.BRIGHT_BLUE)} {streaming_text}")
+
         print(f"  {colorize('System prompt:', Colors.BRIGHT_BLUE)} {colorize('Set' if self.session.system_prompt else 'None', Colors.WHITE)}")
 
     def _cmd_context(self, args: List[str]) -> None:
@@ -1470,6 +1508,65 @@ class CommandProcessor:
             print(f"{colorize('Usage:', Colors.DIM)} /temperature 0.7, /temperature 0.0 (deterministic)")
             print(f"{colorize('Examples:', Colors.DIM)} 0.0=deterministic, 0.3=focused, 0.7=balanced, 1.0=creative")
 
+    def _cmd_memory_facts(self, args: List[str]) -> None:
+        """Configure facts inclusion in memory context."""
+        if not args:
+            # Show current settings
+            max_facts = getattr(self.session, 'memory_facts_max', 10)
+            min_confidence = getattr(self.session, 'memory_facts_min_confidence', 0.3)
+            min_occurrences = getattr(self.session, 'memory_facts_min_occurrences', 1)
+
+            print(f"{colorize('📚 Memory Facts Configuration:', Colors.BRIGHT_CYAN)}")
+            print(f"{colorize('─' * 50, Colors.DIM)}")
+            print(f"{colorize('Max facts:', Colors.WHITE)} {max_facts}")
+            print(f"{colorize('Min confidence:', Colors.WHITE)} {min_confidence}")
+            print(f"{colorize('Min occurrences:', Colors.WHITE)} {min_occurrences}")
+            print(f"{colorize('─' * 50, Colors.DIM)}")
+            print(f"{colorize('💡 Higher confidence = more reliable facts', Colors.DIM)}")
+            print(f"{colorize('💡 Higher occurrences = frequently mentioned facts', Colors.DIM)}")
+            return
+
+        if len(args) != 3:
+            display_error("Usage: /memory-facts <max-facts> <min-confidence> <min-occurrences>")
+            print(f"{colorize('Example:', Colors.DIM)} /memory-facts 15 0.4 2")
+            print(f"{colorize('Ranges:', Colors.DIM)} max-facts: 1-50, confidence: 0.0-1.0, occurrences: 1+")
+            return
+
+        try:
+            max_facts = int(args[0])
+            min_confidence = float(args[1])
+            min_occurrences = int(args[2])
+
+            # Validate ranges
+            if not (1 <= max_facts <= 50):
+                display_error(f"Max facts must be between 1 and 50, got {max_facts}")
+                return
+            if not (0.0 <= min_confidence <= 1.0):
+                display_error(f"Min confidence must be between 0.0 and 1.0, got {min_confidence}")
+                return
+            if min_occurrences < 1:
+                display_error(f"Min occurrences must be at least 1, got {min_occurrences}")
+                return
+
+            # Update session configuration
+            self.session.memory_facts_max = max_facts
+            self.session.memory_facts_min_confidence = min_confidence
+            self.session.memory_facts_min_occurrences = min_occurrences
+
+            display_success(f"📚 Memory facts configuration updated:")
+            print(f"{colorize('Max facts:', Colors.WHITE)} {max_facts}")
+            print(f"{colorize('Min confidence:', Colors.WHITE)} {min_confidence}")
+            print(f"{colorize('Min occurrences:', Colors.WHITE)} {min_occurrences}")
+
+            if max_facts > 20:
+                print(f"{colorize('📝 Note:', Colors.BRIGHT_YELLOW)} High fact count may use more context tokens")
+            if min_confidence > 0.7:
+                print(f"{colorize('📝 Note:', Colors.BRIGHT_YELLOW)} High confidence threshold may exclude useful facts")
+
+        except ValueError:
+            display_error("Invalid parameter values. Use integers for counts, decimal for confidence")
+            print(f"{colorize('Usage:', Colors.DIM)} /memory-facts 10 0.3 1")
+
     def _cmd_system(self, args: List[str]) -> None:
         """Show or set system prompt."""
         if not args:
@@ -1500,6 +1597,44 @@ class CommandProcessor:
         print(f"{colorize('New prompt (first 100 chars):', Colors.DIM)} {new_prompt[:100]}{'...' if len(new_prompt) > 100 else ''}")
         print(f"{colorize('Length:', Colors.DIM)} {len(new_prompt)} characters")
         print(f"{colorize('💡 Tip:', Colors.BRIGHT_YELLOW)} System prompt affects all future messages in this session")
+
+    def _cmd_stream(self, args: List[str]) -> None:
+        """Toggle or show streaming mode for the session."""
+        if not args:
+            # Show current streaming setting
+            current_setting = getattr(self.session, 'default_streaming', False)
+            mode_text = colorize("ENABLED", Colors.BRIGHT_GREEN) if current_setting else colorize("DISABLED", Colors.BRIGHT_RED)
+            print(f"{colorize('🔄 Streaming mode:', Colors.BRIGHT_CYAN)} {mode_text}")
+
+            if current_setting:
+                print(f"{colorize('Behavior:', Colors.DIM)} Responses will stream progressively with real-time tool execution")
+                print(f"{colorize('ReAct Loop:', Colors.DIM)} Tool calls and results stream as they execute")
+            else:
+                print(f"{colorize('Behavior:', Colors.DIM)} Responses will be delivered as complete messages")
+                print(f"{colorize('ReAct Loop:', Colors.DIM)} Tool execution completes before showing final result")
+
+            print(f"{colorize('💡 Toggle:', Colors.BRIGHT_YELLOW)} Use '/stream on' or '/stream off' to change")
+            return
+
+        # Parse argument
+        setting = args[0].lower()
+
+        if setting in ['on', 'true', '1', 'enable', 'enabled']:
+            self.session.default_streaming = True
+            display_success("🔄 Streaming mode enabled")
+            print(f"{colorize('Behavior:', Colors.DIM)} Future responses will stream progressively")
+            print(f"{colorize('ReAct Loops:', Colors.DIM)} Tool execution will be visible in real-time")
+            print(f"{colorize('Override:', Colors.DIM)} You can still use explicit stream=True/False in code")
+        elif setting in ['off', 'false', '0', 'disable', 'disabled']:
+            self.session.default_streaming = False
+            display_success("🔄 Streaming mode disabled")
+            print(f"{colorize('Behavior:', Colors.DIM)} Future responses will be delivered as complete messages")
+            print(f"{colorize('ReAct Loops:', Colors.DIM)} Tool execution will complete before showing results")
+            print(f"{colorize('Override:', Colors.DIM)} You can still use explicit stream=True/False in code")
+        else:
+            display_error(f"Invalid streaming setting: '{setting}'")
+            print(f"{colorize('Usage:', Colors.DIM)} /stream [on|off]")
+            print(f"{colorize('Examples:', Colors.DIM)} /stream on, /stream off, /stream (to show current)")
 
     def _cmd_tools(self, args: List[str]) -> None:
         """Show registered tools or toggle a specific tool."""

@@ -317,19 +317,9 @@ class OllamaProvider(BaseProvider):
             # being provided TO the assistant, not FROM the assistant.
             fixed_messages = []
             for msg in messages:
-                if (fixed_messages and 
-                    fixed_messages[-1]["role"] == "assistant" and 
-                    msg["role"] == "assistant" and
-                    msg["content"].startswith("TOOL OUTPUT [")):
-                    # Convert tool output to user message
-                    tool_output_msg = {
-                        "role": "user",
-                        "content": f"Tool result: {msg['content'][msg['content'].find(']:') + 2:].strip()}"
-                    }
-                    fixed_messages.append(tool_output_msg)
-                    logger.info(f"[OLLAMA FIX] Converted tool output to user message: {len(tool_output_msg['content'])} chars")
-                else:
-                    fixed_messages.append(msg)
+                # Note: Removed legacy tool output conversion to USER role
+                # Now that we have proper MessageRole.TOOL messages, we don't need this conversion
+                fixed_messages.append(msg)
             
             # Log the final message structure for debugging
             logger.debug(f"[OLLAMA FIX] Final message count: {len(fixed_messages)}")

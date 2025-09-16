@@ -225,9 +225,9 @@ def format_metrics_line(response: Any) -> str:
         total_tokens = usage.get('total_tokens', prompt_tokens + completion_tokens if prompt_tokens and completion_tokens else 0)
         
         if prompt_tokens and completion_tokens and total_tokens:
-            metrics_parts.append(f"Tokens: {prompt_tokens}→{completion_tokens} ({total_tokens} total)")
+            metrics_parts.append(f"{prompt_tokens}→{completion_tokens} ({total_tokens} total) tk")
         elif total_tokens:
-            metrics_parts.append(f"Tokens: {total_tokens}")
+            metrics_parts.append(f"{total_tokens} tk")
     
     # Speed calculation - check multiple sources for timing information
     reasoning_time = None
@@ -241,11 +241,11 @@ def format_metrics_line(response: Any) -> str:
         completion_tokens = usage.get('completion_tokens', usage.get('output_tokens', 0))
         if reasoning_time > 0 and completion_tokens > 0:
             tokens_per_second = completion_tokens / reasoning_time
-            metrics_parts.append(f"Speed: {tokens_per_second:.1f} tk/s")
-        metrics_parts.append(f"Time: {reasoning_time:.2f}s")
+            metrics_parts.append(f"{tokens_per_second:.1f} tk/s")
+        metrics_parts.append(f"{reasoning_time:.2f}s")
     elif reasoning_time:
         # Show timing even without token data
-        metrics_parts.append(f"Time: {reasoning_time:.2f}s")
+        metrics_parts.append(f"{reasoning_time:.2f}s")
     
     # Tools used
     if hasattr(response, 'tools_executed') and response.tools_executed:
@@ -283,7 +283,7 @@ def format_metrics_summary(response: Any) -> str:
     # Token metrics
     if 'total_tokens' in usage:
         total_tokens = usage['total_tokens']
-        metrics.append(f"{colorize('Tokens:', Colors.BRIGHT_GREEN)} {colorize(str(total_tokens), Colors.WHITE, bold=True)}")
+        metrics.append(f"{colorize(str(total_tokens) + "tk", Colors.WHITE, bold=True)}")
     
     if 'completion_tokens' in usage:
         completion_tokens = usage['completion_tokens']
@@ -294,9 +294,9 @@ def format_metrics_summary(response: Any) -> str:
         reasoning_time = response.total_reasoning_time
         if 'completion_tokens' in usage and reasoning_time > 0:
             tokens_per_second = usage['completion_tokens'] / reasoning_time
-            metrics.append(f"{colorize('Speed:', Colors.BRIGHT_MAGENTA)} {colorize(f'{tokens_per_second:.1f} tk/s', Colors.WHITE, bold=True)}")
+            metrics.append(f"{colorize(f'{tokens_per_second:.1f} tk/s', Colors.WHITE, bold=True)}")
         
-        metrics.append(f"{colorize('Time:', Colors.BRIGHT_RED)} {colorize(f'{reasoning_time:.2f}s', Colors.WHITE, bold=True)}")
+        metrics.append(f"{colorize(f'{reasoning_time:.2f}s', Colors.WHITE, bold=True)}")
     
     # Tools used
     if hasattr(response, 'tools_executed') and response.tools_executed:

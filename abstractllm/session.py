@@ -177,19 +177,21 @@ class Message:
     Represents a single message in a conversation.
     """
     
-    def __init__(self, 
-                 role: str, 
-                 content: str, 
+    def __init__(self,
+                 role: str,
+                 content: str,
                  timestamp: Optional[datetime] = None,
+                 name: Optional[str] = None,
                  metadata: Optional[Dict[str, Any]] = None,
                  tool_results: Optional[List[Dict[str, Any]]] = None):
         """
         Initialize a message.
-        
+
         Args:
-            role: The role of the sender (e.g., "user", "assistant", "system")
+            role: The role of the sender (e.g., "user", "assistant", "system", "tool")
             content: The message content
             timestamp: When the message was created (defaults to now)
+            name: Optional name of the sender (required for TOOL messages)
             metadata: Additional message metadata
             tool_results: Optional list of tool execution results, each with:
                 - call_id: Unique identifier for the tool call
@@ -201,6 +203,7 @@ class Message:
         self.role = role
         self.content = content
         self.timestamp = timestamp or datetime.now()
+        self.name = name
         self.metadata = metadata or {}
         self.tool_results = tool_results or []
         self.id = str(uuid.uuid4())
@@ -219,6 +222,10 @@ class Message:
             "timestamp": self.timestamp.isoformat(),
             "metadata": self.metadata
         }
+
+        # Include name if present (required for TOOL messages)
+        if self.name:
+            result["name"] = self.name
         
         if self.tool_results:
             # Ensure each tool result has all required fields
@@ -267,6 +274,7 @@ class Message:
             role=data["role"],
             content=data["content"],
             timestamp=datetime.fromisoformat(data["timestamp"]),
+            name=data.get("name"),
             metadata=data.get("metadata", {}),
             tool_results=tool_results
         )
@@ -306,7 +314,10 @@ class Session:
                  enable_retry: bool = True,
                  retry_config: Optional[RetryConfig] = None,
                  persist_memory: Optional[Path] = None,
-                 max_tool_calls: int = 25):
+                 max_tool_calls: int = 25,
+                 memory_facts_max: int = 10,
+                 memory_facts_min_confidence: float = 0.3,
+                 memory_facts_min_occurrences: int = 1):
         """
         Initialize a comprehensive session with optional SOTA features.
         
@@ -324,7 +335,10 @@ class Session:
             retry_config: Retry configuration
             persist_memory: Path to persist memory
             max_tool_calls: Maximum number of tool call iterations per generation (default: 25)
-                  
+            memory_facts_max: Maximum number of facts to include in memory context (default: 10)
+            memory_facts_min_confidence: Minimum confidence level for facts to be included (default: 0.3)
+            memory_facts_min_occurrences: Minimum number of occurrences for facts to be included (default: 1)
+
         Raises:
             ValueError: If tools are provided but tool support is not available
         """
@@ -367,6 +381,14 @@ class Session:
 
         # Store max_tool_calls configuration
         self.max_tool_calls = max_tool_calls
+
+        # Store memory facts configuration
+        self.memory_facts_max = memory_facts_max
+        self.memory_facts_min_confidence = memory_facts_min_confidence
+        self.memory_facts_min_occurrences = memory_facts_min_occurrences
+
+        # Streaming preference (can be toggled via /stream command)
+        self.default_streaming = False
         
         # Add system message if provided
         if system_prompt:
@@ -500,20 +522,33 @@ class Session:
         content = content.strip() if content else ""
             
         message = Message(
-            role=role, 
-            content=content, 
+            role=role,
+            content=content,
             timestamp=datetime.now(),
+            name=name,
             metadata=metadata or {},
             tool_results=tool_results
         )
         
         self.messages.append(message)
         self.last_updated = message.timestamp
-        
+
         # Update last assistant message index if this is an assistant message
         if role == MessageRole.ASSISTANT.value:
             self._last_assistant_idx = len(self.messages) - 1
-            
+
+        # Add to memory if available (for SOTA-compliant tool role logging)
+        if hasattr(self, 'memory') and self.memory and hasattr(self.memory, 'add_chat_message'):
+            try:
+                self.memory.add_chat_message(
+                    role=role,
+                    content=content,
+                    metadata=metadata
+                )
+            except Exception as e:
+                # Log but don't fail if memory integration has issues
+                logger.debug(f"Session: Memory integration failed for {role} message: {e}")
+
         return message
     
     def get_history(self, include_system: bool = True) -> List[Message]:
@@ -576,10 +611,32 @@ class Session:
             # Skip system messages for Anthropic (handled separately)
             if provider_name == "anthropic" and m.role == 'system':
                 continue
-                
+
+            # Handle standalone TOOL messages based on provider capabilities
+            if m.role == 'tool':
+                tool_name = getattr(m, 'name', 'unknown_tool')
+
+                if provider_name in ["ollama", "huggingface", "mlx"]:
+                    # Local models: Convert to user message to avoid consecutive assistant messages
+                    # These models expect alternating user/assistant patterns from training
+                    formatted.append({
+                        "role": "user",
+                        "content": f"[SYSTEM: Tool execution result]\nTool: {tool_name}\nOutput:\n```\n{m.content.strip()}\n```\n[END TOOL RESULT]"
+                    })
+                    continue
+                elif provider_name == "anthropic":
+                    # Anthropic: Use user role (primary supported format)
+                    # Anthropic treats tool results as information provided TO the assistant
+                    formatted.append({
+                        "role": "user",
+                        "content": f"[SYSTEM: Tool execution result]\nTool: {tool_name}\nOutput:\n```\n{m.content.strip()}\n```\n[END TOOL RESULT]"
+                    })
+                    continue
+                # OpenAI and other providers: Keep native tool role (will fall through to default handling)
+
             # Add the main message with content stripped of trailing whitespace
             formatted.append({
-                "role": m.role, 
+                "role": m.role.value if hasattr(m.role, 'value') else m.role,
                 "content": m.content.strip() if isinstance(m.content, str) else m.content
             })
             
@@ -1659,14 +1716,33 @@ class Session:
                             f"Name: {tool_result.get('name')}, "
                             f"Args: {tool_result.get('arguments')}")
             
-            # Add the assistant message with tool results
+            # Add the assistant message (tool results will be added as separate TOOL messages below)
             logger.info(f"Session: Adding assistant message with {len(tool_results)} tool results")
             tool_message = self.add_message(
                 MessageRole.ASSISTANT,
                 content=response.content or "",
-                tool_results=tool_results,
                 metadata={"tool_metrics": metrics}
             )
+
+            # Add separate TOOL messages for each tool result (SOTA practice)
+            for tool_result in tool_results:
+                tool_name = tool_result.get('name', 'unknown_tool')
+                tool_output = tool_result.get('output', '')
+                tool_call_id = tool_result.get('call_id', '')
+
+                # Create proper TOOL message following OpenAI standard
+                self.add_message(
+                    MessageRole.TOOL,
+                    content=str(tool_output),
+                    name=tool_name,
+                    metadata={
+                        "tool_call_id": tool_call_id,
+                        "tool_name": tool_name,
+                        "execution_time": tool_result.get('execution_time', 0),
+                        "success": tool_result.get('success', True)
+                    }
+                )
+                logger.debug(f"Session: Added TOOL message for {tool_name} (call_id: {tool_call_id})")
             
             # Adjust system prompt based on tool execution phase
             if adjust_system_prompt:
@@ -1966,27 +2042,33 @@ class Session:
                     if tool_call_count >= max_tool_calls:
                         logger.warning(f"Session: Maximum tool call limit ({max_tool_calls}) reached. Skipping tool call.")
                         continue
-                    
+
                     tool_call_count += 1
-                    
+
                     # Log tool call details
                     logger.info(f"Session: Detected end-of-stream tool call (iteration {tool_call_count}/{max_tool_calls}) - "
                                f"ID: {tool_call.id}, Name: {tool_call.name}, Args: {tool_call.arguments}")
-                    
+
                     tool_result = self.execute_tool_call(tool_call, tool_functions)
                     pending_tool_results.append(tool_result)
-                    
+
                     # Update executed tools list
                     if hasattr(tool_call, 'name') and tool_call.name:
                         all_executed_tools.append(tool_call.name)
                         # Remove duplicates while preserving order
                         all_executed_tools = list(dict.fromkeys(all_executed_tools))
-                    
+
                     # Log tool execution result
                     logger.info(f"Session: Executed end-of-stream tool call - ID: {tool_call.id}, "
                                f"Name: {tool_call.name}, Result preview: {str(tool_result.get('output', ''))[:50]}...")
-                    
+
                     yield {"type": "tool_result", "tool_call": tool_result}
+
+                    # CRITICAL FIX: Execute only the FIRST tool call to preserve ReAct behavior
+                    # This ensures proper Think→Act→Observe→Think pattern instead of parallel execution
+                    if len(chunk.tool_calls) > 1:
+                        logger.info(f"Session: Found {len(chunk.tool_calls)} tool calls, but executing only the first to preserve ReAct pattern")
+                    break  # Only execute the first tool call
                 continue
 
             # 4) Standard content in structured chunk
@@ -1996,6 +2078,53 @@ class Session:
         
         # After initial streaming is complete, add the final message with any tool results
         if accumulated_content:
+            # Check for tool calls in accumulated content (for providers like Ollama that output tool calls as text)
+            try:
+                from abstractllm.tools.parser import parse_tool_calls
+
+                # Try to parse tool calls from the accumulated text
+                text_tool_calls = parse_tool_calls(accumulated_content)
+
+                if text_tool_calls and tool_call_count < max_tool_calls:
+                    logger.info(f"Session: Detected {len(text_tool_calls)} tool call(s) in streaming text")
+
+                    # CRITICAL FIX: Execute only the FIRST tool call from text to preserve ReAct behavior
+                    # Execute each tool call found in the text
+                    for tool_call in text_tool_calls:
+                        # Check tool call limit
+                        if tool_call_count >= max_tool_calls:
+                            logger.warning(f"Session: Maximum tool call limit ({max_tool_calls}) reached in streaming. Skipping remaining tools.")
+                            break
+
+                        tool_call_count += 1
+
+                        # Execute the tool call
+                        logger.info(f"Session: Executing streaming text tool call - ID: {tool_call.id}, Name: {tool_call.name}")
+                        tool_result = self.execute_tool_call(tool_call, tool_functions)
+                        pending_tool_results.append(tool_result)
+
+                        # Update executed tools list
+                        if tool_call.name:
+                            all_executed_tools.append(tool_call.name)
+                            all_executed_tools = list(dict.fromkeys(all_executed_tools))
+
+                        # Log execution result
+                        logger.info(f"Session: Executed streaming text tool call - Name: {tool_call.name}, Result preview: {str(tool_result.get('output', ''))[:50]}...")
+
+                        # Yield tool result for streaming display
+                        yield {"type": "tool_result", "tool_call": tool_result}
+
+                        # CRITICAL FIX: Execute only the FIRST text-based tool call to preserve ReAct behavior
+                        if len(text_tool_calls) > 1:
+                            logger.info(f"Session: Found {len(text_tool_calls)} text tool calls, but executing only the first to preserve ReAct pattern")
+                        break  # Only execute the first tool call
+
+            except ImportError:
+                # Parser not available, skip text-based tool call detection
+                logger.debug("Tool call parser not available for streaming text detection")
+            except Exception as e:
+                logger.warning(f"Failed to parse tool calls from streaming text: {e}")
+
             # Calculate metrics if tools were executed
             metrics = None
             if pending_tool_results:
@@ -2004,35 +2133,59 @@ class Session:
                            f"Success: {metrics['successful_tools']}/{metrics['total_tools']} "
                            f"({metrics['success_rate']:.0%})")
             
-            # Add the assistant message with accumulated content and any tool results
+            # Add the assistant message (tool results will be added as separate TOOL messages below)
             logger.info(f"Session: Adding assistant message with {len(pending_tool_results)} tool results")
             self.add_message(
                 MessageRole.ASSISTANT,
                 content=accumulated_content,
-                tool_results=pending_tool_results if pending_tool_results else None,
                 metadata={"tool_metrics": metrics} if metrics else None
             )
+
+            # Add separate TOOL messages for each tool result (SOTA practice)
+            for tool_result in pending_tool_results if pending_tool_results else []:
+                tool_name = tool_result.get('name', 'unknown_tool')
+                tool_output = tool_result.get('output', '')
+                tool_call_id = tool_result.get('call_id', '')
+
+                # Create proper TOOL message following OpenAI standard
+                self.add_message(
+                    MessageRole.TOOL,
+                    content=str(tool_output),
+                    name=tool_name,
+                    metadata={
+                        "tool_call_id": tool_call_id,
+                        "tool_name": tool_name,
+                        "execution_time": tool_result.get('execution_time', 0),
+                        "success": tool_result.get('success', True)
+                    }
+                )
+                logger.debug(f"Session: Added streaming TOOL message for {tool_name} (call_id: {tool_call_id})")
             
         # If we executed tools, generate a follow-up response to incorporate the results
-        if pending_tool_results:
+        # This now includes a loop to handle multiple consecutive tool calls in streaming mode
+        while pending_tool_results and tool_call_count < max_tool_calls:
+            # Clear pending results for this iteration
+            current_iteration_results = pending_tool_results
+            pending_tool_results = []
+
             # Adjust system prompt for synthesis phase
             if adjust_system_prompt:
                 phase = "synthesis" if tool_call_count >= max_tool_calls - 1 else "processing"
                 current_system_prompt = self._adjust_system_prompt_for_tool_phase(
-                    original_system_prompt, 
-                    tool_call_count, 
-                    all_executed_tools, 
+                    original_system_prompt,
+                    tool_call_count,
+                    all_executed_tools,
                     phase
                 )
                 logger.debug(f"Session: Adjusting to {phase} phase system prompt for streaming follow-up")
-            
+
             # Get updated provider messages
             updated_provider_messages = self.get_messages_for_provider(provider_name)
-            
+
             # Debug: Log message structure being sent to the provider
             logger.debug(f"Session: Sending follow-up messages to LLM: {updated_provider_messages}")
-            logger.info(f"Session: Generating follow-up streaming response with {len(pending_tool_results)} tool results")
-            
+            logger.info(f"Session: Generating follow-up streaming response with {len(current_iteration_results)} tool results")
+
             # Generate follow-up response to incorporate tool results, using original prompt
             follow_up_stream = provider_instance.generate(
                 prompt=original_prompt,  # Use original prompt consistently
@@ -2051,31 +2204,184 @@ class Session:
 
             # Track follow-up content for conversation state
             follow_up_content = ""
+            follow_up_has_tools = False
 
-            # Yield follow-up chunks for immediate display (handle str or .content)
+            # Process follow-up stream chunks, checking for additional tool calls
             for chunk in follow_up_stream:
+                # Handle string chunks
                 if isinstance(chunk, str):
                     follow_up_content += chunk
                     yield chunk
-                elif hasattr(chunk, "content") and chunk.content:
+                    continue
+
+                # Check for Anthropic-style tool calls in stream
+                if hasattr(chunk, 'delta') and hasattr(chunk.delta, 'tool_use'):
+                    if tool_call_count >= max_tool_calls:
+                        logger.warning(f"Session: Maximum tool call limit ({max_tool_calls}) reached in follow-up. Skipping tool call.")
+                        continue
+
+                    tool_call_count += 1
+                    follow_up_has_tools = True
+                    tool_use = chunk.delta.tool_use
+                    call_id = getattr(tool_use, 'id', f"call_{tool_call_count}")
+                    name = getattr(tool_use, 'name', None) or ''
+                    args = getattr(tool_use, 'input', {})
+
+                    logger.info(f"Session: Detected follow-up streaming tool call (iteration {tool_call_count}/{max_tool_calls}) - "
+                               f"ID: {call_id}, Name: {name}, Args: {args}")
+
+                    tool_call_obj = ToolCall(id=call_id, name=name, arguments=args)
+                    tool_result = self.execute_tool_call(tool_call_obj, tool_functions)
+                    pending_tool_results.append(tool_result)
+
+                    if name:
+                        all_executed_tools.append(name)
+                        all_executed_tools = list(dict.fromkeys(all_executed_tools))
+
+                    logger.info(f"Session: Executed follow-up streaming tool call - ID: {call_id}, "
+                               f"Name: {name}, Result preview: {str(tool_result.get('output', ''))[:50]}...")
+
+                    yield {"type": "tool_result", "tool_call": tool_result}
+                    continue
+
+                # Check for end-of-stream tool calls
+                if isinstance(chunk, ToolCallRequest) and hasattr(chunk, 'tool_calls') and chunk.tool_calls:
+                    for tool_call in chunk.tool_calls:
+                        if tool_call_count >= max_tool_calls:
+                            logger.warning(f"Session: Maximum tool call limit ({max_tool_calls}) reached in follow-up. Skipping tool call.")
+                            continue
+
+                        tool_call_count += 1
+                        follow_up_has_tools = True
+
+                        logger.info(f"Session: Detected follow-up end-of-stream tool call (iteration {tool_call_count}/{max_tool_calls}) - "
+                                   f"ID: {tool_call.id}, Name: {tool_call.name}, Args: {tool_call.arguments}")
+
+                        tool_result = self.execute_tool_call(tool_call, tool_functions)
+                        pending_tool_results.append(tool_result)
+
+                        if hasattr(tool_call, 'name') and tool_call.name:
+                            all_executed_tools.append(tool_call.name)
+                            all_executed_tools = list(dict.fromkeys(all_executed_tools))
+
+                        logger.info(f"Session: Executed follow-up end-of-stream tool call - ID: {tool_call.id}, "
+                                   f"Name: {tool_call.name}, Result preview: {str(tool_result.get('output', ''))[:50]}...")
+
+                        yield {"type": "tool_result", "tool_call": tool_result}
+
+                        # CRITICAL FIX: Execute only the FIRST follow-up tool call to preserve ReAct behavior
+                        # This ensures proper Think→Act→Observe→Think pattern in follow-up responses too
+                        if len(chunk.tool_calls) > 1:
+                            logger.info(f"Session: Found {len(chunk.tool_calls)} follow-up tool calls, but executing only the first to preserve ReAct pattern")
+                        break  # Only execute the first tool call
+                    continue
+
+                # Handle content chunks
+                if hasattr(chunk, 'content') and chunk.content:
                     follow_up_content += chunk.content
                     yield chunk.content
 
-            # Add the final follow-up response to the conversation
+            # Check for tool calls in follow-up text (for Ollama-style providers)
+            if follow_up_content and not follow_up_has_tools:
+                try:
+                    from abstractllm.tools.parser import parse_tool_calls
+                    text_tool_calls = parse_tool_calls(follow_up_content)
+
+                    if text_tool_calls and tool_call_count < max_tool_calls:
+                        logger.info(f"Session: Detected {len(text_tool_calls)} tool call(s) in follow-up streaming text")
+                        follow_up_has_tools = True
+
+                        for tool_call in text_tool_calls:
+                            if tool_call_count >= max_tool_calls:
+                                logger.warning(f"Session: Maximum tool call limit ({max_tool_calls}) reached in follow-up. Skipping remaining tools.")
+                                break
+
+                            tool_call_count += 1
+
+                            logger.info(f"Session: Executing follow-up streaming text tool call - ID: {tool_call.id}, Name: {tool_call.name}")
+                            tool_result = self.execute_tool_call(tool_call, tool_functions)
+                            pending_tool_results.append(tool_result)
+
+                            if tool_call.name:
+                                all_executed_tools.append(tool_call.name)
+                                all_executed_tools = list(dict.fromkeys(all_executed_tools))
+
+                            logger.info(f"Session: Executed follow-up streaming text tool call - Name: {tool_call.name}, Result preview: {str(tool_result.get('output', ''))[:50]}...")
+                            yield {"type": "tool_result", "tool_call": tool_result}
+
+                            # CRITICAL FIX: Execute only the FIRST follow-up text tool call to preserve ReAct behavior
+                            if len(text_tool_calls) > 1:
+                                logger.info(f"Session: Found {len(text_tool_calls)} follow-up text tool calls, but executing only the first to preserve ReAct pattern")
+                            break  # Only execute the first tool call
+
+                except ImportError:
+                    logger.debug("Tool call parser not available for follow-up streaming text detection")
+                except Exception as e:
+                    logger.warning(f"Failed to parse tool calls from follow-up streaming text: {e}")
+
+            # Add the follow-up response to the conversation
             if follow_up_content:
-                logger.info(f"Session: Adding final follow-up assistant message")
+                # Calculate metrics for this iteration
+                iteration_metrics = None
+                if current_iteration_results:
+                    iteration_metrics = self._track_tool_execution_metrics(current_iteration_results)
+                    logger.info(f"Session: Iteration tool execution metrics - "
+                               f"Success: {iteration_metrics['successful_tools']}/{iteration_metrics['total_tools']} "
+                               f"({iteration_metrics['success_rate']:.0%})")
+
+                logger.info(f"Session: Adding follow-up assistant message")
                 self.add_message(
-                    MessageRole.ASSISTANT, 
+                    MessageRole.ASSISTANT,
                     follow_up_content,
                     metadata={
                         "tool_execution": {
                             "tool_call_count": tool_call_count,
                             "executed_tools": all_executed_tools,
-                            "phase": "synthesis" if tool_call_count > 0 else "initial"
+                            "phase": "synthesis" if tool_call_count >= max_tool_calls - 1 else "processing",
+                            "iteration_metrics": iteration_metrics
                         }
                     }
                 )
-        
+
+                # Add TOOL messages for results from this iteration
+                for tool_result in current_iteration_results:
+                    tool_name = tool_result.get('name', 'unknown_tool')
+                    tool_output = tool_result.get('output', '')
+                    tool_call_id = tool_result.get('call_id', '')
+
+                    self.add_message(
+                        MessageRole.TOOL,
+                        content=str(tool_output),
+                        name=tool_name,
+                        metadata={
+                            "tool_call_id": tool_call_id,
+                            "tool_name": tool_name,
+                            "execution_time": tool_result.get('execution_time', 0),
+                            "success": tool_result.get('success', True)
+                        }
+                    )
+                    logger.debug(f"Session: Added follow-up TOOL message for {tool_name} (call_id: {tool_call_id})")
+
+            # If no new tools were found in follow-up, exit the loop
+            if not pending_tool_results:
+                logger.info(f"Session: No additional tool calls in follow-up response. Completing streaming.")
+                break
+
+            # Continue loop if we have more tool results to process
+
+        # Complete ReAct cycle for streaming mode (matching non-streaming behavior)
+        if self.current_cycle:
+            # Use accumulated content as the final response for cycle completion
+            final_response = accumulated_content if accumulated_content else "Streaming response completed"
+            self.current_cycle.complete(final_response, success=True)
+
+            # Complete scratchpad cycle with final answer
+            if self.scratchpad:
+                self.scratchpad.complete_cycle(
+                    final_answer=final_response,
+                    success=True
+                )
+
         # Reset the system prompt to the original
         if adjust_system_prompt and self.system_prompt != original_system_prompt:
             self.system_prompt = original_system_prompt
@@ -2206,10 +2512,19 @@ class Session:
         provider_instance = self._get_provider(provider)
         provider_name = self._get_provider_name(provider_instance)
         logger.info(f"Using provider: {provider_name}")
-        
+
         # Use session's default max_tool_calls if not specified
         if max_tool_calls is None:
             max_tool_calls = self.max_tool_calls
+
+        # Check if stream was explicitly passed or should use session default
+        # Note: We need to check kwargs to see if stream was explicitly set
+        if 'stream' not in kwargs and stream == False:  # Default value wasn't overridden
+            stream = self.default_streaming
+            logger.debug(f"Using session default streaming: {stream}")
+        elif 'stream' in kwargs:
+            stream = kwargs.pop('stream')  # Remove from kwargs to avoid duplicate
+            logger.debug(f"Using explicit streaming setting: {stream}")
         
         # SOTA Enhancement: Initialize telemetry tracking
         generation_start_time = datetime.now()
@@ -2244,10 +2559,40 @@ class Session:
         # SOTA Enhancement: Add memory context if enabled
         enhanced_prompt = prompt
         if self.enable_memory and use_memory_context and prompt:
-            context = self.memory.get_context_for_query(prompt)
+            # Get model capabilities to determine actual context limits
+            provider_instance = self._get_provider(provider)
+            model_name = self._get_provider_model(provider_instance)
+
+            try:
+                from abstractllm.architectures.detection import get_model_capabilities
+                capabilities = get_model_capabilities(model_name)
+                model_context_limit = capabilities.get('context_length', 32768)
+                model_output_limit = capabilities.get('max_output_tokens', max_tokens or 8192)
+            except Exception:
+                # Fallback to defaults if detection fails
+                model_context_limit = 32768
+                model_output_limit = max_tokens or 8192
+
+            # Calculate maximum memory tokens: Total context - Output tokens - System prompt - User query buffers
+            system_prompt_tokens = len((system_prompt or self.system_prompt or "").split()) * 1.3  # Rough estimate
+            user_query_tokens = len(prompt.split()) * 1.3  # Rough estimate
+            buffer_tokens = 100  # Small safety buffer
+
+            memory_context_limit = int(model_context_limit - model_output_limit - system_prompt_tokens - user_query_tokens - buffer_tokens)
+
+            # Ensure we don't go negative
+            memory_context_limit = max(memory_context_limit, 1000)
+
+            context = self.memory.get_context_for_query(
+                prompt,
+                max_tokens=memory_context_limit,
+                max_facts=self.memory_facts_max,
+                min_confidence=self.memory_facts_min_confidence,
+                min_occurrences=self.memory_facts_min_occurrences
+            )
             if context:
                 enhanced_prompt = f"{context}\n\nUser: {prompt}"
-                logger.debug(f"Added memory context: {len(context)} chars")
+                logger.debug(f"Added memory context: {len(context)} chars (limit: {memory_context_limit} tokens from context_limit={model_context_limit} - output_limit={model_output_limit} - system={int(system_prompt_tokens)} - user={int(user_query_tokens)})")
         
         # SOTA Enhancement: Prepare for structured response if configured
         if structured_config and SOTA_FEATURES_AVAILABLE:
