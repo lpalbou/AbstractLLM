@@ -203,7 +203,7 @@ class UniversalToolHandler:
                     parts.append(f"Tool result: {result.output}")
                 else:
                     parts.append(f"Tool error: {result.error}")
-            
+
             return "\n\n".join(parts)
     
     def get_capabilities(self) -> Dict[str, Any]:

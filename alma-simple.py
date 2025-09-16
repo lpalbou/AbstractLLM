@@ -117,7 +117,40 @@ def run_query(session, prompt, structured_output=None):
                 content=response,
                 model=getattr(session._provider, 'config_manager', {}).get_param('model') if hasattr(session, '_provider') else 'unknown'
             )
-        
+
+        # Handle streaming generator responses
+        elif hasattr(response, '__iter__') and hasattr(response, '__next__'):
+            print(f"\n{Colors.BRIGHT_GREEN}Response:{Colors.RESET} ", end="", flush=True)
+            accumulated_content = ""
+            tool_results = []
+
+            try:
+                for chunk in response:
+                    if isinstance(chunk, str):
+                        # Text content - display immediately
+                        print(chunk, end="", flush=True)
+                        accumulated_content += chunk
+                    elif isinstance(chunk, dict) and chunk.get("type") == "tool_result":
+                        # Tool result - store for later processing
+                        tool_results.append(chunk)
+                        print(f"\n{Colors.CYAN}[Tool executed: {chunk.get('tool_call', {}).get('name', 'unknown')}]{Colors.RESET}", flush=True)
+
+                print()  # Final newline
+
+                # Create a GenerateResponse-like object for compatibility
+                response = enhance_string_response(
+                    content=accumulated_content,
+                    model=getattr(session._provider, 'config_manager', {}).get_param('model') if hasattr(session, '_provider') else 'unknown'
+                )
+
+                # Save interaction context
+                save_interaction_context(response, prompt)
+                return response
+
+            except Exception as stream_error:
+                print(f"\n{Colors.BRIGHT_RED}Streaming error: {stream_error}{Colors.RESET}")
+                return None
+
         # Save interaction context for facts/scratchpad commands
         if isinstance(response, GenerateResponse):
             save_interaction_context(response, prompt)
