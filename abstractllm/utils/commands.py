@@ -124,7 +124,7 @@ class CommandProcessor:
             ("Session Control", [
                 ("/history", "Show command history"),
                 ("/last [count]", "Replay conversation messages"),
-                ("/context", "Show full context sent to LLM"),
+                ("/context [ID]", "Show full context sent to LLM (or specific interaction)"),
                 ("/seed [number|random]", "Set/show random seed for deterministic generation"),
                 ("/temperature, /temp", "Set/show temperature for generation randomness"),
                 ("/memory-facts [max conf occur]", "Configure facts inclusion in memory context"),
@@ -1373,6 +1373,17 @@ class CommandProcessor:
 
     def _cmd_context(self, args: List[str]) -> None:
         """Show the exact verbatim context sent to the LLM."""
+        # Check if specific context ID is requested
+        if args and not args[0] in ["compact", "debug", "full"]:
+            context_id = args[0]
+            # Handle both formats: "4258e5b8" and "cycle_4258e5b8" or "step_4258e5b8_001"
+            if not context_id.startswith('cycle_') and not context_id.startswith('step_'):
+                context_id = f"cycle_{context_id}"
+
+            self._show_specific_context(context_id)
+            return
+
+        # Show current/last context (existing behavior)
         # First try to get verbatim context from the provider
         if hasattr(self.session, '_provider') and hasattr(self.session._provider, 'get_last_verbatim_context'):
             verbatim_data = self.session._provider.get_last_verbatim_context()
@@ -1404,6 +1415,222 @@ class CommandProcessor:
             print(context)
         else:
             display_info("No context has been sent to the LLM yet in this session")
+
+    def _show_specific_context(self, context_id: str) -> None:
+        """Show context for a specific interaction or step ID."""
+        from abstractllm.utils.display import Colors, colorize
+        from pathlib import Path
+        import json
+        import gzip
+
+        # Try different storage locations and formats
+        storage_locations = [
+            # New enhanced context storage (.abstractllm directory)
+            Path.home() / ".abstractllm" / "sessions",
+            # Current temp storage
+            Path("/tmp")
+        ]
+
+        context_data = None
+        source_location = None
+
+        # Try to find the context file
+        for base_path in storage_locations:
+            if base_path == Path("/tmp"):
+                # Try temp storage format
+                temp_file = base_path / f"alma_interaction_{context_id}.json"
+                if temp_file.exists():
+                    try:
+                        with open(temp_file, 'r') as f:
+                            context_data = json.load(f)
+                        source_location = str(temp_file)
+                        break
+                    except Exception:
+                        continue
+            else:
+                # Try enhanced context storage
+                for session_dir in base_path.iterdir():
+                    if session_dir.is_dir():
+                        contexts_dir = session_dir / "contexts"
+                        if contexts_dir.exists():
+                            # Try different context file patterns
+                            patterns = [
+                                f"{context_id}_main.json.gz",
+                                f"{context_id}_main.json",
+                                f"{context_id}.json.gz",
+                                f"{context_id}.json"
+                            ]
+
+                            for pattern in patterns:
+                                context_file = contexts_dir / pattern
+                                if context_file.exists():
+                                    try:
+                                        if pattern.endswith('.gz'):
+                                            with gzip.open(context_file, 'rt') as f:
+                                                context_data = json.load(f)
+                                        else:
+                                            with open(context_file, 'r') as f:
+                                                context_data = json.load(f)
+                                        source_location = str(context_file)
+                                        break
+                                    except Exception:
+                                        continue
+                            if context_data:
+                                break
+                    if context_data:
+                        break
+
+        if not context_data:
+            display_error(f"Context not found for ID: {context_id}")
+            print(f"\n{colorize('Available contexts:', Colors.DIM)}")
+            print(f"  {colorize('• Use /scratch to see available interaction IDs', Colors.DIM)}")
+            print(f"  {colorize('• Try: /context <interaction_id>', Colors.DIM)}")
+            print(f"  {colorize('• Example: /context abc123 or /context step_abc123_001', Colors.DIM)}")
+            return
+
+        # Display the context
+        short_id = context_id.replace('cycle_', '').replace('step_', '')
+
+        # Check context data type
+        if 'verbatim_context' in context_data:
+            self._display_verbatim_context(context_data, short_id, source_location)
+        elif 'system_prompt' in context_data or 'messages' in context_data:
+            self._display_enhanced_context(context_data, short_id, source_location)
+        else:
+            self._display_legacy_context(context_data, short_id, source_location)
+
+    def _display_enhanced_context(self, context_data: dict, short_id: str, source: str) -> None:
+        """Display enhanced context data with full LLM context."""
+        from abstractllm.utils.display import Colors, colorize
+
+        print(f"\n{colorize('🔍 LLM Context Details', Colors.BRIGHT_CYAN, bold=True)} - {colorize(short_id, Colors.WHITE)}")
+        print(f"{colorize('─' * 60, Colors.CYAN)}")
+
+        # Context metadata
+        print(f"\n{colorize('📋 Context Metadata', Colors.BRIGHT_BLUE)}")
+        print(f"  {colorize('Context ID:', Colors.CYAN)} {context_data.get('context_id', 'unknown')}")
+        print(f"  {colorize('Type:', Colors.CYAN)} {context_data.get('context_type', 'unknown')}")
+        if context_data.get('step_number'):
+            print(f"  {colorize('Step:', Colors.CYAN)} #{context_data['step_number']} ({context_data.get('reasoning_phase', 'unknown')})")
+        print(f"  {colorize('Provider:', Colors.CYAN)} {context_data.get('provider', 'unknown')}")
+        print(f"  {colorize('Model:', Colors.CYAN)} {context_data.get('model', 'unknown')}")
+        print(f"  {colorize('Timestamp:', Colors.CYAN)} {context_data.get('timestamp', 'unknown')}")
+        if context_data.get('total_tokens'):
+            print(f"  {colorize('Est. Tokens:', Colors.CYAN)} {context_data['total_tokens']:,}")
+
+        # System prompt
+        if context_data.get('system_prompt'):
+            print(f"\n{colorize('🎯 System Prompt', Colors.BRIGHT_BLUE)}")
+            print(f"{colorize('─' * 40, Colors.BLUE)}")
+            system_prompt = context_data['system_prompt']
+            # Truncate if very long
+            if len(system_prompt) > 2000:
+                print(f"{system_prompt[:2000]}...")
+                print(f"{colorize(f'[Truncated - {len(system_prompt):,} total characters]', Colors.DIM)}")
+            else:
+                print(system_prompt)
+
+        # Messages/Conversation History
+        if context_data.get('messages'):
+            print(f"\n{colorize('💬 Conversation History', Colors.BRIGHT_BLUE)} ({len(context_data['messages'])} messages)")
+            print(f"{colorize('─' * 40, Colors.BLUE)}")
+
+            for i, message in enumerate(context_data['messages']):
+                role = message.get('role', 'unknown')
+                content = str(message.get('content', ''))
+
+                role_color = Colors.BRIGHT_GREEN if role == 'user' else Colors.BRIGHT_YELLOW if role == 'assistant' else Colors.CYAN
+                print(f"\n{colorize(f'{i+1}. {role.title()}:', role_color)}")
+
+                # Truncate long messages
+                if len(content) > 1000:
+                    print(f"  {content[:1000]}...")
+                    print(f"  {colorize(f'[Truncated - {len(content):,} total characters]', Colors.DIM)}")
+                else:
+                    print(f"  {content}")
+
+        # Tools Available
+        if context_data.get('tools'):
+            print(f"\n{colorize('🔧 Tools Available', Colors.BRIGHT_BLUE)} ({len(context_data['tools'])} tools)")
+            print(f"{colorize('─' * 40, Colors.BLUE)}")
+
+            for tool in context_data['tools']:
+                if isinstance(tool, dict):
+                    tool_name = tool.get('name') or tool.get('function', {}).get('name', 'unknown')
+                    print(f"  • {colorize(tool_name, Colors.YELLOW)}")
+
+        # Model Parameters
+        if context_data.get('model_params'):
+            print(f"\n{colorize('⚙️ Model Parameters', Colors.BRIGHT_BLUE)}")
+            print(f"{colorize('─' * 40, Colors.BLUE)}")
+            for key, value in context_data['model_params'].items():
+                print(f"  {colorize(key + ':', Colors.CYAN)} {value}")
+
+        print(f"\n{colorize(f'📁 Source: {source}', Colors.DIM)}")
+
+    def _display_legacy_context(self, context_data: dict, short_id: str, source: str) -> None:
+        """Display legacy interaction context (no LLM context available)."""
+        from abstractllm.utils.display import Colors, colorize
+
+        print(f"\n{colorize('⚠️  Legacy Context Data', Colors.BRIGHT_YELLOW, bold=True)} - {colorize(short_id, Colors.WHITE)}")
+        print(f"{colorize('─' * 60, Colors.YELLOW)}")
+        print(f"{colorize('This context was saved before enhanced context tracking was enabled.', Colors.DIM)}")
+        print(f"{colorize('Only interaction results are available, not the full LLM context.', Colors.DIM)}")
+
+        # Show available data
+        print(f"\n{colorize('📋 Available Information', Colors.BRIGHT_BLUE)}")
+        print(f"  {colorize('Query:', Colors.CYAN)} {context_data.get('query', 'N/A')}")
+        print(f"  {colorize('Model:', Colors.CYAN)} {context_data.get('model', 'N/A')}")
+        print(f"  {colorize('Timestamp:', Colors.CYAN)} {context_data.get('timestamp', 'N/A')}")
+
+        if context_data.get('tools_executed'):
+            print(f"\n{colorize('🔧 Tools Executed', Colors.BRIGHT_BLUE)} ({len(context_data['tools_executed'])} tools)")
+            print(f"{colorize('─' * 40, Colors.BLUE)}")
+            for i, tool in enumerate(context_data['tools_executed']):
+                tool_name = tool.get('name', 'unknown')
+                print(f"  {i+1}. {colorize(tool_name, Colors.YELLOW)}")
+
+        print(f"\n{colorize('💡 Tip:', Colors.BRIGHT_CYAN)} Use /scratch {short_id} to see the ReAct reasoning trace.")
+        print(f"{colorize(f'📁 Source: {source}', Colors.DIM)}")
+
+    def _display_verbatim_context(self, context_data: dict, short_id: str, source: str) -> None:
+        """Display exact verbatim context data (the EXACT payload sent to LLM)."""
+        from abstractllm.utils.display import Colors, colorize
+
+        print(f"\n{colorize('🔍 EXACT VERBATIM LLM CONTEXT', Colors.BRIGHT_CYAN, bold=True)} - {colorize(short_id, Colors.WHITE)}")
+        print(f"{colorize('─' * 60, Colors.CYAN)}")
+
+        # Context metadata
+        print(f"\n{colorize('📋 Context Metadata', Colors.BRIGHT_BLUE)}")
+        print(f"  {colorize('Context ID:', Colors.CYAN)} {context_data.get('context_id', 'unknown')}")
+        print(f"  {colorize('Type:', Colors.CYAN)} {context_data.get('context_type', 'unknown')}")
+        if context_data.get('step_number'):
+            print(f"  {colorize('Step:', Colors.CYAN)} #{context_data['step_number']} ({context_data.get('reasoning_phase', 'unknown')})")
+        print(f"  {colorize('Provider:', Colors.CYAN)} {context_data.get('provider', 'unknown')}")
+        print(f"  {colorize('Model:', Colors.CYAN)} {context_data.get('model', 'unknown')}")
+        if context_data.get('endpoint'):
+            print(f"  {colorize('Endpoint:', Colors.CYAN)} {context_data['endpoint']}")
+        print(f"  {colorize('Timestamp:', Colors.CYAN)} {context_data.get('timestamp', 'unknown')}")
+        if context_data.get('total_chars'):
+            print(f"  {colorize('Size:', Colors.CYAN)} {context_data['total_chars']:,} characters")
+
+        # EXACT VERBATIM CONTEXT
+        verbatim_context = context_data.get('verbatim_context', '')
+        if verbatim_context:
+            print(f"\n{colorize('🎯 EXACT VERBATIM PAYLOAD SENT TO LLM', Colors.BRIGHT_RED, bold=True)}")
+            print(f"{colorize('─' * 60, Colors.RED)}")
+            print(f"{colorize('⚠️  This is the EXACT content sent to the LLM - no formatting applied', Colors.YELLOW)}")
+            print(f"{colorize('─' * 60, Colors.RED)}")
+
+            # Display the EXACT verbatim context
+            print(verbatim_context)
+
+            print(f"{colorize('─' * 60, Colors.RED)}")
+            print(f"{colorize('END OF EXACT VERBATIM PAYLOAD', Colors.RED)}")
+        else:
+            print(f"\n{colorize('❌ No verbatim context available', Colors.RED)}")
+
+        print(f"\n{colorize(f'📁 Source: {source}', Colors.DIM)}")
 
     def _cmd_seed(self, args: List[str]) -> None:
         """Show or set random seed for deterministic generation."""

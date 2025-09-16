@@ -230,16 +230,51 @@ def run_query(session, prompt, structured_output=None):
             # Stop spinner before streaming starts
             spinner.stop()
 
-            print(f"\n{Colors.BRIGHT_GREEN}Response:{Colors.RESET} ", end="", flush=True)
+            # Start timing for accurate duration calculation
+            import time
+            start_time = time.time()
+
+            # Start with clean newline (no header)
+            print()
             accumulated_content = ""
             tool_results = []
+            provider_usage = None  # Capture actual provider usage data
 
             try:
+                thinking_mode = False  # Track if we're in a thinking section
+                first_content_line = True  # Track if we need to add alma> prefix
+
                 for chunk in response:
                     if isinstance(chunk, str):
-                        # Text content - display immediately
-                        print(chunk, end="", flush=True)
+                        # Check for thinking tags to style appropriately
+                        if '<think>' in chunk and not thinking_mode:
+                            thinking_mode = True
+                            # Apply dim italic styling for thinking content
+                            chunk_to_display = chunk.replace('<think>', f'{Colors.DIM}<think>{Colors.RESET}{Colors.DIM}')
+                        elif '</think>' in chunk and thinking_mode:
+                            thinking_mode = False
+                            chunk_to_display = chunk.replace('</think>', f'</think>{Colors.RESET}')
+                        elif thinking_mode:
+                            # We're inside thinking tags - apply dim italic styling
+                            chunk_to_display = f'{Colors.DIM}{chunk}{Colors.RESET}' if chunk.strip() else chunk
+                        else:
+                            chunk_to_display = chunk
+
+                        # Text content - add alma> prefix to first content line
+                        if first_content_line and not thinking_mode and chunk_to_display.strip():
+                            # First non-thinking content gets alma> prefix
+                            lines = chunk_to_display.split('\n')
+                            if lines:
+                                lines[0] = f"{Colors.BLUE}alma>{Colors.RESET} {lines[0]}"
+                                chunk_to_display = '\n'.join(lines)
+                            first_content_line = False
+
+                        print(chunk_to_display, end="", flush=True)
+
                         accumulated_content += chunk
+                    elif hasattr(chunk, 'usage') and chunk.usage:
+                        # Capture actual provider usage data when available
+                        provider_usage = chunk.usage
                     elif isinstance(chunk, dict) and chunk.get("type") == "tool_result":
                         # Tool result - store for later processing
                         tool_results.append(chunk)
@@ -270,16 +305,71 @@ def run_query(session, prompt, structured_output=None):
 
                         print(f"\n{Colors.YELLOW}{tool_message}{Colors.RESET}", flush=True)
 
-                print()  # Final newline
+                print()  # Single newline for spacing like non-streaming mode
 
-                # Create a GenerateResponse-like object for compatibility
+                # Calculate timing (same as non-streaming mode)
+                end_time = time.time()
+                reasoning_time = end_time - start_time
+
+                # Use provider usage data if available, otherwise estimate
+                if provider_usage:
+                    # Use actual provider usage data (same as non-streaming mode)
+                    usage_data = provider_usage
+                    # Add timing data if missing
+                    if isinstance(usage_data, dict) and 'total_time' not in usage_data:
+                        usage_data = usage_data.copy()
+                        usage_data['total_time'] = reasoning_time
+                else:
+                    # Fallback: Create usage data with proper context estimation
+                    # Get system prompt and conversation history to match non-streaming context calculation
+                    system_prompt_tokens = 0
+                    conversation_tokens = 0
+
+                    if hasattr(session, 'system_prompt') and session.system_prompt:
+                        system_prompt_tokens = len(session.system_prompt.split()) * 1.3
+
+                    # Get conversation history tokens (excluding current response)
+                    if hasattr(session, 'messages') and session.messages:
+                        for msg in session.messages[:-1]:  # Exclude the response we just added
+                            if isinstance(msg, dict) and 'content' in msg:
+                                conversation_tokens += len(str(msg['content']).split()) * 1.3
+
+                    # User prompt tokens
+                    user_prompt_tokens = len(prompt.split()) * 1.3
+
+                    # Total context = system prompt + conversation + user prompt
+                    context_estimate = int(system_prompt_tokens + conversation_tokens + user_prompt_tokens)
+                    completion_tokens = int(len(accumulated_content.split()) * 1.3)
+                    total_tokens = context_estimate + completion_tokens
+
+                    usage_data = {
+                        "prompt_tokens": context_estimate,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": total_tokens,
+                        "total_time": reasoning_time
+                    }
+
+                # Create a GenerateResponse-like object with complete metrics (same as non-streaming)
                 response = enhance_string_response(
                     content=accumulated_content,
-                    model=getattr(session._provider, 'config_manager', {}).get_param('model') if hasattr(session, '_provider') else 'unknown'
+                    model=getattr(session._provider, 'config_manager', {}).get_param('model') if hasattr(session, '_provider') else 'unknown',
+                    usage=usage_data,
+                    tools_executed=tool_results,
+                    reasoning_time=reasoning_time  # Include timing for speed calculation
                 )
 
                 # Save interaction context
                 save_interaction_context(response, prompt)
+
+                # Display metrics line (same as non-streaming mode)
+                from abstractllm.utils.display import format_metrics_line
+                metrics_line = format_metrics_line(response)
+                if metrics_line:
+                    print(f"{metrics_line}")
+
+                # Add final newline (matching non-streaming mode)
+                print()
+
                 return response
 
             except Exception as stream_error:
@@ -356,7 +446,7 @@ def interactive_mode(session):
         try:
             # Use simple long input with 8k token support
             user_input = get_enhanced_input(
-                prompt=f"{Colors.BRIGHT_GREEN}alma>{Colors.RESET} ",
+                prompt=f"{Colors.BRIGHT_GREEN}user>{Colors.RESET} ",
                 max_chars=32768  # ~8k tokens
             )
 

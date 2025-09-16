@@ -30,6 +30,7 @@ from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCap
 from abstractllm.exceptions import UnsupportedFeatureError
 from abstractllm.enums import MessageRole
 from abstractllm.utils.context_logging import log_llm_interaction
+from abstractllm.utils.context_tracker import capture_llm_context
 
 # Handle circular imports with TYPE_CHECKING
 if TYPE_CHECKING:
@@ -970,6 +971,70 @@ class Session:
             "or specify one when sending a message."
         )
     
+    def _capture_llm_context_after_provider(
+        self,
+        interaction_id: str,
+        provider: AbstractLLMInterface,
+        step_id: Optional[str] = None,
+        step_number: Optional[int] = None,
+        reasoning_phase: Optional[str] = None
+    ) -> str:
+        """
+        Capture EXACT VERBATIM LLM context from provider after API call.
+
+        This method retrieves the exact payload that was sent to the LLM
+        from the provider's verbatim capture system.
+
+        Args:
+            interaction_id: Main interaction ID
+            provider: Provider instance (with verbatim context)
+            step_id: ReAct step ID (if applicable)
+            step_number: ReAct step number (if applicable)
+            reasoning_phase: think/act/observe phase (if applicable)
+
+        Returns:
+            context_id: Unique identifier for the captured context
+        """
+        try:
+            # Get the exact verbatim context from provider
+            verbatim_data = provider.get_last_verbatim_context()
+
+            if not verbatim_data or not verbatim_data.get('context'):
+                # No verbatim context available
+                return f"no_context_{uuid.uuid4().hex[:8]}"
+
+            # Extract provider info
+            provider_name = self._get_provider_name(provider)
+            model_name = self._get_provider_model(provider) or "unknown"
+
+            # Extract endpoint from verbatim context (if available)
+            verbatim_context = verbatim_data['context']
+            endpoint = None
+            if verbatim_context.startswith("ENDPOINT:"):
+                lines = verbatim_context.split('\n', 1)
+                if lines:
+                    endpoint = lines[0].replace("ENDPOINT: ", "")
+
+            # Capture the EXACT verbatim context
+            context_id = capture_llm_context(
+                interaction_id=interaction_id,
+                verbatim_context=verbatim_context,
+                provider=provider_name,
+                model=model_name,
+                endpoint=endpoint,
+                step_id=step_id,
+                step_number=step_number,
+                reasoning_phase=reasoning_phase
+            )
+
+            return context_id
+
+        except Exception as e:
+            # Don't let context tracking break the main flow
+            logger = logging.getLogger("abstractllm.session")
+            logger.warning(f"Failed to capture LLM context: {e}")
+            return f"failed_context_{uuid.uuid4().hex[:8]}"
+
     def _get_provider_name(self, provider: AbstractLLMInterface) -> str:
         """
         Get the name of a provider.

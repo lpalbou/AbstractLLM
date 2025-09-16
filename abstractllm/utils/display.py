@@ -217,16 +217,19 @@ def format_metrics_line(response: Any) -> str:
     cycle_id = response.react_cycle_id[-8:]  # Last 8 chars for display
     metrics_parts.append(f"ID: {cycle_id}")
     
-    # Token metrics - only if usage data available
+    # Token metrics - new format: "XXX tk context | 55 (110) tk generated"
     if usage and isinstance(usage, dict):
         # Handle different provider field names
         prompt_tokens = usage.get('prompt_tokens', usage.get('input_tokens', 0))
         completion_tokens = usage.get('completion_tokens', usage.get('output_tokens', 0))
         total_tokens = usage.get('total_tokens', prompt_tokens + completion_tokens if prompt_tokens and completion_tokens else 0)
-        
-        if prompt_tokens and completion_tokens and total_tokens:
-            metrics_parts.append(f"{prompt_tokens}→{completion_tokens} ({total_tokens} total) tk")
+
+        if prompt_tokens and completion_tokens:
+            # Updated format: "Ctx: XX tk | Gen: YY (ZZ) tk"
+            metrics_parts.append(f"Ctx: {prompt_tokens} tk")
+            metrics_parts.append(f"Gen: {completion_tokens} ({total_tokens}) tk")
         elif total_tokens:
+            # Fallback for incomplete data
             metrics_parts.append(f"{total_tokens} tk")
     
     # Speed calculation - check multiple sources for timing information
@@ -252,12 +255,9 @@ def format_metrics_line(response: Any) -> str:
         tools_count = len(response.tools_executed)
         metrics_parts.append(f"Tools: {tools_count}")
     
-    # Scratchpad reference - always show since we have the ID (use short format)
-    short_id = cycle_id.replace('cycle_', '') if cycle_id.startswith('cycle_') else cycle_id
-    scratchpad_note = f" | /scratch {short_id} for details"
-    
-    metrics_line = " | ".join(metrics_parts) + scratchpad_note
-    return colorize(f"  {metrics_line}", Colors.BRIGHT_BLUE, italic=True)
+    # Clean metrics line without /scratch reference (per user specification)
+    metrics_line = " | ".join(metrics_parts)
+    return colorize(f"  {metrics_line}", Colors.BRIGHT_BLACK, italic=True)
 
 
 def format_metrics_summary(response: Any) -> str:
@@ -334,21 +334,38 @@ def format_metrics_summary(response: Any) -> str:
 
 
 def display_response(response: Any, show_content: bool = True) -> None:
-    """Display a GenerateResponse with beautiful formatting."""
-    
-    # Main content
+    """Display a GenerateResponse with alma> prefix formatting."""
+
+    # Add empty line before response for better separation
+    print()
+
+    # Main content - clean format with alma> prefix
     if show_content and hasattr(response, 'content') and response.content:
         content = response.content
-        print(f"\n{colorize(f'{Symbols.SPARKLES} Response', Colors.BRIGHT_GREEN, bold=True)}")
-        print(create_divider(60, "─", Colors.GREEN))
-        
-        # Format content with proper wrapping
-        lines = content.split('\n')
-        for line in lines:
-            if line.strip():
-                print(f"  {line}")
-            else:
-                print()
+
+        # Parse content to extract thinking and display both
+        from abstractllm.utils.formatting import parse_response_content
+        think_content, clean_content = parse_response_content(content)
+
+        # Display thinking content if present (users are paying for these tokens!)
+        if think_content:
+            print(f"\n{colorize('<think>', Colors.DIM, italic=True)}")
+            think_lines = think_content.split('\n')
+            for line in think_lines:
+                print(f"{colorize(line, Colors.DIM, italic=True)}")
+            print(f"{colorize('</think>', Colors.DIM, italic=True)}")
+            print()
+
+        # Display the main response content with alma> prefix
+        display_content = clean_content if think_content else content
+        lines = display_content.split('\n')
+
+        # First line gets "alma> " prefix
+        if lines:
+            print(f"{colorize('alma>', Colors.BLUE)} {lines[0]}")
+            # Additional lines without prefix
+            for line in lines[1:]:
+                print(line)
     
     # Tool execution trace
     if hasattr(response, 'tools_executed') and response.tools_executed:
@@ -357,10 +374,8 @@ def display_response(response: Any, show_content: bool = True) -> None:
     # Single-line metrics summary (compact version)
     metrics_line = format_metrics_line(response)
     if metrics_line:
-        print(f"\n{metrics_line}")
-    
-    # Add spacing after response for better readability
-    print()
+        print(f"{metrics_line}")
+        print()
 
 
 def display_error(error: str, details: Optional[str] = None) -> None:

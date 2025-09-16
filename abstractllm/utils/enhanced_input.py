@@ -9,7 +9,7 @@ import sys
 from typing import Optional
 
 
-def get_enhanced_input(prompt: str = "alma> ", max_chars: int = 32768) -> str:
+def get_enhanced_input(prompt: str = "user> ", max_chars: int = 32768) -> str:
     """
     Get single-line input with support for long queries.
 
