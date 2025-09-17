@@ -419,7 +419,7 @@ def format_tools_list(tools: List[Dict[str, Any]]) -> str:
     result.append("\n📚 More Tools:")
     result.append("  See abstractllm.tools.common_tools for additional tools:")
     result.append("  • search_files, write_file, update_file")
-    result.append("  • search_internet, fetch_url, fetch_and_parse_html")
+    result.append("  • web_search, fetch_url, fetch_and_parse_html")
     result.append("  • execute_command, ask_user_multiple_choice")
     
     return "\n".join(result)

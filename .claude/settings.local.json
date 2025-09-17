@@ -38,7 +38,12 @@
       "WebFetch(domain:stackoverflow.com)",
       "Read(//Users/albou/projects/forgellm/**)",
       "Bash(git add:*)",
-      "WebFetch(domain:platform.openai.com)"
+      "WebFetch(domain:platform.openai.com)",
+      "Read(//Users/albou/.abstractllm/**)",
+      "Read(//tmp/**)",
+      "Bash(zcat:*)",
+      "Bash(gzip:*)",
+      "Bash(tree:*)"
     ],
     "deny": []
   },

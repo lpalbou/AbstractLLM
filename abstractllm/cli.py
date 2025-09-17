@@ -9,7 +9,7 @@ with all SOTA features including hierarchical memory, ReAct reasoning, and tools
 
 from abstractllm.factory import create_session
 from abstractllm.structured_response import StructuredResponseConfig, ResponseFormat
-from abstractllm.tools.common_tools import read_file, list_files
+from abstractllm.tools.common_tools import read_file, list_files, search_files
 from abstractllm.tools.enhanced import tool
 from abstractllm.utils.logging import configure_logging
 from abstractllm.interface import ModelParameter
@@ -157,7 +157,7 @@ def create_agent(provider="ollama", model="qwen3:4b", memory_path=None, max_tool
             'working_memory_size': 10,
             'consolidation_threshold': 5
         },
-        'tools': [read_file, list_files, write_file],
+        'tools': [read_file, list_files, search_files, write_file],
         'system_prompt': "You are an intelligent AI assistant with memory and reasoning capabilities.",
         'max_tokens': 2048,
         'temperature': 0.7,
@@ -397,36 +397,67 @@ def run_query(session, prompt, structured_output=None):
 
 
 def show_memory_insights(session):
-    """Display memory system insights."""
-    
-    if not hasattr(session, 'memory'):
-        return
-    
-    memory = session.memory
-    stats = memory.get_statistics()
-    
-    print(f"\n{BLUE}📊 Memory Insights:{RESET}")
-    print(f"  • Working Memory: {stats['memory_distribution']['working_memory']} items")
-    print(f"  • Episodic Memory: {stats['memory_distribution']['episodic_memory']} experiences")
-    print(f"  • Knowledge Graph: {stats['knowledge_graph']['total_facts']} facts")
-    print(f"  • ReAct Cycles: {stats['total_react_cycles']} ({stats['successful_cycles']} successful)")
-    print(f"  • Bidirectional Links: {stats['link_statistics']['total_links']}")
-    
-    # Show sample facts from knowledge graph
-    if memory.knowledge_graph.facts:
-        print(f"\n  {GREEN}Sample Knowledge Graph Triples:{RESET}")
-        for i, (fact_id, fact) in enumerate(list(memory.knowledge_graph.facts.items())[:5]):
-            print(f"    {i+1}. {fact.subject} --[{fact.predicate}]--> {fact.object}")
-    
-    # Show current ReAct cycle if active
-    if session.current_cycle:
-        cycle = session.current_cycle
-        print(f"\n  {GREEN}Current ReAct Cycle:{RESET}")
-        print(f"    ID: {cycle.cycle_id}")
-        print(f"    Query: {cycle.query[:100]}...")
-        print(f"    Thoughts: {len(cycle.thoughts)}")
-        print(f"    Actions: {len(cycle.actions)}")
-        print(f"    Observations: {len(cycle.observations)}")
+    """Display comprehensive memory and observability insights."""
+
+    # Show traditional memory system insights
+    if hasattr(session, 'memory') and session.memory:
+        memory = session.memory
+        stats = memory.get_statistics()
+
+        print(f"\n{BLUE}📊 Memory System Insights:{RESET}")
+        print(f"  • Working Memory: {stats['memory_distribution']['working_memory']} items")
+        print(f"  • Episodic Memory: {stats['memory_distribution']['episodic_memory']} experiences")
+        print(f"  • Knowledge Graph: {stats['knowledge_graph']['total_facts']} facts")
+        print(f"  • ReAct Cycles: {stats['total_react_cycles']} ({stats['successful_cycles']} successful)")
+        print(f"  • Bidirectional Links: {stats['link_statistics']['total_links']}")
+
+        # Show sample facts from knowledge graph
+        if memory.knowledge_graph.facts:
+            print(f"\n  {GREEN}Sample Knowledge Graph Triples:{RESET}")
+            for i, (fact_id, fact) in enumerate(list(memory.knowledge_graph.facts.items())[:3]):
+                print(f"    {i+1}. {fact.subject} --[{fact.predicate}]--> {fact.object}")
+
+        # Show current ReAct cycle if active
+        if hasattr(session, 'current_cycle') and session.current_cycle:
+            cycle = session.current_cycle
+            print(f"\n  {GREEN}Current ReAct Cycle:{RESET}")
+            print(f"    ID: {cycle.cycle_id}")
+            print(f"    Query: {cycle.query[:100]}...")
+            print(f"    Thoughts: {len(cycle.thoughts)}")
+            print(f"    Actions: {len(cycle.actions)}")
+            print(f"    Observations: {len(cycle.observations)}")
+
+    # Show LanceDB observability insights
+    if hasattr(session, 'lance_store') and session.lance_store:
+        try:
+            stats = session.lance_store.get_stats()
+
+            print(f"\n{BLUE}🚀 LanceDB Observability:{RESET}")
+            print(f"  • Session ID: {session.id[:16]}...")
+            print(f"  • Users Tracked: {stats.get('users', {}).get('count', 0)}")
+            print(f"  • Sessions Stored: {stats.get('sessions', {}).get('count', 0)}")
+            print(f"  • Interactions: {stats.get('interactions', {}).get('count', 0)} (with embeddings)")
+
+            react_count = stats.get('react_cycles', {}).get('count', 0) if 'react_cycles' in stats else 0
+            if react_count > 0:
+                print(f"  • ReAct Cycles: {react_count} (searchable reasoning)")
+
+            total_size = sum(table.get('size_mb', 0) for table in stats.values() if isinstance(table, dict))
+            print(f"  • Storage: {total_size:.2f} MB")
+            print(f"  • Embeddings: {'✅ Active' if session.embedder else '❌ Disabled'}")
+
+            print(f"\n  {GREEN}Enhanced Search Capabilities:{RESET}")
+            print(f"    • Semantic search: /search <query>")
+            print(f"    • Time-based queries: /timeframe <start> <end>")
+            print(f"    • Similarity discovery: /similar <text>")
+            print(f"    • Cross-session knowledge retrieval")
+
+        except Exception as e:
+            print(f"\n{BLUE}🚀 LanceDB Observability: Error retrieving stats{RESET}")
+    else:
+        print(f"\n{BLUE}📦 Enhanced Observability Available:{RESET}")
+        print(f"  Install: pip install lancedb sentence-transformers")
+        print(f"  Features: Semantic search, time-based queries, RAG retrieval")
 
 
 def interactive_mode(session):

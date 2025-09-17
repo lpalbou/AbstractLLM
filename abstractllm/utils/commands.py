@@ -6,11 +6,14 @@ session control, and agent interaction.
 """
 
 import json
+import logging
 import os
 import pickle
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 from abstractllm.utils.display import (
     Colors, Symbols, display_error, display_info, display_success,
@@ -57,6 +60,11 @@ class CommandProcessor:
             'system': self._cmd_system,
             'stream': self._cmd_stream,
             'tools': self._cmd_tools,
+            'search': self._cmd_search,
+            's': self._cmd_search,
+            'timeframe': self._cmd_timeframe,
+            'tf': self._cmd_timeframe,
+            'similar': self._cmd_similar,
             'exit': self._cmd_exit,
             'quit': self._cmd_exit,
             'q': self._cmd_exit,
@@ -132,10 +140,21 @@ class CommandProcessor:
                 ("/stream [on|off]", "Toggle streaming mode for responses and ReAct loops"),
                 ("/tools [tool_name]", "Show registered tools or toggle a specific tool"),
                 ("/clear", "Clear conversation history"),
-                ("/reset", "Reset entire session"),
+                ("/reset", "Reset current session"),
+                ("/reset full", "⚠️  PURGE ALL storage (all sessions, embeddings)"),
                 ("/status", "Show session status"),
                 ("/stats", "Show detailed statistics"),
                 ("/config", "Show current configuration")
+            ]),
+            ("LanceDB Search & Observability", [
+                ("/search, /s <query>", "Semantic search across all interactions"),
+                ("/search <query> --user <id>", "Search by user with semantic matching"),
+                ("/search <query> --from <date>", "Search with date filtering"),
+                ("/search <query> --to <date>", "Search up to specific date"),
+                ("/timeframe, /tf <start> <end>", "Search exact timeframe (YYYY-MM-DD format)"),
+                ("/timeframe <start> <end> <user>", "Timeframe search for specific user"),
+                ("/similar <text>", "Find interactions similar to given text"),
+                ("/similar <text> --limit <n>", "Limit similarity search results")
             ]),
             ("Navigation", [
                 ("/help, /h", "Show this help message"),
@@ -150,25 +169,48 @@ class CommandProcessor:
         
         print(f"\n{colorize('Usage Examples:', Colors.BRIGHT_YELLOW, bold=True)}")
         examples = [
+            # Core session management
             "/save my_session.pkl",
             "/load my_session.pkl",
             "/memory 16384",
             "/temperature 0.3",
-            "/memory-facts 10 0.3 1",
             "/system You are a helpful coding assistant",
-            "/stream on",
-            "/tools read_file",
+
+            # LanceDB semantic search examples
+            "/search debugging cache problems",
+            "/search machine learning --from 2025-09-01",
+            "/timeframe 2025-09-15T10:00 2025-09-15T12:15",
+            "/similar how to optimize database queries",
+            "/search error handling --user alice --limit 5",
+
+            # Memory and observability
             "/working",
             "/facts machine learning",
             "/links",
-            "/seed 42",
-            "/last 3",
             "/context",
-            "/export memory_backup.json"
+            "/stats",
+
+            # Session and storage management
+            "/reset",
+            "/reset full"
         ]
         for example in examples:
             print(f"  {colorize(example, Colors.BRIGHT_BLUE)}")
-        
+
+        # Show LanceDB availability status
+        if hasattr(self.session, 'lance_store') and self.session.lance_store:
+            print(f"\n{colorize('🚀 LanceDB Enhanced Search: ACTIVE', Colors.BRIGHT_GREEN, bold=True)}")
+            print(f"  • Semantic search with embeddings enabled")
+            print(f"  • Time-based queries with microsecond precision")
+            print(f"  • Cross-session knowledge persistence")
+            print(f"  • RAG-powered context retrieval")
+        else:
+            print(f"\n{colorize('📦 LanceDB Enhanced Search: AVAILABLE', Colors.BRIGHT_YELLOW, bold=True)}")
+            print(f"  Install with: {colorize('pip install lancedb sentence-transformers', Colors.BRIGHT_BLUE)}")
+            print(f"  • Semantic search across all conversations")
+            print(f"  • Precise timeframe filtering")
+            print(f"  • Similarity-based interaction discovery")
+
         # Add spacing after help for better readability
     
     def _cmd_memory(self, args: List[str]) -> None:
@@ -813,7 +855,12 @@ class CommandProcessor:
         display_info("Import functionality requires memory system reconstruction - use /load for complete session restore")
     
     def _cmd_facts(self, args: List[str]) -> None:
-        """Show extracted facts, optionally filtered by query."""
+        """Show extracted facts, optionally filtered by query or for specific interaction."""
+        # Check if first argument looks like an interaction ID (8 hex chars or cycle_...)
+        if args and (len(args[0]) == 8 and all(c in '0123456789abcdef' for c in args[0].lower()) or args[0].startswith('cycle_')):
+            self._cmd_facts_unified(args)
+            return
+
         if not hasattr(self.session, 'memory') or not self.session.memory:
             display_error("Memory system not available")
             return
@@ -977,7 +1024,17 @@ class CommandProcessor:
         # If a response ID is provided, show specific interaction scratchpad
         if args:
             response_id = args[0]
-            # Handle both formats: "4258e5b8" and "cycle_4258e5b8"
+
+            # Check if this looks like a ReAct ID (for unified store) vs legacy interaction ID
+            if len(response_id) >= 8 and not response_id.startswith('cycle_'):
+                # Try unified store first
+                try:
+                    self._cmd_scratchpad_unified([response_id])
+                    return
+                except:
+                    pass  # Fall back to legacy system
+
+            # Handle legacy format: "4258e5b8" and "cycle_4258e5b8"
             if not response_id.startswith('cycle_'):
                 response_id = f"cycle_{response_id}"
             from abstractllm.utils.response_helpers import scratchpad_command
@@ -1272,27 +1329,78 @@ class CommandProcessor:
         display_success("Conversation history cleared")
     
     def _cmd_reset(self, args: List[str]) -> None:
-        """Reset entire session."""
-        print(f"{colorize('⚠️  This will reset ALL session data (messages, memory, history)', Colors.BRIGHT_RED)}")
-        confirm = input(f"{colorize('Continue? [y/N]: ', Colors.BRIGHT_YELLOW)}")
-        
-        if confirm.lower() in ['y', 'yes']:
-            # Clear messages
-            self.session.messages.clear()
-            self.session._last_assistant_idx = -1
-            
-            # Reset memory if available
-            if hasattr(self.session, 'memory') and self.session.memory:
-                # Create new memory instance
-                from abstractllm.memory import HierarchicalMemory
-                self.session.memory = HierarchicalMemory()
-            
-            # Clear command history
-            self.command_history.clear()
-            
-            display_success("Session completely reset")
+        """Reset session or completely purge all storage."""
+
+        # Check if this is a full reset
+        if args and args[0].lower() == 'full':
+            self._reset_full_storage()
         else:
-            display_info("Reset cancelled")
+            self._reset_current_session()
+
+    def _reset_current_session(self) -> None:
+        """Reset only the current session."""
+        print(f"{colorize('Reset current session?', Colors.YELLOW)}")
+        confirm = input(f"{colorize('[y/N]: ', Colors.BRIGHT_YELLOW)}")
+
+        if confirm.lower() in ['y', 'yes']:
+            self._clear_session_data()
+            display_success("Session reset")
+        else:
+            display_info("Cancelled")
+
+    def _clear_session_data(self) -> None:
+        """Clear all session data."""
+        self.session.messages.clear()
+        self.session._last_assistant_idx = -1
+
+        if hasattr(self.session, 'memory') and self.session.memory:
+            from abstractllm.memory import HierarchicalMemory
+            self.session.memory = HierarchicalMemory()
+
+        self.command_history.clear()
+
+    def _reset_full_storage(self) -> None:
+        """Completely purge all LanceDB storage and sessions."""
+        print(f"{colorize('🔥 This will DELETE ALL storage permanently', Colors.BRIGHT_RED, bold=True)}")
+
+        confirm = input(f"{colorize('Type \"DELETE\" to confirm: ', Colors.BRIGHT_YELLOW)}")
+        if confirm != "DELETE":
+            display_info("Deletion cancelled - confirmation text did not match")
+            return
+
+        self._purge_storage()
+        self._clear_session_data()
+
+        display_success("🔥 STORAGE PURGED - Fresh start ready")
+
+    def _purge_storage(self) -> None:
+        """Purge all storage directories."""
+        import shutil
+        from pathlib import Path
+        import gc
+        import time
+
+        # Close connections
+        self.session.lance_store = None
+        self.session.embedder = None
+        gc.collect()
+
+        # Delete storage
+        paths = [
+            Path.home() / ".abstractllm" / "lancedb",
+            Path.home() / ".abstractllm" / "embeddings"
+        ]
+
+        for path in paths:
+            if path.exists():
+                shutil.rmtree(path)
+
+        time.sleep(0.5)
+
+        # Recreate fresh
+        from abstractllm.storage import ObservabilityStore, EmbeddingManager
+        self.session.lance_store = ObservabilityStore()
+        self.session.embedder = EmbeddingManager()
     
     def _cmd_status(self, args: List[str]) -> None:
         """Show session status."""
@@ -1331,6 +1439,36 @@ class CommandProcessor:
         if hasattr(self.session, 'memory') and self.session.memory:
             print()
             self._cmd_memory(args)
+
+        # Show LanceDB observability statistics
+        if hasattr(self.session, 'lance_store') and self.session.lance_store:
+            try:
+                stats = self.session.lance_store.get_stats()
+
+                print(f"\n{colorize(f'{Symbols.CHART} LanceDB Observability Storage', Colors.BRIGHT_CYAN, bold=True)}")
+                print(create_divider(60, "─", Colors.CYAN))
+
+                print(f"  {colorize('Session ID:', Colors.CYAN)} {self.session.id[:16]}...")
+                print(f"  {colorize('Users:', Colors.CYAN)} {stats.get('users', {}).get('count', 0)}")
+                print(f"  {colorize('Sessions:', Colors.CYAN)} {stats.get('sessions', {}).get('count', 0)}")
+                print(f"  {colorize('Interactions stored:', Colors.CYAN)} {stats.get('interactions', {}).get('count', 0)}")
+                print(f"  {colorize('ReAct cycles:', Colors.CYAN)} {stats.get('react_cycles', {}).get('count', 0) if 'react_cycles' in stats else 0}")
+
+                total_size = sum(table.get('size_mb', 0) for table in stats.values() if isinstance(table, dict))
+                print(f"  {colorize('Total storage:', Colors.CYAN)} {total_size:.2f} MB")
+                print(f"  {colorize('Embeddings enabled:', Colors.CYAN)} {bool(self.session.embedder)}")
+
+                print(f"\n{colorize('Available Commands:', Colors.BRIGHT_BLUE)}")
+                print(f"  • {colorize('/search <query>', Colors.BRIGHT_BLUE)} - Semantic search with embeddings")
+                print(f"  • {colorize('/timeframe <start> <end>', Colors.BRIGHT_BLUE)} - Search by exact time")
+                print(f"  • {colorize('/similar <text>', Colors.BRIGHT_BLUE)} - Find similar interactions")
+
+            except Exception as e:
+                print(f"\n{colorize('LanceDB stats unavailable', Colors.DIM)}")
+                logger.debug(f"LanceDB stats error: {e}")
+        else:
+            print(f"\n{colorize('LanceDB observability not available', Colors.YELLOW)}")
+            print(f"  {colorize('Install lancedb and sentence-transformers for enhanced search', Colors.DIM)}")
     
     def _cmd_config(self, args: List[str]) -> None:
         """Show current configuration."""
@@ -1375,12 +1513,12 @@ class CommandProcessor:
         """Show the exact verbatim context sent to the LLM."""
         # Check if specific context ID is requested
         if args and not args[0] in ["compact", "debug", "full"]:
-            context_id = args[0]
-            # Handle both formats: "4258e5b8" and "cycle_4258e5b8" or "step_4258e5b8_001"
-            if not context_id.startswith('cycle_') and not context_id.startswith('step_'):
-                context_id = f"cycle_{context_id}"
+            interaction_id = args[0]
+            # Handle both formats: "4258e5b8" and "cycle_4258e5b8"
+            if interaction_id.startswith('cycle_'):
+                interaction_id = interaction_id[6:]  # Remove 'cycle_' prefix
 
-            self._show_specific_context(context_id)
+            self._show_specific_context_unified(interaction_id)
             return
 
         # Show current/last context (existing behavior)
@@ -1426,9 +1564,7 @@ class CommandProcessor:
         # Try different storage locations and formats
         storage_locations = [
             # New enhanced context storage (.abstractllm directory)
-            Path.home() / ".abstractllm" / "sessions",
-            # Current temp storage
-            Path("/tmp")
+            Path.home() / ".abstractllm" / "sessions"
         ]
 
         context_data = None
@@ -1436,20 +1572,8 @@ class CommandProcessor:
 
         # Try to find the context file
         for base_path in storage_locations:
-            if base_path == Path("/tmp"):
-                # Try temp storage format
-                temp_file = base_path / f"alma_interaction_{context_id}.json"
-                if temp_file.exists():
-                    try:
-                        with open(temp_file, 'r') as f:
-                            context_data = json.load(f)
-                        source_location = str(temp_file)
-                        break
-                    except Exception:
-                        continue
-            else:
-                # Try enhanced context storage
-                for session_dir in base_path.iterdir():
+            # Try enhanced context storage
+            for session_dir in base_path.iterdir():
                     if session_dir.is_dir():
                         contexts_dir = session_dir / "contexts"
                         if contexts_dir.exists():
@@ -1631,6 +1755,282 @@ class CommandProcessor:
             print(f"\n{colorize('❌ No verbatim context available', Colors.RED)}")
 
         print(f"\n{colorize(f'📁 Source: {source}', Colors.DIM)}")
+
+    def _show_specific_context_unified(self, interaction_id: str) -> None:
+        """Show context using LanceDB store."""
+        # Try LanceDB first
+        if hasattr(self.session, 'lance_store') and self.session.lance_store:
+            try:
+                # Use exact ID lookup to find the interaction
+                context_data = self.session.lance_store.get_interaction_by_id(interaction_id)
+                if context_data:
+                    context = context_data.get('context_verbatim', '')
+
+                    if context:
+                        print(f"\n{colorize(f'{Symbols.TARGET} LLM Context for Interaction', Colors.BRIGHT_YELLOW, bold=True)} - {colorize(interaction_id[:8], Colors.WHITE)}")
+                        print(create_divider(80, "─", Colors.YELLOW))
+                        print(f"\n{context}\n")
+                        print(create_divider(80, "─", Colors.YELLOW))
+
+                        timestamp = context_data.get('timestamp', 'Unknown time')
+                        query = context_data.get('query', 'Unknown query')
+
+                        # Extract real query from context_verbatim if it contains session info
+                        if context and ('Session:' in query or 'Current Reasoning' in query):
+                            # Extract user query from context (format: "User: <query>")
+                            if 'User:' in context:
+                                lines = context.split('\n')
+                                # Find the last "User:" line (most recent query)
+                                for line in reversed(lines):
+                                    if line.strip().startswith('User:'):
+                                        extracted_query = line.replace('User:', '').strip()
+                                        if extracted_query:
+                                            query = extracted_query
+                                            break
+
+                        print(f"\n{colorize('Timestamp:', Colors.DIM)} {timestamp}")
+                        print(f"{colorize('Query:', Colors.DIM)} {query[:100]}{'...' if len(query) > 100 else ''}")
+                        return
+            except Exception as e:
+                logger.debug(f"LanceDB context lookup failed: {e}")
+
+        # Fallback to legacy system
+        try:
+            context_id = f"cycle_{interaction_id}"
+            self._show_specific_context(context_id)
+            return
+        except Exception:
+            pass
+
+            if not context:
+                display_error(f"Context not found for interaction ID: {interaction_id}")
+                print(f"\n{colorize('💡 Tip: Use /stats to see available interactions', Colors.DIM)}")
+                return
+
+            # Display unified context
+            print(f"\n{colorize('🔍 EXACT VERBATIM LLM CONTEXT', Colors.BRIGHT_CYAN, bold=True)} - {colorize(interaction_id[:8], Colors.WHITE)}")
+            print(f"{colorize('─' * 60, Colors.CYAN)}")
+
+            # Context metadata
+            print(f"\n{colorize('📋 Context Metadata', Colors.BRIGHT_BLUE)}")
+            print(f"  {colorize('Interaction ID:', Colors.CYAN)} {interaction_id}")
+            print(f"  {colorize('Session ID:', Colors.CYAN)} {session_id}")
+            if metadata.get('created_at'):
+                print(f"  {colorize('Timestamp:', Colors.CYAN)} {metadata['created_at']}")
+            if metadata.get('metadata'):
+                meta = metadata['metadata']
+                if 'provider' in meta:
+                    print(f"  {colorize('Provider:', Colors.CYAN)} {meta['provider']}")
+                if 'model' in meta:
+                    print(f"  {colorize('Model:', Colors.CYAN)} {meta['model']}")
+
+            print(f"  {colorize('Size:', Colors.CYAN)} {len(context):,} characters")
+
+            # EXACT VERBATIM CONTEXT
+            print(f"\n{colorize('🎯 EXACT VERBATIM PAYLOAD SENT TO LLM', Colors.BRIGHT_RED, bold=True)}")
+            print(f"{colorize('─' * 60, Colors.RED)}")
+            print(f"{colorize('⚠️  This is the EXACT content sent to the LLM - no formatting applied', Colors.YELLOW)}")
+            print(f"{colorize('─' * 60, Colors.RED)}")
+
+            # Display the EXACT verbatim context
+            print(context)
+
+            print(f"{colorize('─' * 60, Colors.RED)}")
+            print(f"{colorize('END OF EXACT VERBATIM PAYLOAD', Colors.RED)}")
+
+            # Show additional info
+            if metadata.get('has_facts'):
+                print(f"\n{colorize('💡 Facts available:', Colors.CYAN)} Use {colorize(f'/facts {interaction_id}', Colors.BRIGHT_BLUE)} to view extracted facts")
+
+            react_cycles = store.get_react_cycles_for_interaction(interaction_id)
+            if react_cycles:
+                print(f"{colorize('💡 ReAct cycles:', Colors.CYAN)} {len(react_cycles)} cycle(s) available")
+                for cycle in react_cycles:
+                    print(f"  • Use {colorize(f'/scratch {cycle['react_id']}', Colors.BRIGHT_BLUE)} for scratchpad")
+
+        except Exception as e:
+            display_error(f"Failed to retrieve context: {e}")
+            # Fallback to legacy system
+            context_id = f"cycle_{interaction_id}"
+            self._show_specific_context(context_id)
+
+    def _cmd_facts_unified(self, args: List[str]) -> None:
+        """Show extracted facts for a specific interaction."""
+        if not args:
+            # Show general memory facts (existing behavior)
+            self._cmd_facts([])
+            return
+
+        interaction_id = args[0]
+        if interaction_id.startswith('cycle_'):
+            interaction_id = interaction_id[6:]  # Remove 'cycle_' prefix
+
+        # Try LanceDB first
+        if hasattr(self.session, 'lance_store') and self.session.lance_store:
+            try:
+                context_data = self.session.lance_store.get_interaction_by_id(interaction_id)
+                if context_data:
+                    facts = context_data.get('facts_extracted', [])
+
+                    if not facts:
+                        display_info(f"No facts extracted for interaction {interaction_id}")
+                        return
+
+                    print(f"\n{colorize(f'{Symbols.KEY} Extracted Facts for Interaction', Colors.BRIGHT_YELLOW, bold=True)} - {colorize(interaction_id[:8], Colors.WHITE)}")
+                    timestamp = context_data.get('timestamp', 'Unknown time')
+                    print(f"{colorize(f'From: {timestamp}', Colors.DIM, italic=True)}")
+                    print(create_divider(60, "─", Colors.YELLOW))
+
+                    for i, fact in enumerate(facts, 1):
+                        fact_text = fact if isinstance(fact, str) else str(fact)
+                        print(f"  {colorize(f'{i}.', Colors.BRIGHT_YELLOW)} {fact_text}")
+
+                    print(f"\n{colorize(f'Total: {len(facts)} facts extracted', Colors.BRIGHT_YELLOW)}")
+                    return
+
+            except Exception as e:
+                logger.debug(f"LanceDB facts lookup failed: {e}")
+
+        display_info(f"No facts found for interaction {interaction_id}")
+
+    def _cmd_scratchpad_unified(self, args: List[str]) -> None:
+        """Show scratchpad for a specific ReAct cycle."""
+        if not args:
+            # Show list of available scratchpads (existing behavior)
+            self._cmd_scratchpad([])
+            return
+
+        react_id = args[0]
+
+        # Try LanceDB first
+        if hasattr(self.session, 'lance_store') and self.session.lance_store:
+            try:
+                # First try react_cycles table
+                if "react_cycles" in self.session.lance_store.db.table_names():
+                    results = self.session.lance_store.search_react_cycles(react_id, limit=1)
+                    if results:
+                        cycle_data = results[0]
+                        scratchpad_json = cycle_data.get('scratchpad', '{}')
+                    else:
+                        cycle_data = None
+                        scratchpad_json = None
+                else:
+                    # No react_cycles table, look in interactions table
+                    interaction_data = self.session.lance_store.get_interaction_by_id(react_id)
+                    if interaction_data:
+                        context = interaction_data.get('context_verbatim', '')
+                        # Extract and display ReAct reasoning from context
+                        react_reasoning = self._extract_react_reasoning(context)
+                        if react_reasoning:
+                            print(f"\n{colorize(f'{Symbols.BRAIN} ReAct Reasoning Trace', Colors.BRIGHT_CYAN, bold=True)} - {colorize(react_id[:8], Colors.WHITE)}")
+                            print(create_divider(60, "─", Colors.CYAN))
+
+                            for step_num, step in enumerate(react_reasoning, 1):
+                                print(f"\n{colorize(f'Step {step_num}:', Colors.BRIGHT_CYAN)}")
+                                if step.get('thought'):
+                                    print(f"  {colorize('💭 Thought:', Colors.YELLOW)} {step['thought']}")
+                                if step.get('action'):
+                                    print(f"  {colorize('⚡ Action:', Colors.GREEN)} {step['action']}")
+                                if step.get('observation'):
+                                    print(f"  {colorize('👁️ Observation:', Colors.BLUE)} {step['observation']}")
+                                if step.get('knowledge'):
+                                    print(f"  {colorize('🔗 Relevant Knowledge:', Colors.PURPLE)}")
+                                    for fact in step['knowledge'][:3]:  # Show top 3 facts
+                                        print(f"    - {fact}")
+
+                            print(f"\n{create_divider(60, '─', Colors.CYAN)}")
+                            return
+                        else:
+                            display_error(f"No detailed ReAct reasoning found for interaction: {react_id}")
+                            display_info("This interaction has basic reasoning metadata. Use /context command to view full interaction context.")
+                            return
+                    else:
+                        display_error(f"Interaction not found: {react_id}")
+                        return
+
+                if scratchpad_json:
+                    try:
+                        scratchpad = json.loads(scratchpad_json) if scratchpad_json else {}
+                    except json.JSONDecodeError:
+                        scratchpad = {'raw_data': scratchpad_json}
+
+                    if not scratchpad:
+                        display_error(f"Scratchpad not found for ReAct cycle: {react_id}")
+                        return
+
+                    print(f"\n{colorize(f'{Symbols.BRAIN} ReAct Scratchpad', Colors.BRIGHT_CYAN, bold=True)} - {colorize(react_id[:8], Colors.WHITE)}")
+                    print(create_divider(60, "─", Colors.CYAN))
+
+                    # Display scratchpad content
+                    if isinstance(scratchpad, dict):
+                        for key, value in scratchpad.items():
+                            print(f"\n{colorize(f'{key.title()}:', Colors.BRIGHT_BLUE)}")
+                            if isinstance(value, (list, dict)):
+                                print(json.dumps(value, indent=2))
+                            else:
+                                print(str(value))
+                    else:
+                        print(str(scratchpad))
+                    return
+
+            except Exception as e:
+                logger.debug(f"LanceDB scratchpad lookup failed: {e}")
+
+        display_error(f"Scratchpad not found for ReAct cycle: {react_id}")
+
+    def _extract_react_reasoning(self, context: str) -> List[Dict[str, Any]]:
+        """Extract ReAct reasoning steps from context verbatim."""
+        if not context:
+            return []
+
+        reasoning_steps = []
+        lines = context.split('\n')
+        current_step = {}
+
+        for line in lines:
+            line = line.strip()
+
+            # Look for reasoning cycle start
+            if '--- Current Reasoning (Cycle' in line:
+                # Save previous step if exists
+                if current_step:
+                    reasoning_steps.append(current_step)
+                current_step = {}
+
+            # Extract thought
+            elif line.startswith('Thought:'):
+                current_step['thought'] = line.replace('Thought:', '').strip()
+
+            # Extract action (look for tool calls or explicit actions)
+            elif line.startswith('Action:'):
+                current_step['action'] = line.replace('Action:', '').strip()
+
+            # Extract observation
+            elif line.startswith('Observation:'):
+                current_step['observation'] = line.replace('Observation:', '').strip()
+
+            # Extract relevant knowledge
+            elif '--- Relevant Knowledge ---' in line:
+                current_step['knowledge'] = []
+                # Look for following lines with facts
+                continue
+            elif current_step.get('knowledge') is not None and line.startswith('-'):
+                # This is a knowledge fact
+                fact = line.replace('- ', '').strip()
+                if fact and '(confidence:' in fact:
+                    current_step['knowledge'].append(fact)
+
+        # Add final step
+        if current_step:
+            reasoning_steps.append(current_step)
+
+        # Filter out empty steps
+        valid_steps = []
+        for step in reasoning_steps:
+            if step.get('thought') or step.get('action') or step.get('observation'):
+                valid_steps.append(step)
+
+        return valid_steps
 
     def _cmd_seed(self, args: List[str]) -> None:
         """Show or set random seed for deterministic generation."""
@@ -1953,6 +2353,335 @@ class CommandProcessor:
             else:
                 display_error(f"Cannot reactivate '{tool_name}': original function not available")
                 print(f"{colorize('Note:', Colors.DIM)} Tool definition exists but function implementation is missing")
+
+    def _cmd_search(self, args: List[str]) -> None:
+        """Search interactions using semantic similarity with optional filters.
+
+        Usage: /search <query> [--user <id>] [--from <date>] [--to <date>] [--limit <n>]
+
+        Examples:
+          /search debugging cache problems
+          /search "machine learning" --from 2025-09-01 --limit 5
+          /search optimization --user alice
+        """
+        if not args:
+            display_error("Usage: /search <query> [--user <id>] [--from <date>] [--to <date>] [--limit <n>]")
+            return
+
+        # Check if LanceDB is available
+        if not hasattr(self.session, 'lance_store') or not self.session.lance_store:
+            display_error("LanceDB search is not available. Using legacy search...")
+            # Fallback to existing context search
+            self._cmd_context(args)
+            return
+
+        try:
+            # Parse arguments
+            query_parts = []
+            filters = {}
+            limit = 10
+            i = 0
+
+            while i < len(args):
+                if args[i] == '--user' and i + 1 < len(args):
+                    filters['user_id'] = args[i + 1]
+                    i += 2
+                elif args[i] == '--from' and i + 1 < len(args):
+                    try:
+                        filters['start_time'] = datetime.fromisoformat(args[i + 1])
+                    except ValueError:
+                        display_error(f"Invalid date format: {args[i + 1]}. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS")
+                        return
+                    i += 2
+                elif args[i] == '--to' and i + 1 < len(args):
+                    try:
+                        filters['end_time'] = datetime.fromisoformat(args[i + 1])
+                    except ValueError:
+                        display_error(f"Invalid date format: {args[i + 1]}. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS")
+                        return
+                    i += 2
+                elif args[i] == '--limit' and i + 1 < len(args):
+                    try:
+                        limit = int(args[i + 1])
+                    except ValueError:
+                        display_error(f"Invalid limit: {args[i + 1]}")
+                        return
+                    i += 2
+                else:
+                    query_parts.append(args[i])
+                    i += 1
+
+            if not query_parts:
+                display_error("No search query provided")
+                return
+
+            query_text = ' '.join(query_parts)
+
+            # Perform semantic search
+            print(f"{colorize('🔍 Searching for:', Colors.BRIGHT_CYAN)} {colorize(query_text, Colors.WHITE)}")
+            if filters:
+                filter_desc = []
+                if 'user_id' in filters:
+                    filter_desc.append(f"user: {filters['user_id']}")
+                if 'start_time' in filters:
+                    filter_desc.append(f"from: {filters['start_time'].strftime('%Y-%m-%d')}")
+                if 'end_time' in filters:
+                    filter_desc.append(f"to: {filters['end_time'].strftime('%Y-%m-%d')}")
+                print(f"{colorize('🔧 Filters:', Colors.DIM)} {', '.join(filter_desc)}")
+
+            results = self.session.lance_store.semantic_search(query_text, limit=limit, filters=filters)
+
+            if not results:
+                print(f"{colorize('📭 No results found', Colors.YELLOW)}")
+                return
+
+            print(f"{colorize('📄 Found:', Colors.BRIGHT_GREEN)} {colorize(str(len(results)), Colors.WHITE)} results")
+            print()
+
+            for i, result in enumerate(results, 1):
+                timestamp = result.get('timestamp', 'Unknown time')
+                if isinstance(timestamp, str):
+                    try:
+                        dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                        timestamp = dt.strftime('%Y-%m-%d %H:%M:%S')
+                    except:
+                        pass
+
+                similarity = result.get('_distance', 0)
+                # Convert distance to similarity (lower distance = higher similarity)
+                similarity_pct = max(0, (2.0 - similarity) / 2.0 * 100) if similarity else 0
+
+                print(f"{colorize(f'{i}.', Colors.BRIGHT_BLUE)} {colorize(timestamp, Colors.DIM)} "
+                      f"{colorize(f'({similarity_pct:.1f}% similar)', Colors.GREEN)}")
+
+                # Extract real query from context_verbatim if it contains session info
+                query = result.get('query', 'Unknown query')
+                if 'context_verbatim' in result and ('Session:' in query or query == 'Unknown query'):
+                    context = result['context_verbatim']
+                    # Extract user query from context (format: "User: <query>")
+                    if 'User:' in context:
+                        lines = context.split('\n')
+                        # Find the last "User:" line (most recent query)
+                        for line in reversed(lines):
+                            if line.strip().startswith('User:'):
+                                extracted_query = line.replace('User:', '').strip()
+                                if extracted_query:
+                                    query = extracted_query
+                                    break
+
+                if len(query) > 100:
+                    query = query[:97] + "..."
+                print(f"   {colorize('Q:', Colors.CYAN)} {query}")
+
+                # Show best matching chunks instead of truncated response
+                response = result.get('response', 'No response')
+                if response == 'Processing...':
+                    response = "[Response was generated but not captured in storage]"
+                    print(f"   {colorize('A:', Colors.MAGENTA)} {response}")
+                elif hasattr(self.session, 'lance_store') and self.session.lance_store:
+                    # Use chunking to show relevant parts
+                    try:
+                        chunks = self.session.lance_store._chunk_response_content(response, max_chunk_size=250)
+                        best_chunks = self.session.lance_store._find_best_matching_chunks(query_text, chunks, max_chunks=2)
+
+                        if best_chunks:
+                            print(f"   {colorize('A:', Colors.MAGENTA)} {colorize('(relevant parts)', Colors.DIM)}")
+                            for chunk in best_chunks:
+                                chunk_preview = chunk[:200] + "..." if len(chunk) > 200 else chunk
+                                print(f"   {colorize('   →', Colors.YELLOW)} {chunk_preview}")
+                        else:
+                            # Fallback to truncated response
+                            if len(response) > 150:
+                                response = response[:147] + "..."
+                            print(f"   {colorize('A:', Colors.MAGENTA)} {response}")
+                    except Exception as e:
+                        # Fallback to original behavior
+                        if len(response) > 150:
+                            response = response[:147] + "..."
+                        print(f"   {colorize('A:', Colors.MAGENTA)} {response}")
+                else:
+                    # No LanceDB available - use original behavior
+                    if len(response) > 150:
+                        response = response[:147] + "..."
+                    print(f"   {colorize('A:', Colors.MAGENTA)} {response}")
+                print()
+
+        except Exception as e:
+            display_error(f"Search failed: {e}")
+
+    def _cmd_timeframe(self, args: List[str]) -> None:
+        """Search interactions within a specific timeframe.
+
+        Usage: /timeframe <start> <end> [user_id]
+
+        Examples:
+          /timeframe 2025-09-15T10:00 2025-09-15T12:15
+          /timeframe 2025-09-15 2025-09-16 alice
+        """
+        if len(args) < 2:
+            display_error("Usage: /timeframe <start> <end> [user_id]")
+            display_info("Date formats: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS")
+            return
+
+        # Check if LanceDB is available
+        if not hasattr(self.session, 'lance_store') or not self.session.lance_store:
+            display_error("LanceDB timeframe search is not available")
+            return
+
+        try:
+            # Parse start and end times
+            start_time = datetime.fromisoformat(args[0])
+            end_time = datetime.fromisoformat(args[1])
+            user_id = args[2] if len(args) > 2 else None
+
+            print(f"{colorize('📅 Searching timeframe:', Colors.BRIGHT_CYAN)}")
+            print(f"   {colorize('From:', Colors.DIM)} {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"   {colorize('To:', Colors.DIM)} {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            if user_id:
+                print(f"   {colorize('User:', Colors.DIM)} {user_id}")
+
+            # Perform timeframe search
+            results = self.session.lance_store.search_by_timeframe(start_time, end_time, user_id)
+
+            if results.empty:
+                print(f"{colorize('📭 No interactions found in this timeframe', Colors.YELLOW)}")
+                return
+
+            print(f"{colorize('📄 Found:', Colors.BRIGHT_GREEN)} {colorize(str(len(results)), Colors.WHITE)} interactions")
+            print()
+
+            for _, result in results.iterrows():
+                timestamp = result.get('timestamp', 'Unknown time')
+                if isinstance(timestamp, str):
+                    try:
+                        dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                        timestamp = dt.strftime('%Y-%m-%d %H:%M:%S')
+                    except:
+                        pass
+
+                interaction_id = result.get('interaction_id', 'Unknown ID')[:8]
+
+                print(f"{colorize('•', Colors.BRIGHT_BLUE)} {colorize(timestamp, Colors.DIM)} "
+                      f"{colorize(f'[{interaction_id}]', Colors.GREEN)}")
+
+                query = result.get('query', 'Unknown query')
+                if len(query) > 100:
+                    query = query[:97] + "..."
+                print(f"   {query}")
+                print()
+
+        except ValueError as e:
+            display_error(f"Invalid date format: {e}")
+            display_info("Use format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS")
+        except Exception as e:
+            display_error(f"Timeframe search failed: {e}")
+
+    def _cmd_similar(self, args: List[str]) -> None:
+        """Find interactions similar to the given text.
+
+        Usage: /similar <text> [--limit <n>]
+
+        Examples:
+          /similar "how to optimize database queries"
+          /similar debugging --limit 3
+        """
+        if not args:
+            display_error("Usage: /similar <text> [--limit <n>]")
+            return
+
+        # Check if LanceDB is available
+        if not hasattr(self.session, 'lance_store') or not self.session.lance_store:
+            display_error("LanceDB similarity search is not available")
+            return
+
+        try:
+            # Parse arguments
+            text_parts = []
+            limit = 5
+            i = 0
+
+            while i < len(args):
+                if args[i] == '--limit' and i + 1 < len(args):
+                    try:
+                        limit = int(args[i + 1])
+                    except ValueError:
+                        display_error(f"Invalid limit: {args[i + 1]}")
+                        return
+                    i += 2
+                else:
+                    text_parts.append(args[i])
+                    i += 1
+
+            if not text_parts:
+                display_error("No text provided for similarity search")
+                return
+
+            search_text = ' '.join(text_parts)
+
+            print(f"{colorize('🔍 Finding similar to:', Colors.BRIGHT_CYAN)} {colorize(search_text, Colors.WHITE)}")
+
+            # Use combined search to get both interactions and ReAct cycles
+            results = self.session.lance_store.search_combined(search_text, limit=limit)
+
+            interactions = results.get('interactions', [])
+            react_cycles = results.get('react_cycles', [])
+
+            if not interactions and not react_cycles:
+                print(f"{colorize('📭 No similar interactions found', Colors.YELLOW)}")
+                return
+
+            total_results = len(interactions) + len(react_cycles)
+            print(f"{colorize('📄 Found:', Colors.BRIGHT_GREEN)} {colorize(str(total_results), Colors.WHITE)} similar items")
+            print()
+
+            # Display interactions
+            if interactions:
+                print(f"{colorize('💬 Similar Interactions:', Colors.BRIGHT_MAGENTA)}")
+                for i, result in enumerate(interactions, 1):
+                    timestamp = result.get('timestamp', 'Unknown time')
+                    if isinstance(timestamp, str):
+                        try:
+                            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                            timestamp = dt.strftime('%Y-%m-%d %H:%M')
+                        except:
+                            pass
+
+                    similarity = result.get('_distance', 0)
+                    similarity_pct = max(0, (2.0 - similarity) / 2.0 * 100) if similarity else 0
+
+                    print(f"   {colorize(f'{i}.', Colors.BRIGHT_BLUE)} {colorize(timestamp, Colors.DIM)} "
+                          f"{colorize(f'({similarity_pct:.1f}% similar)', Colors.GREEN)}")
+
+                    query = result.get('query', 'Unknown query')
+                    if len(query) > 80:
+                        query = query[:77] + "..."
+                    print(f"      {query}")
+                print()
+
+            # Display ReAct cycles
+            if react_cycles:
+                print(f"{colorize('🧠 Similar ReAct Reasoning:', Colors.BRIGHT_CYAN)}")
+                for i, result in enumerate(react_cycles, 1):
+                    timestamp = result.get('timestamp', 'Unknown time')
+                    if isinstance(timestamp, str):
+                        try:
+                            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                            timestamp = dt.strftime('%Y-%m-%d %H:%M')
+                        except:
+                            pass
+
+                    similarity = result.get('_distance', 0)
+                    similarity_pct = max(0, (2.0 - similarity) / 2.0 * 100) if similarity else 0
+
+                    print(f"   {colorize(f'{i}.', Colors.BRIGHT_BLUE)} {colorize(timestamp, Colors.DIM)} "
+                          f"{colorize(f'({similarity_pct:.1f}% similar)', Colors.GREEN)}")
+
+                    react_id = result.get('react_id', 'Unknown')[:8]
+                    print(f"      ReAct cycle: {react_id}")
+                print()
+
+        except Exception as e:
+            display_error(f"Similarity search failed: {e}")
 
     def _cmd_exit(self, args: List[str]) -> None:
         """Exit interactive mode."""

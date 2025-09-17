@@ -29,6 +29,14 @@ import time
 from abstractllm.interface import AbstractLLMInterface, ModelParameter, ModelCapability
 from abstractllm.exceptions import UnsupportedFeatureError
 from abstractllm.enums import MessageRole
+# Import LanceDB-based storage for enhanced observability with RAG
+try:
+    from abstractllm.storage import ObservabilityStore, EmbeddingManager
+    LANCEDB_AVAILABLE = True
+except ImportError:
+    LANCEDB_AVAILABLE = False
+
+# Import context logging for verbatim LLM interaction capture
 from abstractllm.utils.context_logging import log_llm_interaction
 from abstractllm.utils.context_tracker import capture_llm_context
 
@@ -447,6 +455,26 @@ class Session:
         self.current_tool_traces: List[Dict[str, Any]] = []
         self.current_retry_attempts: int = 0
         self.facts_before_generation: int = 0
+
+        # Initialize LanceDB-based observability store for enhanced RAG capabilities
+        self.lance_store = None
+        self.embedder = None
+        if LANCEDB_AVAILABLE:
+            try:
+                self.lance_store = ObservabilityStore()
+                self.embedder = EmbeddingManager()
+
+                # Add or get user for this session
+                self.user_id = self._get_or_create_user()
+
+                # Register this session in LanceDB
+                self._register_session()
+
+                logger.debug("LanceDB observability store initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize LanceDB store: {e}")
+                self.lance_store = None
+                self.embedder = None
         
         # SOTA Scratchpad Manager with complete observability (if available)
         if SOTA_FEATURES_AVAILABLE and persist_memory:
@@ -1015,7 +1043,45 @@ class Session:
                 if lines:
                     endpoint = lines[0].replace("ENDPOINT: ", "")
 
-            # Capture the EXACT verbatim context
+            # Store in LanceDB with embeddings for enhanced observability
+            if self.lance_store and self.embedder:
+                try:
+                    # Generate interaction ID
+                    import uuid
+                    interaction_id = f"cycle_{str(uuid.uuid4())[:8]}"
+
+                    # Capture the complete verbatim context
+                    full_context = self._capture_verbatim_context()
+
+                    # Create metadata for the interaction
+                    metadata = {
+                        'provider': provider_name,
+                        'model': model_name,
+                        'endpoint': endpoint,
+                        'step_id': step_id,
+                        'step_number': step_number,
+                        'reasoning_phase': reasoning_phase
+                    }
+
+                    # Store interaction data for reference (will be updated after response)
+                    self._pending_interaction_data = {
+                        'interaction_id': interaction_id,
+                        'session_id': self.id,
+                        'user_id': getattr(self, 'user_id', 'default_user'),
+                        'timestamp': datetime.now(),
+                        'query': prompt or "Unknown query",  # Use the actual prompt parameter
+                        'context_verbatim': full_context,
+                        'context_embedding': self.embedder.embed_text(full_context),
+                        'facts_extracted': [],
+                        'token_usage': {'provider': provider_name, 'model': model_name},
+                        'duration_ms': 0,  # Will be updated with actual duration
+                        'metadata': metadata
+                    }
+                    logger.debug(f"Stored interaction {interaction_id} in LanceDB")
+                except Exception as e:
+                    logger.debug(f"Failed to store interaction in LanceDB: {e}")
+
+            # Legacy capture for backward compatibility with existing tools
             context_id = capture_llm_context(
                 interaction_id=interaction_id,
                 verbatim_context=verbatim_context,
@@ -1031,7 +1097,6 @@ class Session:
 
         except Exception as e:
             # Don't let context tracking break the main flow
-            logger = logging.getLogger("abstractllm.session")
             logger.warning(f"Failed to capture LLM context: {e}")
             return f"failed_context_{uuid.uuid4().hex[:8]}"
 
@@ -1936,7 +2001,26 @@ class Session:
         # Reset the system prompt to the original
         if adjust_system_prompt and self.system_prompt != original_system_prompt:
             self.system_prompt = original_system_prompt
-            
+
+        # Capture context for observability
+        try:
+            # Always generate a proper interaction ID
+            import uuid
+            if hasattr(response, 'react_cycle_id') and response.react_cycle_id:
+                interaction_id = response.react_cycle_id
+            else:
+                interaction_id = f"cycle_{str(uuid.uuid4())[:8]}"
+                if hasattr(response, '__dict__'):
+                    response.react_cycle_id = interaction_id
+
+            context_id = self._capture_llm_context_after_provider(
+                interaction_id=interaction_id,
+                provider=provider_instance
+            )
+        except Exception as e:
+            # Don't fail the request if context capture fails
+            logger.debug(f"Context capture failed: {e}")
+
         return response
         
     def generate_with_tools_streaming(
@@ -2840,7 +2924,30 @@ class Session:
                 
                 # Add the response to the conversation with metadata
                 self.add_message(MessageRole.ASSISTANT, content, metadata=metadata)
-                
+
+                # Capture context for observability
+                try:
+                    if hasattr(response, 'react_cycle_id'):
+                        interaction_id = response.react_cycle_id
+                    else:
+                        # Generate interaction ID from response metadata or UUID
+                        import uuid
+                        interaction_id = f"cycle_{str(uuid.uuid4())[:8]}"
+                        if hasattr(response, '__dict__'):
+                            response.react_cycle_id = interaction_id
+
+                    print(f"DEBUG: Capturing context for interaction {interaction_id}")
+                    context_id = self._capture_llm_context_after_provider(
+                        interaction_id=interaction_id,
+                        provider=provider_instance
+                    )
+                except Exception as e:
+                    # Don't fail the request if context capture fails
+                    logger.debug(f"Context capture failed: {e}")
+
+                # Store complete interaction data in LanceDB
+                self._store_completed_interaction(response)
+
                 return response
         
         # SOTA Enhancement: Apply retry if enabled
@@ -2935,7 +3042,10 @@ class Session:
         # Clear current cycle after building response
         if self.current_cycle:
             self.current_cycle = None
-        
+
+        # Store complete interaction data in LanceDB
+        self._store_completed_interaction(enhanced_response)
+
         return enhanced_response
 
     def get_last_interactions(self, count: int = 1) -> List[Dict[str, Any]]:
@@ -3196,9 +3306,104 @@ class Session:
         # Add scratchpad file reference for external access
         enhanced_response.scratchpad_file = str(scratchpad_file_path)
         enhanced_response.scratchpad_manager = self.scratchpad  # For direct access
-        
+
+        # Store complete interaction data in LanceDB with enhanced observability
+        try:
+            if self.lance_store and self.embedder and enhanced_response.react_cycle_id:
+                try:
+                    interaction_id = enhanced_response.react_cycle_id
+                    if interaction_id.startswith('cycle_'):
+                        interaction_id = interaction_id[6:]
+
+                    # Get the last user message
+                    user_query = "Unknown query"
+                    for msg in reversed(self.messages):
+                        if msg.role in [MessageRole.USER, 'user']:
+                            user_query = msg.content
+                            break
+
+                    # Capture full verbatim context
+                    full_context = self._capture_verbatim_context()
+
+                    # Update or create interaction with complete data
+                    interaction_data = {
+                        'interaction_id': interaction_id,
+                        'session_id': self.id,
+                        'user_id': getattr(self, 'user_id', 'default_user'),
+                        'timestamp': datetime.now(),
+                        'query': user_query,
+                        'response': str(base_response.content) if hasattr(base_response, 'content') else str(base_response),
+                        'context_verbatim': full_context,
+                        'context_embedding': self.embedder.embed_text(full_context),
+                        'facts_extracted': facts_strings,
+                        'token_usage': base_response.usage if hasattr(base_response, 'usage') else {},
+                        'duration_ms': int(total_time * 1000) if total_time else 0,
+                        'metadata': {
+                            'react_cycle_id': enhanced_response.react_cycle_id,
+                            'tool_calls_count': len(self.current_tool_traces),
+                            'facts_count': len(facts_strings),
+                            'scratchpad_file': str(scratchpad_file_path)
+                        }
+                    }
+
+                    self.lance_store.add_interaction(interaction_data)
+
+                    # Store ReAct cycle with embeddings if available
+                    if complete_scratchpad:
+                        react_data = {
+                            'react_id': enhanced_response.react_cycle_id,
+                            'interaction_id': interaction_id,
+                            'timestamp': datetime.now(),
+                            'scratchpad': json.dumps(complete_scratchpad),
+                            'scratchpad_embedding': self.embedder.embed_text(json.dumps(complete_scratchpad)),
+                            'steps': self.current_tool_traces,
+                            'success': True,
+                            'metadata': {
+                                'total_reasoning_time': total_time,
+                                'tool_calls_count': len(self.current_tool_traces)
+                            }
+                        }
+                        self.lance_store.add_react_cycle(react_data)
+
+                    logger.debug(f"Stored complete interaction {interaction_id} in LanceDB with embeddings")
+                except Exception as e:
+                    logger.debug(f"Failed to store complete interaction in LanceDB: {e}")
+
+        except Exception as e:
+            # Don't fail the response if storage fails
+            logger = logging.getLogger("abstractllm.session")
+            logger.debug(f"Failed to store observability data: {e}")
+
         return enhanced_response
-    
+
+    def _store_completed_interaction(self, response) -> None:
+        """Store the completed interaction data in LanceDB with the actual response."""
+        if not hasattr(self, '_pending_interaction_data') or not self.lance_store:
+            return
+
+        try:
+            # Get the response content
+            response_text = ""
+            if hasattr(response, 'content'):
+                response_text = response.content
+            elif isinstance(response, str):
+                response_text = response
+            else:
+                response_text = str(response)
+
+            # Complete the interaction data with actual response
+            self._pending_interaction_data['response'] = response_text
+
+            # Store in LanceDB
+            self.lance_store.add_interaction(self._pending_interaction_data)
+            logger.debug(f"Stored completed interaction {self._pending_interaction_data.get('interaction_id')} in LanceDB")
+
+            # Clear pending data
+            delattr(self, '_pending_interaction_data')
+
+        except Exception as e:
+            logger.debug(f"Failed to store completed interaction in LanceDB: {e}")
+
     def _get_response_handler(self, provider_name: str) -> StructuredResponseHandler:
         """Get or create structured response handler for provider."""
         if provider_name not in self.response_handlers:
@@ -3228,6 +3433,95 @@ class Session:
         if self.memory:
             return self.memory.query_memory(query)
         return None
+
+    def _get_or_create_user(self) -> str:
+        """Get or create a user for this session in LanceDB.
+
+        Returns:
+            user_id: UUID of the user
+        """
+        if not self.lance_store:
+            return "default_user"
+
+        try:
+            # For now, create a default user. In the future, this could be
+            # enhanced to support actual user authentication/management
+            username = f"user_{self.id[:8]}"
+            user_metadata = {
+                "session_created": self.created_at.isoformat(),
+                "original_session_id": self.id
+            }
+
+            # Check if user already exists by looking for sessions
+            existing_sessions = self.lance_store.get_sessions()
+            for _, session_row in existing_sessions.iterrows():
+                if session_row.get('session_id') == self.id:
+                    return session_row.get('user_id', username)
+
+            # Create new user
+            user_id = self.lance_store.add_user(username, user_metadata)
+            logger.debug(f"Created user {user_id} for session {self.id}")
+            return user_id
+        except Exception as e:
+            logger.warning(f"Failed to create user: {e}")
+            return "default_user"
+
+    def _register_session(self) -> None:
+        """Register this session in LanceDB."""
+        if not self.lance_store or not hasattr(self, 'user_id'):
+            return
+
+        try:
+            provider_name = "unknown"
+            model_name = "unknown"
+
+            if self.provider:
+                if hasattr(self.provider, '__class__'):
+                    provider_name = self.provider.__class__.__name__.replace('Provider', '').lower()
+                if hasattr(self.provider, 'model'):
+                    model_name = self.provider.model
+
+            session_metadata = {
+                "system_prompt_length": len(self.system_prompt or ""),
+                "tools_count": len(self.tools),
+                "session_metadata": self.metadata
+            }
+
+            self.lance_store.add_session(
+                user_id=self.user_id,
+                provider=provider_name,
+                model=model_name,
+                temperature=0.7,  # Default, could be extracted from provider config
+                max_tokens=4096,  # Default, could be extracted from provider config
+                system_prompt=self.system_prompt or "",
+                metadata=session_metadata
+            )
+            logger.debug(f"Registered session {self.id} in LanceDB")
+        except Exception as e:
+            logger.warning(f"Failed to register session: {e}")
+
+    def _capture_verbatim_context(self) -> str:
+        """Capture the verbatim context that would be sent to the LLM.
+
+        Returns:
+            The complete context string including system prompt and conversation history
+        """
+        try:
+            context_parts = []
+
+            # Add system prompt
+            if self.system_prompt:
+                context_parts.append(f"SYSTEM: {self.system_prompt}")
+
+            # Add conversation history
+            for message in self.messages:
+                role = message.role.upper() if hasattr(message.role, 'upper') else str(message.role).upper()
+                context_parts.append(f"{role}: {message.content}")
+
+            return "\n\n".join(context_parts)
+        except Exception as e:
+            logger.warning(f"Failed to capture verbatim context: {e}")
+            return ""
 
 
 class SessionManager:

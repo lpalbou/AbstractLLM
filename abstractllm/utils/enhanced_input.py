@@ -28,6 +28,12 @@ def get_enhanced_input(prompt: str = "user> ", max_chars: int = 32768) -> str:
         The input string
     """
     try:
+        # Check if stdin is available and interactive
+        if not sys.stdin.isatty():
+            # Non-interactive terminal - exit gracefully
+            print("Non-interactive terminal detected. Use command-line mode instead.")
+            sys.exit(0)
+
         user_input = input(prompt)
 
         # Check character limit
@@ -38,8 +44,9 @@ def get_enhanced_input(prompt: str = "user> ", max_chars: int = 32768) -> str:
         return user_input
 
     except (EOFError, KeyboardInterrupt):
-        # Ctrl+D or Ctrl+C - return empty
-        return ""
+        # Ctrl+D or Ctrl+C - exit gracefully
+        print("\nExiting...")
+        sys.exit(0)
 
 
 def estimate_tokens(text: str, chars_per_token: float = 4.0) -> int:
