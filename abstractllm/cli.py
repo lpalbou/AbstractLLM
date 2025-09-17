@@ -136,17 +136,18 @@ def write_file(
         return f"❌ Unexpected error writing file: {str(e)}"
 
 
-def create_agent(provider="ollama", model="qwen3:4b", memory_path=None, max_tool_calls=25, 
+def create_agent(provider="ollama", model="qwen3:4b", memory_path=None, max_tool_calls=25,
                  seed=None, top_p=None, max_input_tokens=None, frequency_penalty=None, presence_penalty=None):
-    """Create an enhanced agent with all SOTA features."""
-    
+    """Create an enhanced agent with all SOTA features including cognitive abstractions."""
+
     print(f"{BLUE}🧠 Creating intelligent agent with:{RESET}")
     print(f"  • Hierarchical memory system")
     print(f"  • ReAct reasoning cycles")
-    print(f"  • Knowledge graph extraction")
+    print(f"  • Enhanced semantic fact extraction")
+    print(f"  • Value resonance evaluation")
     print(f"  • Tool capabilities")
     print(f"  • Retry strategies\n")
-    
+
     # Build configuration with SOTA parameters
     config = {
         'model': model,
@@ -163,7 +164,7 @@ def create_agent(provider="ollama", model="qwen3:4b", memory_path=None, max_tool
         'temperature': 0.7,
         'max_tool_calls': max_tool_calls
     }
-    
+
     # Add SOTA parameters if specified
     if seed is not None:
         config[ModelParameter.SEED] = seed
@@ -175,12 +176,40 @@ def create_agent(provider="ollama", model="qwen3:4b", memory_path=None, max_tool
         config[ModelParameter.FREQUENCY_PENALTY] = frequency_penalty
     if presence_penalty is not None:
         config[ModelParameter.PRESENCE_PENALTY] = presence_penalty
-    
-    session = create_session(provider, **config)
-    
+
+    # Try to create cognitive-enhanced session
+    try:
+        from abstractllm.cognitive.integrations import create_cognitive_session
+
+        # Remove model from config to avoid duplicate parameter
+        cognitive_config = config.copy()
+        cognitive_config.pop('model', None)
+
+        session = create_cognitive_session(
+            provider=provider,
+            model=model,
+            cognitive_features=['facts'],  # Only facts extraction for now
+            cognitive_model="granite3.3:2b",
+            **cognitive_config
+        )
+
+        print(f"{GREEN}✨ Cognitive enhancements loaded successfully{RESET}")
+        print(f"  • Semantic fact extraction with granite3.3:2b")
+        print(f"  • Enhanced ontological knowledge extraction")
+        print(f"  • Dublin Core, Schema.org, SKOS, CiTO frameworks")
+        print(f"  • Use /facts to view extracted knowledge\n")
+
+    except ImportError as e:
+        print(f"{BLUE}ℹ️ Cognitive features not available: {e}{RESET}")
+        print(f"  • Using standard session with basic features\n")
+        session = create_session(provider, **config)
+    except Exception as e:
+        print(f"{BLUE}ℹ️ Falling back to standard session: {e}{RESET}\n")
+        session = create_session(provider, **config)
+
     if memory_path:
         print(f"{GREEN}💾 Memory persisted to: {memory_path}{RESET}\n")
-    
+
     return session
 
 

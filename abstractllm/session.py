@@ -2936,7 +2936,7 @@ class Session:
                         if hasattr(response, '__dict__'):
                             response.react_cycle_id = interaction_id
 
-                    print(f"DEBUG: Capturing context for interaction {interaction_id}")
+                    logger.debug(f"Capturing context for interaction {interaction_id}")
                     context_id = self._capture_llm_context_after_provider(
                         interaction_id=interaction_id,
                         provider=provider_instance

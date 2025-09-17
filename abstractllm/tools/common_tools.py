@@ -495,6 +495,43 @@ def search_files(pattern: str, path: str = ".", output_mode: str = "files_with_m
         return f"Error performing search: {str(e)}"
 
 
+@tool(
+    description="Read the contents of a file with optional line range and hidden file access",
+    tags=["file", "read", "content", "text"],
+    when_to_use="When you need to read file contents, examine code, or extract specific line ranges from files",
+    examples=[
+        {
+            "description": "Read entire file",
+            "arguments": {
+                "file_path": "README.md"
+            }
+        },
+        {
+            "description": "Read specific line range",
+            "arguments": {
+                "file_path": "src/main.py",
+                "should_read_entire_file": False,
+                "start_line_one_indexed": 10,
+                "end_line_one_indexed_inclusive": 25
+            }
+        },
+        {
+            "description": "Read hidden file",
+            "arguments": {
+                "file_path": ".gitignore",
+                "include_hidden": True
+            }
+        },
+        {
+            "description": "Read first 50 lines",
+            "arguments": {
+                "file_path": "large_file.txt",
+                "should_read_entire_file": False,
+                "end_line_one_indexed_inclusive": 50
+            }
+        }
+    ]
+)
 def read_file(file_path: str, should_read_entire_file: bool = True, start_line_one_indexed: int = 1, end_line_one_indexed_inclusive: Optional[int] = None, include_hidden: bool = False) -> str:
     """
     Read the contents of a file with optional line range.
@@ -545,8 +582,9 @@ def read_file(file_path: str, should_read_entire_file: bool = True, start_line_o
                 # Format with line numbers
                 result_lines = []
                 for i, line in enumerate(selected_lines, start=start_idx + 1):
-                    result_lines.append(f"{i:4d}: {line.rstrip()}")
-                
+#                    result_lines.append(f"{i:4d}: {line.rstrip()}")
+                    result_lines.append(f"{line.rstrip()}")
+               
                 return "\n".join(result_lines)
                 
     except UnicodeDecodeError:
@@ -559,6 +597,42 @@ def read_file(file_path: str, should_read_entire_file: bool = True, start_line_o
         return f"Error reading file: {str(e)}"
 
 
+@tool(
+    description="Write or append content to a file (creates directories if needed)",
+    tags=["file", "write", "create", "append", "content"],
+    when_to_use="When you need to create new files, save content, or append to existing files",
+    examples=[
+        {
+            "description": "Create a new file with content",
+            "arguments": {
+                "file_path": "output.txt",
+                "content": "Hello, world!\nThis is a new file."
+            }
+        },
+        {
+            "description": "Append to existing file",
+            "arguments": {
+                "file_path": "log.txt",
+                "content": "\nNew log entry at 2025-01-01",
+                "mode": "a"
+            }
+        },
+        {
+            "description": "Create file in nested directory",
+            "arguments": {
+                "file_path": "docs/api/endpoints.md",
+                "content": "# API Endpoints\n\n## Authentication\n..."
+            }
+        },
+        {
+            "description": "Write JSON data",
+            "arguments": {
+                "file_path": "config.json",
+                "content": "{\n  \"api_key\": \"test\",\n  \"debug\": true\n}"
+            }
+        }
+    ]
+)
 def write_file(file_path: str, content: str, mode: str = "w") -> str:
     """
     Write content to a file.

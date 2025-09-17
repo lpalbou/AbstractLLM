@@ -65,6 +65,7 @@ class CommandProcessor:
             'timeframe': self._cmd_timeframe,
             'tf': self._cmd_timeframe,
             'similar': self._cmd_similar,
+            'values': self._cmd_values,
             'exit': self._cmd_exit,
             'quit': self._cmd_exit,
             'q': self._cmd_exit,
@@ -154,7 +155,9 @@ class CommandProcessor:
                 ("/timeframe, /tf <start> <end>", "Search exact timeframe (YYYY-MM-DD format)"),
                 ("/timeframe <start> <end> <user>", "Timeframe search for specific user"),
                 ("/similar <text>", "Find interactions similar to given text"),
-                ("/similar <text> --limit <n>", "Limit similarity search results")
+                ("/similar <text> --limit <n>", "Limit similarity search results"),
+                ("/values", "Show value resonance for entire conversation"),
+                ("/values <interaction_id>", "Show value resonance for specific interaction")
             ]),
             ("Navigation", [
                 ("/help, /h", "Show this help message"),
@@ -855,29 +858,49 @@ class CommandProcessor:
         display_info("Import functionality requires memory system reconstruction - use /load for complete session restore")
     
     def _cmd_facts(self, args: List[str]) -> None:
-        """Show extracted facts, optionally filtered by query or for specific interaction."""
-        # Check if first argument looks like an interaction ID (8 hex chars or cycle_...)
-        if args and (len(args[0]) == 8 and all(c in '0123456789abcdef' for c in args[0].lower()) or args[0].startswith('cycle_')):
-            self._cmd_facts_unified(args)
-            return
+        """Show extracted facts, toggle fact extraction, or show facts for specific interaction.
 
+        Usage:
+          /facts                 - Show all facts from memory
+          /facts on              - Enable fact extraction during conversations
+          /facts off             - Disable fact extraction during conversations
+          /facts <interaction_id> - Show facts for specific interaction (8+ hex chars)
+          /facts <query>         - Filter facts by text search
+        """
+        # Handle toggle commands first
+        if args and len(args) == 1:
+            toggle_arg = args[0].lower()
+            if toggle_arg in ['on', 'off']:
+                self._handle_facts_toggle(toggle_arg)
+                return
+
+            # Check if first argument looks like an interaction ID (8+ hex chars or cycle_...)
+            if (len(args[0]) >= 8 and all(c in '0123456789abcdef' for c in args[0].lower())) or args[0].startswith('cycle_'):
+                self._cmd_facts_unified(args)
+                return
+
+        # Show current fact extraction status if no arguments
+        if not args:
+            self._show_facts_status()
+
+        # Show memory facts with optional query filter
         if not hasattr(self.session, 'memory') or not self.session.memory:
             display_error("Memory system not available")
             return
-        
+
         facts = self.session.memory.knowledge_graph.facts
-        
+
         if not facts:
             display_info("No facts extracted yet")
             return
-        
+
         query = ' '.join(args) if args else None
-        
+
         print(f"\n{colorize(f'{Symbols.KEY} Knowledge Facts', Colors.BRIGHT_YELLOW, bold=True)}")
         if query:
             print(f"{colorize(f'Filtered by: {query}', Colors.DIM, italic=True)}")
         print(create_divider(60, "─", Colors.YELLOW))
-        
+
         displayed = 0
         for fact_id, fact in facts.items():
             # Simple text matching if query provided
@@ -885,21 +908,86 @@ class CommandProcessor:
                 fact_text = f"{fact.subject} {fact.predicate} {fact.object}".lower()
                 if query.lower() not in fact_text:
                     continue
-            
+
             confidence_color = Colors.BRIGHT_GREEN if fact.confidence > 0.8 else Colors.BRIGHT_YELLOW if fact.confidence > 0.5 else Colors.BRIGHT_RED
-            
+
             print(f"  {displayed + 1}. {colorize(fact.subject, Colors.BRIGHT_BLUE)} "
                   f"--[{colorize(fact.predicate, Colors.BRIGHT_CYAN)}]--> "
                   f"{colorize(fact.object, Colors.BRIGHT_GREEN)}")
             print(f"     {colorize(f'Confidence: {fact.confidence:.1%}', confidence_color)} "
                   f"{colorize(f'| Importance: {fact.importance:.1f}', Colors.DIM)} "
                   f"{colorize(f'| Used: {fact.access_count}x', Colors.DIM)}")
-            
+
             displayed += 1
 
         # Show total count (removed artificial limit)
         if displayed > 0:
             print(f"\n{colorize(f'Total: {displayed} facts displayed', Colors.DIM, italic=True)}")
+
+    def _handle_facts_toggle(self, toggle_state: str) -> None:
+        """Toggle fact extraction on or off during conversations."""
+        # Check if session has cognitive enhancer
+        if not hasattr(self.session, '_cognitive_enhancer'):
+            display_error("Cognitive fact extraction not available in this session")
+            display_info("Start alma with cognitive features enabled to use fact extraction")
+            return
+
+        enhancer = self.session._cognitive_enhancer
+
+        if toggle_state == 'on':
+            # Enable facts in cognitive features
+            enhancer.enabled_features.add('facts')
+            display_success("🧠 Fact extraction enabled")
+            print(f"  {colorize('Facts will be extracted during conversations using', Colors.DIM)}")
+            print(f"  {colorize('semantic ontological framework (Dublin Core, Schema.org, SKOS, CiTO)', Colors.DIM)}")
+
+        elif toggle_state == 'off':
+            # Disable facts in cognitive features
+            enhancer.enabled_features.discard('facts')
+            display_info("🚫 Fact extraction disabled")
+            print(f"  {colorize('Facts will no longer be extracted during conversations', Colors.DIM)}")
+            print(f"  {colorize('Existing facts in memory are preserved', Colors.DIM)}")
+
+    def _show_facts_status(self) -> None:
+        """Show current fact extraction status and available facts."""
+        print(f"\n{colorize(f'{Symbols.KEY} Fact Extraction Status', Colors.BRIGHT_YELLOW, bold=True)}")
+        print(create_divider(60, "─", Colors.YELLOW))
+
+        # Check cognitive enhancer availability
+        if not hasattr(self.session, '_cognitive_enhancer'):
+            print(f"  {colorize('Status:', Colors.BRIGHT_BLUE)} {colorize('Not Available', Colors.BRIGHT_RED)}")
+            print(f"  {colorize('Reason:', Colors.DIM)} Cognitive features not enabled in this session")
+            print(f"\n{colorize('To enable cognitive fact extraction:', Colors.BRIGHT_BLUE)}")
+            print(f"  • Restart alma with cognitive features enabled")
+            print(f"  • Use the enhanced session factory")
+            return
+
+        enhancer = self.session._cognitive_enhancer
+        facts_enabled = 'facts' in enhancer.enabled_features
+
+        # Show extraction status
+        status_color = Colors.BRIGHT_GREEN if facts_enabled else Colors.BRIGHT_RED
+        status_text = "Enabled" if facts_enabled else "Disabled"
+        print(f"  {colorize('Status:', Colors.BRIGHT_BLUE)} {colorize(status_text, status_color)}")
+
+        if facts_enabled:
+            print(f"  {colorize('Model:', Colors.DIM)} {enhancer.model}")
+            print(f"  {colorize('Framework:', Colors.DIM)} Semantic ontological extraction")
+            print(f"  {colorize('Ontologies:', Colors.DIM)} Dublin Core, Schema.org, SKOS, CiTO")
+
+        # Show memory facts count
+        if hasattr(self.session, 'memory') and self.session.memory:
+            facts_count = len(self.session.memory.knowledge_graph.facts)
+            print(f"  {colorize('Facts in Memory:', Colors.BRIGHT_BLUE)} {colorize(str(facts_count), Colors.BRIGHT_YELLOW)}")
+
+        # Show available commands
+        print(f"\n{colorize('Available Commands:', Colors.BRIGHT_BLUE)}")
+        if facts_enabled:
+            print(f"  • {colorize('/facts off', Colors.BRIGHT_CYAN)} - Disable fact extraction")
+        else:
+            print(f"  • {colorize('/facts on', Colors.BRIGHT_CYAN)} - Enable fact extraction")
+        print(f"  • {colorize('/facts <query>', Colors.BRIGHT_CYAN)} - Search facts by text")
+        print(f"  • {colorize('/facts <id>', Colors.BRIGHT_CYAN)} - Show facts for interaction")
 
     def _cmd_working(self, args: List[str]) -> None:
         """Show working memory contents (most recent, active items)."""
@@ -2682,6 +2770,145 @@ class CommandProcessor:
 
         except Exception as e:
             display_error(f"Similarity search failed: {e}")
+
+    def _cmd_values(self, args: List[str]) -> None:
+        """Show value resonance for interactions. Usage: /values [interaction_id]"""
+
+        # Try to get cognitive enhancer, or create ValueResonance directly
+        value_evaluator = None
+
+        if hasattr(self.session, '_cognitive_enhancer') and self.session._cognitive_enhancer:
+            # Use existing cognitive enhancer
+            enhancer = self.session._cognitive_enhancer
+            if enhancer.value_evaluator and enhancer.value_evaluator.is_available():
+                value_evaluator = enhancer.value_evaluator
+
+        if not value_evaluator:
+            # Create ValueResonance directly with default values
+            try:
+                from abstractllm.cognitive import ValueResonance
+                value_evaluator = ValueResonance(
+                    llm_provider="ollama",
+                    model="granite3.3:2b"
+                )
+                if not value_evaluator.is_available():
+                    display_error("ValueResonance evaluator not available. Check that granite3.3:2b is accessible via ollama.")
+                    return
+                print(f"{colorize('ℹ️ Using default ValueResonance with standard values', Colors.BLUE)}")
+            except Exception as e:
+                display_error(f"Could not initialize ValueResonance: {e}")
+                display_info("Make sure granite3.3:2b is available via ollama")
+                return
+
+        try:
+            if args and len(args) > 0:
+                # Show value resonance for specific interaction
+                interaction_id = args[0]
+
+                if hasattr(self.session, 'lance_store') and self.session.lance_store:
+                    # Try to find the interaction in LanceDB
+                    try:
+                        interaction = self.session.lance_store.get_interaction(interaction_id)
+                        if interaction:
+                            print(f"{colorize('🎯 Value Resonance for Interaction:', Colors.BRIGHT_CYAN)} {colorize(interaction_id[:8], Colors.WHITE)}")
+
+                            # Create interaction content for evaluation
+                            interaction_content = f"User: {interaction.get('query', 'Unknown query')}\nAssistant: {interaction.get('response', 'Unknown response')}"
+
+                            # Evaluate value resonance
+                            assessment = value_evaluator.evaluate_interaction(interaction_content, "specific interaction")
+
+                            self._display_value_assessment(assessment)
+                            return
+                        else:
+                            display_error(f"Interaction {interaction_id} not found in session history.")
+                            return
+                    except Exception as e:
+                        display_error(f"Error retrieving interaction: {e}")
+                        return
+                else:
+                    # Fallback: search in session messages for the interaction
+                    if hasattr(self.session, 'messages') and self.session.messages:
+                        # Try to find interaction by searching recent messages
+                        display_error(f"Interaction ID lookup not available. Use /values without ID for conversation summary.")
+                        return
+            else:
+                # Show value resonance for entire conversation
+                print(f"{colorize('📊 Value Resonance for Entire Conversation', Colors.BRIGHT_CYAN)}")
+
+                if hasattr(self.session, 'messages') and self.session.messages:
+                    # Create conversation content
+                    conversation_messages = []
+                    for msg in self.session.messages:
+                        if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                            if msg.role != 'system':  # Skip system messages
+                                conversation_messages.append(f"{msg.role.title()}: {msg.content}")
+
+                    if not conversation_messages:
+                        display_info("No conversation content to analyze.")
+                        return
+
+                    conversation_content = "\n\n".join(conversation_messages)
+
+                    # Evaluate overall conversation resonance
+                    assessment = value_evaluator.evaluate_interaction(conversation_content, "full conversation")
+
+                    self._display_value_assessment(assessment)
+                else:
+                    display_info("No conversation history available for analysis.")
+
+        except Exception as e:
+            display_error(f"Value resonance analysis failed: {e}")
+
+    def _display_value_assessment(self, assessment) -> None:
+        """Display a value assessment in a formatted way"""
+        try:
+            # Show overall resonance level
+            level = assessment.get_resonance_level()
+            resonance_score = assessment.overall_resonance
+
+            # Color code the resonance level
+            if resonance_score >= 0.7:
+                level_color = Colors.BRIGHT_GREEN
+            elif resonance_score >= 0.3:
+                level_color = Colors.GREEN
+            elif resonance_score >= -0.3:
+                level_color = Colors.YELLOW
+            elif resonance_score >= -0.7:
+                level_color = Colors.RED
+            else:
+                level_color = Colors.BRIGHT_RED
+
+            print(f"\n{colorize('📈 Overall Resonance:', Colors.BRIGHT_BLUE)} {colorize(f'{resonance_score:+.2f}', level_color)} ({colorize(level, level_color)})")
+            print()
+
+            # Show individual value evaluations
+            print(f"{colorize('🎯 Individual Value Scores:', Colors.BRIGHT_BLUE)}")
+            for evaluation in assessment.evaluations:
+                formatted_output = evaluation.format_output()
+
+                # Extract score for color coding
+                score = evaluation.score
+                if score >= 0.5:
+                    score_color = Colors.GREEN
+                elif score >= 0.0:
+                    score_color = Colors.YELLOW
+                else:
+                    score_color = Colors.RED
+
+                # Display with color coding
+                parts = formatted_output.split(' reason : ')
+                if len(parts) == 2:
+                    value_and_score = parts[0]
+                    reasoning = parts[1]
+                    print(f"  {colorize(value_and_score, score_color)} reason : {reasoning}")
+                else:
+                    print(f"  {formatted_output}")
+
+            print()
+
+        except Exception as e:
+            display_error(f"Error displaying value assessment: {e}")
 
     def _cmd_exit(self, args: List[str]) -> None:
         """Exit interactive mode."""
