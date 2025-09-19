@@ -248,6 +248,18 @@ class MediaFactory:
             ext_map = {
                 '.txt': 'text',
                 '.md': 'text',
+                '.py': 'text',  # Python files
+                '.js': 'text',  # JavaScript
+                '.ts': 'text',  # TypeScript
+                '.java': 'text',  # Java
+                '.c': 'text',   # C
+                '.cpp': 'text', # C++
+                '.h': 'text',   # Header files
+                '.html': 'text', # HTML
+                '.css': 'text',  # CSS
+                '.xml': 'text',  # XML
+                '.yaml': 'text', # YAML
+                '.yml': 'text',  # YAML
                 '.csv': 'tabular',
                 '.tsv': 'tabular',
                 '.json': 'text',
