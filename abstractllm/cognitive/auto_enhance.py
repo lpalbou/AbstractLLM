@@ -39,9 +39,10 @@ def auto_enhance_abstractllm(llm_provider: str = "ollama", model: str = "granite
 
 def patch_memory_system(llm_provider: str, model: str):
     """Patch the memory system to use cognitive fact extraction"""
+    import abstractllm.memory as memory_module
+    from .integrations.memory_integration import CognitiveMemoryAdapter
+
     try:
-        import abstractllm.memory as memory_module
-        from .integrations.memory_integration import CognitiveMemoryAdapter
 
         # Store original HierarchicalMemory class
         original_hierarchical_memory = memory_module.HierarchicalMemory
@@ -83,9 +84,10 @@ def patch_memory_system(llm_provider: str, model: str):
 
 def patch_session_creation(llm_provider: str, model: str):
     """Patch session creation to include cognitive features"""
+    import abstractllm.factory as factory_module
+    from .integrations.session_integration import enhance_existing_session
+
     try:
-        import abstractllm.factory as factory_module
-        from .integrations.session_integration import enhance_existing_session
 
         # Store original create_session function
         original_create_session = factory_module.create_session

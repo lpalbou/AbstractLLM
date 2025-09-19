@@ -45,43 +45,26 @@ if TYPE_CHECKING:
     from abstractllm.tools import ToolDefinition, ToolCall, ToolResult, ToolCallResponse
     from abstractllm.types import GenerateResponse
 
-# Try importing tools package directly
+# Import core tools (always available)
+from abstractllm.tools import (
+    ToolDefinition,
+    ToolCall,
+    ToolResult,
+    ToolCallResponse,
+    register
+)
+from abstractllm.types import GenerateResponse
+
+# For backwards compatibility
+ToolCallRequest = ToolCallResponse  # Alias for old code
+TOOLS_AVAILABLE = True  # Basic tools are always available
+
+# Try importing enhanced tools (optional - requires pydantic/docstring_parser)
 try:
-    from abstractllm.tools import (
-        ToolDefinition,
-        ToolCall,
-        ToolResult,
-        ToolCallResponse,
-        register
-    )
-    from abstractllm.types import GenerateResponse
-    # For backwards compatibility
-    ToolCallRequest = ToolCallResponse  # Alias for old code
-    TOOLS_AVAILABLE = True
-except ImportError as e:
-    TOOLS_AVAILABLE = False
-    # Define concrete error message with specific installation instructions
-    TOOLS_ERROR_MESSAGE = (
-        "Tool support is not available. Please install the required dependencies:\n"
-        "1. pip install jsonschema\n"
-        "2. pip install docstring-parser\n"
-        "3. pip install pydantic\n\n"
-        "For convenience, you can install all tool dependencies with:\n"
-        "pip install abstractllm[tools]\n\n"
-        f"Original error: {str(e)}"
-    )
-    if not TYPE_CHECKING:
-        class ToolDefinition:
-            pass
-        class ToolCall:
-            pass
-        class ToolResult:
-            pass
-        class ToolCallResponse:
-            pass
-        ToolCallRequest = ToolCallResponse  # Alias
-        class GenerateResponse:
-            pass
+    from abstractllm.tools import tool as enhanced_tool
+    ENHANCED_TOOLS_AVAILABLE = True
+except ImportError:
+    ENHANCED_TOOLS_AVAILABLE = False
 
 # Try importing SOTA improvements (optional)
 try:
@@ -337,159 +320,33 @@ class UnifiedGenerationHelpers:
         accumulate_message: bool = True
     ) -> Generator:
         """
-        Create a unified streaming wrapper that yields GenerateResponse objects.
+        DEPRECATED: This method broke ReAct cycles by executing tools immediately.
+        Use _stream_with_react_cycles for proper Think->Act->Observe->Repeat patterns.
 
-        This ensures API consistency by always yielding GenerateResponse objects
-        instead of raw strings, fixing the original inconsistency.
-
-        Args:
-            stream_response: The raw stream from the provider
-            accumulate_message: Whether to add the final message to conversation
-
-        Yields:
-            GenerateResponse objects with consistent interface
+        This method is kept for backward compatibility but should not be used.
         """
-        accumulated_content = ""
-        final_response_metadata = {}
+        # This deprecated method is disabled - use _stream_with_react_cycles instead
+        import warnings
+        warnings.warn(
+            "create_unified_streaming_wrapper is deprecated and breaks ReAct cycles. "
+            "Use the new streaming implementation instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
 
+        # Fallback to simple streaming without tool execution
         for chunk in stream_response:
-            # Handle different chunk types from providers
             if isinstance(chunk, str):
-                # Raw string chunk (most common)
-                # Filter out tool call markup if tools are enabled
-                if tool_functions and max_tool_calls > 0:
-                    # Remove tool call markup patterns
-                    filtered_chunk = self._filter_tool_call_markup(chunk)
-                else:
-                    filtered_chunk = chunk
-
-                accumulated_content += chunk  # Keep original for tool detection
-
-                # Only yield if there's content after filtering
-                if filtered_chunk:
-                    yield GenerateResponse(
-                        content=filtered_chunk,
-                        raw_response={"chunk_type": "string"},
-                        model=None,
-                        usage=None
-                    )
-
+                yield GenerateResponse(content=chunk, raw_response={}, model=None, usage=None)
             elif hasattr(chunk, "content"):
-                # GenerateResponse or similar object
-                content_chunk = chunk.content or ""
-
-                # Filter out tool call markup if tools are enabled
-                if tool_functions and max_tool_calls > 0:
-                    filtered_content = self._filter_tool_call_markup(content_chunk)
-                else:
-                    filtered_content = content_chunk
-
-                accumulated_content += content_chunk  # Keep original for tool detection
-
-                # Capture metadata from the chunk
-                if hasattr(chunk, 'usage') and chunk.usage:
-                    final_response_metadata["usage"] = chunk.usage
-                if hasattr(chunk, 'model') and chunk.model:
-                    final_response_metadata["model"] = chunk.model
-
-                # Only yield if there's content after filtering
-                if filtered_content:
-                    yield GenerateResponse(
-                        content=filtered_content,
-                        raw_response=getattr(chunk, 'raw_response', {}),
-                        model=getattr(chunk, 'model', None),
-                        usage=getattr(chunk, 'usage', None)
-                    )
-
-            elif isinstance(chunk, dict):
-                # Dictionary chunk (tool results, etc.)
                 yield GenerateResponse(
-                    content="",  # Tool results don't have content
-                    raw_response=chunk,
-                    model=None,
-                    usage=None
+                    content=chunk.content or "",
+                    raw_response=getattr(chunk, 'raw_response', {}),
+                    model=getattr(chunk, 'model', None),
+                    usage=getattr(chunk, 'usage', None)
                 )
-
             else:
-                # Unknown chunk type - convert to string
-                chunk_str = str(chunk)
-                accumulated_content += chunk_str
-                yield GenerateResponse(
-                    content=chunk_str,
-                    raw_response={"chunk_type": "unknown", "original": chunk},
-                    model=None,
-                    usage=None
-                )
-
-        # Handle tool detection and execution if tools are available
-        if tool_functions and max_tool_calls > 0 and accumulated_content:
-            try:
-                from abstractllm.tools.parser import parse_tool_calls
-                tool_calls = parse_tool_calls(accumulated_content)
-
-                if tool_calls:
-                    # Execute detected tool calls
-                    for i, tool_call in enumerate(tool_calls):
-                        if i >= max_tool_calls:
-                            break
-
-                        # Display tool execution message (like in non-streaming mode)
-                        args_str = ""
-                        if tool_call.arguments:
-                            args_parts = []
-                            for key, value in tool_call.arguments.items():
-                                if isinstance(value, str):
-                                    args_parts.append(f"{key}={repr(value)}")
-                                else:
-                                    args_parts.append(f"{key}={value}")
-                            args_str = ", ".join(args_parts)
-
-                        if args_str:
-                            tool_message = f"🔧 LLM called {tool_call.name}({args_str})"
-                        else:
-                            tool_message = f"🔧 LLM called {tool_call.name}()"
-
-                        # Print the tool execution message (yellow colored)
-                        # Use proper colors if available, fallback to ANSI codes
-                        try:
-                            from abstractllm.utils.display import Colors
-                            print(f"{Colors.YELLOW}{tool_message}{Colors.RESET}", flush=True)
-                        except ImportError:
-                            print(f"\033[33m{tool_message}\033[0m", flush=True)
-
-                        # Execute the tool
-                        tool_result = self.session.execute_tool_call(tool_call, tool_functions)
-
-                        # Yield tool execution result
-                        yield GenerateResponse(
-                            content=f"\n\n{tool_result.get('output', '')}",
-                            raw_response={"type": "tool_result", "tool_call": tool_result},
-                            model=None,
-                            usage=None
-                        )
-
-                        # Update accumulated content
-                        accumulated_content += f"\n\n{tool_result.get('output', '')}"
-
-            except ImportError:
-                # Tool parser not available - skip tool execution
-                pass
-            except Exception as e:
-                # Tool execution failed - log but continue
-                import logging
-                logging.getLogger(__name__).warning(f"Tool execution failed during streaming: {e}")
-
-        # Add the final message to conversation if requested
-        if accumulate_message and accumulated_content:
-            self.session.add_message(
-                MessageRole.ASSISTANT,
-                accumulated_content,
-                metadata=final_response_metadata
-            )
-
-            # Complete ReAct cycle if one is active
-            if hasattr(self.session, 'current_cycle') and self.session.current_cycle:
-                self.session.current_cycle.complete(accumulated_content, success=True)
+                yield GenerateResponse(content=str(chunk), raw_response={}, model=None, usage=None)
 
 
 class Session:
@@ -606,9 +463,7 @@ class Session:
             
         # Add tools if provided - but defer validation until add_tool is called
         if tools:
-            # Only check tool availability when tools are actually provided
-            if not TOOLS_AVAILABLE:
-                raise ValueError(TOOLS_ERROR_MESSAGE)
+            # Basic tools are always available
                 
             # Register each tool
             for tool in tools:
@@ -1338,8 +1193,7 @@ class Session:
         Raises:
             ValueError: If tools are not available
         """
-        if not TOOLS_AVAILABLE:
-            raise ValueError(TOOLS_ERROR_MESSAGE)
+        # Basic tools are always available
         
         # Convert tool to ToolDefinition and store original implementation if callable
         if callable(tool):
@@ -1420,7 +1274,7 @@ class Session:
             
             # Find the corresponding tool definition if available
             tool_def = None
-            if TOOLS_AVAILABLE and hasattr(self, 'tools') and self.tools:
+            if hasattr(self, 'tools') and self.tools:
                 for tool in self.tools:
                     if isinstance(tool, dict) and tool.get('name') == tool_call.name:
                         # For dictionary tools
@@ -1454,7 +1308,7 @@ class Session:
             logger.info(f"Session: Tool execution successful: {tool_call.name}")
             
             # Validate the result against the output schema if available
-            if TOOLS_AVAILABLE and tool_def and hasattr(tool_def, 'output_schema') and tool_def.output_schema:
+            if tool_def and hasattr(tool_def, 'output_schema') and tool_def.output_schema:
                 try:
                     # Import jsonschema for validation
                     from jsonschema import validate, ValidationError
@@ -1560,7 +1414,13 @@ class Session:
                 execution_time=execution_time,
                 metadata={"session_action_id": action_id}
             )
-        
+
+        # Print success/error indicator in yellow (consistent with streaming mode)
+        if success:
+            print(f"\033[33m ✓\033[0m")  # Yellow checkmark
+        else:
+            print(f"\033[33m ❌\033[0m")  # Yellow X
+
         return result
     
     def execute_tool_calls(
@@ -1641,33 +1501,23 @@ class Session:
             last_assistant_msg.tool_results = []
         
         # Create and add the tool result with consistent format
-        if TOOLS_AVAILABLE:
-            # Use ToolResult for internal representation
-            tool_result_obj = ToolResult(
-                call_id=tool_call_id,
-                result=result,
-                error=error
-            )
-            # Convert to dict for backward compatibility
-            tool_result = {
-                "call_id": tool_call_id,
-                "name": tool_name,
-                "arguments": arguments,
-                "output": str(result)
-            }
-            if error:
-                tool_result["error"] = error
-        else:
-            # Fallback to dict representation
-            tool_result = {
-                "call_id": tool_call_id,
-                "name": tool_name,
-                "arguments": arguments,
-                "output": str(result)
-            }
-            if error:
-                tool_result["error"] = error
-            
+        # Use ToolResult for internal representation
+        tool_result_obj = ToolResult(
+            call_id=tool_call_id,
+            result=result,
+            error=error,
+            duration=duration
+        )
+        # Convert to dict for backward compatibility
+        tool_result = {
+            "call_id": tool_call_id,
+            "name": tool_name,
+            "arguments": arguments,
+            "output": str(result)
+        }
+        if error:
+            tool_result["error"] = error
+
         last_assistant_msg.tool_results.append(tool_result)
 
     def _adjust_system_prompt_for_tool_phase(
@@ -1845,12 +1695,10 @@ class Session:
         # Old format: Direct tool_calls attribute
         if hasattr(response, 'tool_calls') and response.tool_calls:
             # Wrap in ToolCallResponse for compatibility
-            if TOOLS_AVAILABLE:
-                return ToolCallResponse(
-                    content=getattr(response, 'content', ''),
-                    tool_calls=response.tool_calls
-                )
-            return response
+            return ToolCallResponse(
+                content=getattr(response, 'content', ''),
+                tool_calls=response.tool_calls
+            )
             
         # No tool calls
         return None
@@ -1905,8 +1753,7 @@ class Session:
         logger = logging.getLogger("abstractllm.session")
         
         # Ensure we have tools available
-        if not TOOLS_AVAILABLE:
-            raise ValueError(TOOLS_ERROR_MESSAGE)
+        # Basic tools are always available
         
         # Use session's default max_tool_calls if not specified
         if max_tool_calls is None:
@@ -2273,8 +2120,7 @@ class Session:
         )
 
         # Ensure we have tools available
-        if not TOOLS_AVAILABLE:
-            raise ValueError(TOOLS_ERROR_MESSAGE)
+        # Basic tools are always available
         
         # Store the original prompt and system prompt for follow-up requests
         original_prompt = prompt if prompt else ""
@@ -2971,9 +2817,7 @@ class Session:
         
         # Handle both tools and tool_functions parameters for consistency
         if tools is not None:
-            # If tools parameter is provided, register them temporarily
-            if not TOOLS_AVAILABLE:
-                raise ValueError(TOOLS_ERROR_MESSAGE)
+            # Basic tools are always available
             
             # Create tool_functions from provided tools if needed
             if tool_functions is None and tools:
@@ -2997,44 +2841,59 @@ class Session:
             use_tools = True
             logger.info(f"Tool support enabled with {len(tools)} provided tools")
         elif tool_functions is not None or self.tools:
-            if not TOOLS_AVAILABLE:
-                raise ValueError(TOOLS_ERROR_MESSAGE)
+            # Basic tools are always available
             use_tools = True
             logger.info(f"Tool support enabled with {len(self.tools)} registered tools")
         
-        # UNIFIED STREAMING: Handle all streaming scenarios with consistent API
+        # UNIFIED STREAMING: Handle all streaming scenarios with proper ReAct cycles
         if stream:
             # Add user message to conversation
             if enhanced_prompt:
                 self.add_message(MessageRole.USER, enhanced_prompt)
 
-            # Get conversation history
-            system_prompt_to_use = system_prompt or self.system_prompt
-            messages = self.get_messages_for_provider(provider_name)
+            if use_tools:
+                # STREAMING WITH REACT CYCLES: Maintain proper Think->Act->Observe->Repeat pattern
+                return self._stream_with_react_cycles(
+                    prompt=enhanced_prompt,
+                    tool_functions=tool_functions or self._create_tool_functions_dict(),
+                    provider_instance=provider_instance,
+                    provider_name=provider_name,
+                    system_prompt=system_prompt,
+                    max_tool_calls=max_tool_calls,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    top_p=top_p,
+                    frequency_penalty=frequency_penalty,
+                    presence_penalty=presence_penalty,
+                    files=files,
+                    **kwargs
+                )
+            else:
+                # STREAMING WITHOUT TOOLS: Simple streaming
+                system_prompt_to_use = system_prompt or self.system_prompt
+                messages = self.get_messages_for_provider(provider_name)
 
-            # Generate streaming response
-            raw_stream = provider_instance.generate(
-                prompt=enhanced_prompt,
-                system_prompt=system_prompt_to_use,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                top_p=top_p,
-                frequency_penalty=frequency_penalty,
-                presence_penalty=presence_penalty,
-                stream=True,
-                tools=tools if tools is not None else self.tools,  # Pass tools to provider
-                files=files,
-                **kwargs
-            )
+                # Generate streaming response
+                raw_stream = provider_instance.generate(
+                    prompt=enhanced_prompt,
+                    system_prompt=system_prompt_to_use,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    top_p=top_p,
+                    frequency_penalty=frequency_penalty,
+                    presence_penalty=presence_penalty,
+                    stream=True,
+                    tools=tools if tools is not None else self.tools,  # Pass tools to provider
+                    files=files,
+                    **kwargs
+                )
 
-            # Return unified streaming wrapper that handles tools automatically
-            return self._unified_helpers.create_unified_streaming_wrapper(
-                raw_stream,
-                tool_functions=tool_functions or self._create_tool_functions_dict() if use_tools else None,
-                max_tool_calls=max_tool_calls if use_tools else 0,
-                accumulate_message=True
-            )
+                # Return simple streaming wrapper (no tool processing needed)
+                return self._simple_streaming_generator(
+                    raw_stream,
+                    accumulate_message=True
+                )
         
         # Define generation function for SOTA retry support
         def _generate():
@@ -3612,6 +3471,329 @@ class Session:
         if self.memory:
             return self.memory.query_memory(query)
         return None
+
+    def _simple_streaming_generator(self, raw_stream: Generator, accumulate_message: bool = True) -> Generator:
+        """Simple streaming wrapper for non-tool responses."""
+        accumulated_content = ""
+        final_response_metadata = {}
+
+        for chunk in raw_stream:
+            chunk_content = ""
+
+            # Extract content from different chunk types
+            if isinstance(chunk, str):
+                chunk_content = chunk
+            elif hasattr(chunk, "content"):
+                chunk_content = chunk.content or ""
+                # Capture metadata from the chunk
+                if hasattr(chunk, 'usage') and chunk.usage:
+                    final_response_metadata["usage"] = chunk.usage
+                if hasattr(chunk, 'model') and chunk.model:
+                    final_response_metadata["model"] = chunk.model
+            else:
+                chunk_content = str(chunk)
+
+            accumulated_content += chunk_content
+
+            # Yield the chunk as GenerateResponse
+            if chunk_content:
+                if isinstance(chunk, str):
+                    yield GenerateResponse(
+                        content=chunk_content,
+                        raw_response={"chunk_type": "string"},
+                        model=None,
+                        usage=None
+                    )
+                elif hasattr(chunk, "content"):
+                    yield GenerateResponse(
+                        content=chunk_content,
+                        raw_response=getattr(chunk, 'raw_response', {}),
+                        model=getattr(chunk, 'model', None),
+                        usage=getattr(chunk, 'usage', None)
+                    )
+                else:
+                    yield GenerateResponse(
+                        content=chunk_content,
+                        raw_response={"chunk_type": "unknown", "original": chunk},
+                        model=None,
+                        usage=None
+                    )
+
+        # Add the final message to conversation if requested
+        if accumulate_message and accumulated_content:
+            self.add_message(
+                MessageRole.ASSISTANT,
+                accumulated_content,
+                metadata=final_response_metadata
+            )
+
+    def _stream_with_react_cycles(
+        self,
+        prompt: str,
+        tool_functions: Dict[str, Callable],
+        provider_instance,
+        provider_name: str,
+        system_prompt: Optional[str] = None,
+        max_tool_calls: int = 25,
+        **generation_kwargs
+    ) -> Generator:
+        """
+        Stream responses while maintaining proper ReAct Think->Act->Observe->Repeat cycles.
+
+        This method preserves the iterative reasoning pattern where:
+        1. LLM thinks and potentially requests tools (Think/Act)
+        2. Tools are executed and results added to conversation (Observe)
+        3. LLM continues thinking with updated context (Think again)
+        4. Process repeats until final answer is ready
+        """
+        logger = logging.getLogger("abstractllm.session")
+
+        # ReAct cycle tracking
+        cycle_count = 0
+        original_prompt = prompt
+
+        # Initial yield to show thinking has started
+        yield GenerateResponse(
+            content="",
+            raw_response={"type": "react_phase", "phase": "thinking", "cycle": cycle_count},
+            model=None,
+            usage=None
+        )
+
+        while cycle_count < max_tool_calls:
+            cycle_count += 1
+
+            # Get current conversation state
+            current_messages = self.get_messages_for_provider(provider_name)
+            current_system_prompt = system_prompt or self.system_prompt
+
+            logger.info(f"ReAct Cycle {cycle_count}: Starting generation phase")
+
+            # Initialize scratchpad for this cycle
+            if cycle_count == 1 and hasattr(self, 'scratchpad') and self.scratchpad:
+                import time
+                cycle_id = f"cycle_{int(time.time())}_{cycle_count}"
+                self.scratchpad.start_cycle(cycle_id, original_prompt)
+
+            # Generate response (Think/Act phase)
+            raw_stream = provider_instance.generate(
+                prompt=original_prompt if cycle_count == 1 else None,  # Only use original prompt on first cycle
+                system_prompt=current_system_prompt,
+                messages=current_messages,
+                stream=True,
+                tools=self.tools,
+                **generation_kwargs
+            )
+
+            # Collect the streamed response
+            accumulated_response = ""
+            response_metadata = {}
+
+            for chunk in raw_stream:
+                chunk_content = ""
+
+                if isinstance(chunk, str):
+                    chunk_content = chunk
+                elif hasattr(chunk, "content"):
+                    chunk_content = chunk.content or ""
+                    if hasattr(chunk, 'usage') and chunk.usage:
+                        response_metadata["usage"] = chunk.usage
+                    if hasattr(chunk, 'model') and chunk.model:
+                        response_metadata["model"] = chunk.model
+                else:
+                    chunk_content = str(chunk)
+
+                accumulated_response += chunk_content
+
+                # Record complete thinking content in scratchpad (verbatim)
+                if chunk_content:
+                    # Add thinking content to scratchpad (complete verbatim)
+                    if hasattr(self, 'scratchpad') and self.scratchpad:
+                        # Only add significant thinking content (not individual character chunks)
+                        if len(chunk_content.strip()) > 5:  # Avoid tiny chunks
+                            self.scratchpad.add_thought(
+                                content=chunk_content,
+                                confidence=1.0,
+                                metadata={
+                                    "cycle": cycle_count,
+                                    "iteration": cycle_count,
+                                    "phase": "thinking"
+                                }
+                            )
+
+                    # Yield clean thinking content to main conversation (filter out tool markup)
+                    display_content = self._unified_helpers._filter_tool_call_markup(chunk_content)
+                    if display_content:
+                        yield GenerateResponse(
+                            content=display_content,
+                            raw_response={"type": "react_phase", "phase": "thinking", "cycle": cycle_count},
+                            model=getattr(chunk, 'model', None) if hasattr(chunk, 'model') else None,
+                            usage=getattr(chunk, 'usage', None) if hasattr(chunk, 'usage') else None
+                        )
+
+            # Add assistant message for this cycle
+            assistant_message = self.add_message(
+                MessageRole.ASSISTANT,
+                accumulated_response,
+                metadata=response_metadata
+            )
+
+            logger.info(f"ReAct Cycle {cycle_count}: Generated response, checking for tool calls")
+
+            # Check for tool calls (Act phase)
+            try:
+                from abstractllm.tools.parser import parse_tool_calls
+                tool_calls = parse_tool_calls(accumulated_response)
+            except ImportError:
+                tool_calls = []
+            except Exception as e:
+                logger.warning(f"Tool parsing failed: {e}")
+                tool_calls = []
+
+            if not tool_calls:
+                # No more tool calls - final answer phase
+                logger.info(f"ReAct Cycle {cycle_count}: No tool calls detected, providing final answer")
+
+                # Yield final answer indicator
+                yield GenerateResponse(
+                    content="\n\n",
+                    raw_response={"type": "react_phase", "phase": "final_answer", "cycle": cycle_count},
+                    model=None,
+                    usage=None
+                )
+
+                # Update ReAct cycle if active
+                if hasattr(self, 'current_cycle') and self.current_cycle:
+                    self.current_cycle.complete(accumulated_response, success=True)
+
+                # Complete scratchpad cycle if active
+                if hasattr(self, 'scratchpad') and self.scratchpad:
+                    self.scratchpad.complete_cycle(
+                        final_answer=accumulated_response,
+                        success=True
+                    )
+
+                break  # Exit ReAct loop
+
+            # Execute tool calls (Observe phase)
+            logger.info(f"ReAct Cycle {cycle_count}: Executing {len(tool_calls)} tool calls")
+
+            for tool_call in tool_calls:
+                # Display tool execution (single line format without initial execution message)
+                args_str = ""
+                if hasattr(tool_call, 'arguments') and tool_call.arguments:
+                    args_parts = []
+                    for key, value in tool_call.arguments.items():
+                        if isinstance(value, str):
+                            args_parts.append(f"{key}={repr(value)}")
+                        else:
+                            args_parts.append(f"{key}={value}")
+                    args_str = ", ".join(args_parts)
+
+                # Display tool call start (without success indicator yet)
+                tool_start_message = f"\n🔧 Tool Call : {tool_call.name}({args_str})" if args_str else f"\n🔧 Tool Call : {tool_call.name}()"
+
+                yield GenerateResponse(
+                    content=tool_start_message,
+                    raw_response={"type": "tool_execution_start", "tool": tool_call.name, "cycle": cycle_count},
+                    model=None,
+                    usage=None
+                )
+
+                # Record action in scratchpad (ACT phase)
+                if hasattr(self, 'scratchpad') and self.scratchpad:
+                    action_id = self.scratchpad.add_action(
+                        tool_name=tool_call.name,
+                        tool_args=getattr(tool_call, 'arguments', {}),
+                        reasoning=f"Executing {tool_call.name} to gather information",
+                        metadata={"cycle": cycle_count}
+                    )
+
+                # Execute the tool
+                try:
+                    tool_result = self.execute_tool_call(tool_call, tool_functions)
+
+                    # Update ReAct cycle with observation
+                    if hasattr(self, 'current_cycle') and self.current_cycle:
+                        observation_content = tool_result.get('output', tool_result.get('error', str(tool_result)))
+                        self.current_cycle.add_observation(
+                            action_id=getattr(tool_call, 'id', f"action_{cycle_count}"),
+                            content=observation_content,
+                            success=tool_result.get('success', True)
+                        )
+
+                    # Store tool results in scratchpad (complete verbatim)
+                    tool_output = tool_result.get('output', '')
+                    if tool_output:
+                        # Add complete tool result to scratchpad (OBSERVE phase - verbatim)
+                        if hasattr(self, 'scratchpad') and self.scratchpad:
+                            self.scratchpad.add_observation(
+                                action_id=getattr(tool_call, 'id', f"action_{cycle_count}"),
+                                result=tool_output,  # Complete verbatim result
+                                success=tool_result.get('success', True),
+                                execution_time=tool_result.get('execution_time', 0.0)
+                            )
+
+                        # Add tool result to conversation for LLM context (but not yielded to user)
+                        self.add_message(
+                            MessageRole.TOOL,
+                            content=str(tool_output),
+                            name=tool_call.name,
+                            metadata={
+                                "tool_call_id": getattr(tool_call, 'id', ''),
+                                "tool_name": tool_call.name,
+                                "success": tool_result.get('success', True),
+                                "cycle": cycle_count
+                            }
+                        )
+
+                        # Yield success indicator to complete the tool call line
+                        yield GenerateResponse(
+                            content=" ✓\n",
+                            raw_response={"type": "tool_completed", "tool": tool_call.name, "cycle": cycle_count, "success": True},
+                            model=None,
+                            usage=None
+                        )
+
+                except Exception as e:
+                    logger.warning(f"Tool execution failed: {e}")
+                    error_msg = f"Tool execution failed: {str(e)}"
+
+                    # Store complete error in scratchpad (verbatim)
+                    if hasattr(self, 'scratchpad') and self.scratchpad:
+                        self.scratchpad.add_observation(
+                            action_id=getattr(tool_call, 'id', f"action_{cycle_count}"),
+                            result=error_msg,  # Complete error details
+                            success=False,
+                            execution_time=0.0
+                        )
+
+                    # Yield error indicator to complete the tool call line
+                    yield GenerateResponse(
+                        content=" ❌\n",
+                        raw_response={"type": "tool_error", "tool": tool_call.name, "cycle": cycle_count, "success": False},
+                        model=None,
+                        usage=None
+                    )
+
+            # Prepare for next cycle (if any)
+            if cycle_count < max_tool_calls:
+                yield GenerateResponse(
+                    content="\nThinking about next steps...\n",
+                    raw_response={"type": "react_phase", "phase": "observing", "cycle": cycle_count},
+                    model=None,
+                    usage=None
+                )
+
+        # Handle max iterations reached
+        if cycle_count >= max_tool_calls:
+            logger.warning(f"Maximum ReAct cycles ({max_tool_calls}) reached")
+            yield GenerateResponse(
+                content="\n⚠️ Maximum reasoning cycles reached. Providing current analysis...\n",
+                raw_response={"type": "react_limit", "cycles": cycle_count},
+                model=None,
+                usage=None
+            )
 
     def _should_use_lance_features(self) -> bool:
         """Check if LanceDB features should be used.

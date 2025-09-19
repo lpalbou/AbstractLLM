@@ -293,18 +293,19 @@ class BaseProvider(AbstractLLMInterface, ABC):
             else:
                 args_str = "{}"
             
-            # Create concise, direct message
+            # Create unified tool call message format (consistent with streaming mode)
             if len(tool_calls) == 1:
-                # Single tool call - more concise format
-                tool_message = f"🔧 LLM called {tc.name}({args_str})"
+                # Single tool call - unified format
+                tool_start_message = f"🔧 Tool Call : {tc.name}({args_str})"
             else:
                 # Multiple tool calls - show which one
-                tool_message = f"🔧 LLM called {tc.name}({args_str}) [{i}/{len(tool_calls)}]"
-                
+                tool_start_message = f"🔧 Tool Call : {tc.name}({args_str}) [{i}/{len(tool_calls)}]"
+
+            # Print tool call start (without success indicator yet) in yellow
+            print(f"\033[33m{tool_start_message}\033[0m", end="", flush=True)
+
             # Log to file
-            logger.info(tool_message)
-            # Print to console in yellow with direct format
-            print(f"\033[33m{tool_message}\033[0m")
+            logger.info(tool_start_message)
     
     def _prepare_tool_context(self, 
                             tools: Optional[List[Any]], 

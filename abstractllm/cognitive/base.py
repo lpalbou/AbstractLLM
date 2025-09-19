@@ -55,8 +55,8 @@ class BaseCognitive(ABC):
     def session(self):
         """Lazy initialization of LLM session"""
         if self._session is None:
+            from abstractllm.factory import create_session
             try:
-                from abstractllm.factory import create_session
                 self._session = create_session(
                     self.provider,
                     model=self.model,
@@ -200,11 +200,9 @@ def check_cognitive_dependencies() -> Dict[str, bool]:
     """Check if cognitive function dependencies are available"""
     dependencies = {}
 
-    try:
-        from abstractllm.factory import create_session
-        dependencies["abstractllm"] = True
-    except ImportError:
-        dependencies["abstractllm"] = False
+    # AbstractLLM factory is always available (internal module)
+    from abstractllm.factory import create_session
+    dependencies["abstractllm"] = True
 
     try:
         # Test granite3.3:2b availability

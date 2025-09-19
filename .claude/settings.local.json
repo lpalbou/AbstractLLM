@@ -53,7 +53,10 @@
       "mcp__context7__resolve-library-id",
       "mcp__context7__get-library-docs",
       "WebFetch(domain:docs.llamaindex.ai)",
-      "Read(///**)"
+      "Read(///**)",
+      "Bash(ABSTRACTLLM_LOG_LEVEL=DEBUG python abstractllm/cli.py --provider ollama --model qwen3-coder:30b --stream --prompt \"list the files in the current directory\")",
+      "Read(//opt/anaconda3/bin/**)",
+      "WebFetch(domain:www.promptingguide.ai)"
     ],
     "deny": []
   },

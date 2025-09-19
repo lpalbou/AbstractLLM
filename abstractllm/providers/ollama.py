@@ -192,13 +192,14 @@ class OllamaProvider(BaseProvider):
     def _supports_tool_calls(self) -> bool:
         """
         Check if the configured model supports tool calls.
-        
+
         Returns:
             True if the current model supports tool calls, False otherwise
         """
         model = self.config_manager.get_param(ModelParameter.MODEL)
         return supports_tool_calls(model)
-        
+
+
     def _prepare_request_for_chat(self, 
                                  model: str,
                                  prompt: str,
@@ -673,12 +674,13 @@ class OllamaProvider(BaseProvider):
                         if line:
                             try:
                                 data = json.loads(line)
-                                
+
                                 # Handle generate endpoint response
                                 if "response" in data:
-                                    current_content += data["response"]
+                                    response_chunk = data["response"]
+                                    current_content += response_chunk
                                     yield GenerateResponse(
-                                        content=data["response"],
+                                        content=response_chunk,
                                         model=model,
                                         raw_response=data
                                     )
@@ -728,7 +730,7 @@ class OllamaProvider(BaseProvider):
                                             ))
                                         
                                         tool_response = ToolCallResponse(
-                                            content=current_content,
+                                            content="",  # Don't repeat content in streaming mode to avoid showing <|tool_call|> tokens
                                             tool_calls=tool_calls
                                         )
                                     
@@ -740,7 +742,12 @@ class OllamaProvider(BaseProvider):
                                             prompted_response = handler.parse_response(current_content, mode="prompted")
                                             if prompted_response and prompted_response.has_tool_calls():
                                                 logger.debug(f"Found {len(prompted_response.tool_calls)} prompted tool calls")
-                                                tool_response = prompted_response
+                                                # Create a clean response without displaying the raw content that contains tool call tokens
+                                                from abstractllm.types import ToolCallResponse
+                                                tool_response = ToolCallResponse(
+                                                    content="",  # Don't repeat content in streaming mode to avoid showing <|tool_call|> tokens
+                                                    tool_calls=prompted_response.tool_calls
+                                                )
                                     
                                     # Yield the tool response if we found any tool calls
                                     if tool_response:

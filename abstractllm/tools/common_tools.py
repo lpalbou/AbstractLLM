@@ -598,15 +598,22 @@ def read_file(file_path: str, should_read_entire_file: bool = True, start_line_o
 
 
 @tool(
-    description="Write or append content to a file (creates directories if needed)",
-    tags=["file", "write", "create", "append", "content"],
+    description="Write content to a file with robust error handling, creating directories if needed",
+    tags=["file", "write", "create", "append", "content", "output"],
     when_to_use="When you need to create new files, save content, or append to existing files",
     examples=[
         {
-            "description": "Create a new file with content",
+            "description": "Write a simple text file",
             "arguments": {
                 "file_path": "output.txt",
-                "content": "Hello, world!\nThis is a new file."
+                "content": "Hello, world!"
+            }
+        },
+        {
+            "description": "Create a Python script",
+            "arguments": {
+                "file_path": "script.py",
+                "content": "#!/usr/bin/env python3\nprint('Hello from Python!')"
             }
         },
         {
@@ -633,33 +640,53 @@ def read_file(file_path: str, should_read_entire_file: bool = True, start_line_o
         }
     ]
 )
-def write_file(file_path: str, content: str, mode: str = "w") -> str:
+def write_file(file_path: str, content: str = "", mode: str = "w", create_dirs: bool = True) -> str:
     """
-    Write content to a file.
-    
+    Write content to a file with robust error handling.
+
+    This tool creates or overwrites a file with the specified content.
+    It can optionally create parent directories if they don't exist.
+
     Args:
-        file_path: Path to the file to write
-        content: Content to write to the file
+        file_path: Path to the file to write (relative or absolute)
+        content: The content to write to the file (default: empty string)
         mode: Write mode - "w" to overwrite, "a" to append (default: "w")
-        
+        create_dirs: Whether to create parent directories if they don't exist (default: True)
+
     Returns:
-        Success message or error message
+        Success message with file information
+
+    Raises:
+        PermissionError: If lacking write permissions
+        OSError: If there are filesystem issues
     """
     try:
+        # Convert to Path object for better handling
         path = Path(file_path)
-        
-        # Create parent directories if they don't exist
-        path.parent.mkdir(parents=True, exist_ok=True)
-        
+
+        # Create parent directories if requested and they don't exist
+        if create_dirs and path.parent != path:
+            path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Write the content to the file
         with open(path, mode, encoding='utf-8') as f:
             f.write(content)
-        
-        size = path.stat().st_size
+
+        # Get file size for confirmation
+        file_size = path.stat().st_size
+
+        # Enhanced success message with emoji and formatting
         action = "appended to" if mode == "a" else "written to"
-        return f"Successfully {action} '{file_path}' ({size:,} bytes)"
-        
+        return f"✅ Successfully {action} '{file_path}' ({file_size:,} bytes)"
+
+    except PermissionError:
+        return f"❌ Permission denied: Cannot write to '{file_path}'"
+    except FileNotFoundError:
+        return f"❌ Directory not found: Parent directory of '{file_path}' does not exist"
+    except OSError as e:
+        return f"❌ File system error: {str(e)}"
     except Exception as e:
-        return f"Error writing file: {str(e)}"
+        return f"❌ Unexpected error writing file: {str(e)}"
 
 
 def update_file(file_path: str, old_text: str, new_text: str, max_replacements: int = -1) -> str:

@@ -18,10 +18,10 @@ def patch_memory_facts_extraction():
     This function replaces the basic regex-based fact extraction in the
     HierarchicalMemory class with our sophisticated semantic approach.
     """
-    try:
-        import abstractllm.memory as memory_module
-        from .facts_extractor import FactsExtractor
+    import abstractllm.memory as memory_module
+    from .facts_extractor import FactsExtractor
 
+    try:
         # Store the original extract_facts method
         original_memory_class = memory_module.HierarchicalMemory
         original_extract_facts = original_memory_class.extract_facts

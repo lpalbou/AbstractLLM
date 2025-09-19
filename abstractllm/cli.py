@@ -9,7 +9,7 @@ with all SOTA features including hierarchical memory, ReAct reasoning, and tools
 
 from abstractllm.factory import create_session
 from abstractllm.structured_response import StructuredResponseConfig, ResponseFormat
-from abstractllm.tools.common_tools import read_file, list_files, search_files
+from abstractllm.tools.common_tools import read_file, list_files, search_files, write_file
 from abstractllm.tools.enhanced import tool
 from abstractllm.utils.logging import configure_logging
 from abstractllm.interface import ModelParameter
@@ -64,76 +64,6 @@ class Spinner:
             idx += 1
             time.sleep(0.5)  # 500ms between dot states for a calm feeling
 
-
-@tool(
-    description="Write content to a file, creating directories if needed",
-    tags=["file", "write", "output"],
-    when_to_use="When you need to create a new file or overwrite existing content",
-    examples=[
-        {
-            "description": "Write a simple text file",
-            "arguments": {
-                "file_path": "output.txt",
-                "content": "Hello, world!"
-            }
-        },
-        {
-            "description": "Create a Python script",
-            "arguments": {
-                "file_path": "script.py", 
-                "content": "#!/usr/bin/env python\nprint('Hello from Python!')"
-            }
-        }
-    ]
-)
-def write_file(
-    file_path: str = Field(description="Path to the file to write", min_length=1),
-    content: str = Field(description="Content to write to the file", default=""),
-    create_dirs: bool = Field(description="Create parent directories if they don't exist", default=True)
-) -> str:
-    """
-    Write content to a file with robust error handling.
-    
-    This tool creates or overwrites a file with the specified content.
-    It can optionally create parent directories if they don't exist.
-    
-    Args:
-        file_path: Path to the file to write (relative or absolute)
-        content: The content to write to the file
-        create_dirs: Whether to create parent directories if they don't exist
-        
-    Returns:
-        Success message with file information
-        
-    Raises:
-        PermissionError: If lacking write permissions
-        OSError: If there are filesystem issues
-    """
-    try:
-        # Convert to Path object for better handling
-        path = Path(file_path)
-        
-        # Create parent directories if requested and they don't exist
-        if create_dirs and path.parent != path:
-            path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Write the content to the file
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(content)
-        
-        # Get file size for confirmation
-        file_size = path.stat().st_size
-        
-        return f"✅ Successfully wrote {file_size} bytes to '{file_path}'"
-        
-    except PermissionError:
-        return f"❌ Permission denied: Cannot write to '{file_path}'"
-    except FileNotFoundError:
-        return f"❌ Directory not found: Parent directory of '{file_path}' does not exist"
-    except OSError as e:
-        return f"❌ File system error: {str(e)}"
-    except Exception as e:
-        return f"❌ Unexpected error writing file: {str(e)}"
 
 
 def create_agent(provider="ollama", model="qwen3:4b", memory_path=None, max_tool_calls=25,
@@ -295,37 +225,49 @@ def run_query(session, prompt, structured_output=None, quiet=False):
                     # Handle GenerateResponse objects with content
                     if hasattr(chunk, 'content') and chunk.content is not None:
                         chunk_text = chunk.content
-                        accumulated_content += chunk_text
 
-                        if quiet:
-                            # In quiet mode, just print the content without formatting
-                            print(chunk_text, end="", flush=True)
+                        # Check for special tool execution chunk types
+                        chunk_type = getattr(chunk, 'raw_response', {}).get('type', 'content')
+
+                        if chunk_type == 'tool_execution_start':
+                            # Tool execution start - display in yellow, don't add to accumulated content
+                            print(f"{Colors.YELLOW}{chunk_text}{Colors.RESET}", end="", flush=True)
+                        elif chunk_type in ['tool_completed', 'tool_error']:
+                            # Tool completion indicator - display in yellow (✓ or ❌), don't add to accumulated content
+                            print(f"{Colors.YELLOW}{chunk_text}{Colors.RESET}", end="", flush=True)
                         else:
-                            # Full formatting for interactive mode
-                            # Check for thinking tags to style appropriately
-                            if '<think>' in chunk_text and not thinking_mode:
-                                thinking_mode = True
-                                # Apply dim italic styling for thinking content
-                                chunk_to_display = chunk_text.replace('<think>', f'{Colors.DIM}<think>{Colors.RESET}{Colors.DIM}')
-                            elif '</think>' in chunk_text and thinking_mode:
-                                thinking_mode = False
-                                chunk_to_display = chunk_text.replace('</think>', f'</think>{Colors.RESET}')
-                            elif thinking_mode:
-                                # We're inside thinking tags - apply dim italic styling
-                                chunk_to_display = f'{Colors.DIM}{chunk_text}{Colors.RESET}' if chunk_text.strip() else chunk_text
+                            # Regular content - add to accumulated content
+                            accumulated_content += chunk_text
+
+                            if quiet:
+                                # In quiet mode, just print the content without formatting
+                                print(chunk_text, end="", flush=True)
                             else:
-                                chunk_to_display = chunk_text
+                                # Full formatting for interactive mode
+                                # Check for thinking tags to style appropriately
+                                if '<think>' in chunk_text and not thinking_mode:
+                                    thinking_mode = True
+                                    # Apply dim italic styling for thinking content
+                                    chunk_to_display = chunk_text.replace('<think>', f'{Colors.DIM}<think>{Colors.RESET}{Colors.DIM}')
+                                elif '</think>' in chunk_text and thinking_mode:
+                                    thinking_mode = False
+                                    chunk_to_display = chunk_text.replace('</think>', f'</think>{Colors.RESET}')
+                                elif thinking_mode:
+                                    # We're inside thinking tags - apply dim italic styling
+                                    chunk_to_display = f'{Colors.DIM}{chunk_text}{Colors.RESET}' if chunk_text.strip() else chunk_text
+                                else:
+                                    chunk_to_display = chunk_text
 
-                            # Text content - add alma> prefix to first content line
-                            if first_content_line and not thinking_mode and chunk_to_display.strip():
-                                # First non-thinking content gets alma> prefix
-                                lines = chunk_to_display.split('\n')
-                                if lines:
-                                    lines[0] = f"{Colors.BLUE}alma>{Colors.RESET} {lines[0]}"
-                                    chunk_to_display = '\n'.join(lines)
-                                first_content_line = False
+                                # Text content - add alma> prefix to first content line
+                                if first_content_line and not thinking_mode and chunk_to_display.strip():
+                                    # First non-thinking content gets alma> prefix
+                                    lines = chunk_to_display.split('\n')
+                                    if lines:
+                                        lines[0] = f"{Colors.BLUE}alma>{Colors.RESET} {lines[0]}"
+                                        chunk_to_display = '\n'.join(lines)
+                                    first_content_line = False
 
-                            print(chunk_to_display, end="", flush=True)
+                                print(chunk_to_display, end="", flush=True)
 
                         # Capture usage data if available
                         if hasattr(chunk, 'usage') and chunk.usage:
