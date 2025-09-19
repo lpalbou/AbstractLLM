@@ -27,6 +27,8 @@ except ImportError:
 
 from abstractllm.interface import ModelParameter, ModelCapability
 from abstractllm.providers.base import BaseProvider
+from abstractllm.types import GenerateResponse
+from abstractllm.tools.core import ToolCallResponse
 from abstractllm.utils.logging import (
     log_request, 
     log_response,
@@ -445,13 +447,13 @@ class OllamaProvider(BaseProvider):
         
         return request_data
     
-    def _generate_impl(self, 
-                      prompt: str, 
-                      system_prompt: Optional[str] = None, 
+    def _generate_impl(self,
+                      prompt: str,
+                      system_prompt: Optional[str] = None,
                       files: Optional[List[Union[str, Path]]] = None,
                       stream: bool = False,
                       tools: Optional[List[Union[Dict[str, Any], callable]]] = None,
-                      **kwargs) -> Union[str, Generator[str, None, None], Generator[Dict[str, Any], None, None]]:
+                      **kwargs) -> Union[GenerateResponse, ToolCallResponse, Generator[Union[GenerateResponse, ToolCallResponse], None, None]]:
         """
         Generate a response using Ollama API.
         
@@ -675,14 +677,22 @@ class OllamaProvider(BaseProvider):
                                 # Handle generate endpoint response
                                 if "response" in data:
                                     current_content += data["response"]
-                                    yield data["response"]
+                                    yield GenerateResponse(
+                                        content=data["response"],
+                                        model=model,
+                                        raw_response=data
+                                    )
                                 # Handle chat endpoint response with tool calls
                                 elif "message" in data and isinstance(data["message"], dict):
                                     # Extract content if available
                                     if "content" in data["message"]:
                                         content_chunk = data["message"]["content"]
                                         current_content += content_chunk
-                                        yield content_chunk
+                                        yield GenerateResponse(
+                                            content=content_chunk,
+                                            model=model,
+                                            raw_response=data
+                                        )
                                         
                                     # Collect tool calls if present
                                     if "tool_calls" in data["message"] and data["message"]["tool_calls"]:
@@ -815,14 +825,13 @@ class OllamaProvider(BaseProvider):
                             "total_time": total_time
                         }
                     )
-                    from abstractllm.types import GenerateResponse
                     return GenerateResponse(
                         content=content,
                         tool_calls=tool_response,
                         model=model,
                         usage={
                             "prompt_tokens": prompt_tokens,
-                            "completion_tokens": completion_tokens, 
+                            "completion_tokens": completion_tokens,
                             "total_tokens": prompt_tokens + completion_tokens,
                             "total_time": total_time
                         }
@@ -847,8 +856,6 @@ class OllamaProvider(BaseProvider):
                             "total_time": total_time
                         }
                     )
-                    # Always return a GenerateResponse for consistency
-                    from abstractllm.types import GenerateResponse
                     return GenerateResponse(
                         content=content,
                         tool_calls=None,
@@ -856,7 +863,7 @@ class OllamaProvider(BaseProvider):
                         usage={
                             "prompt_tokens": prompt_tokens,
                             "completion_tokens": completion_tokens,
-                            "total_tokens": prompt_tokens + completion_tokens, 
+                            "total_tokens": prompt_tokens + completion_tokens,
                             "total_time": total_time
                         }
                     )
@@ -876,7 +883,7 @@ class OllamaProvider(BaseProvider):
         stream: bool = False,
         tools: Optional[List[Union[Dict[str, Any], callable]]] = None,
         **kwargs
-    ) -> Union[str, AsyncGenerator[str, None], AsyncGenerator[Dict[str, Any], None]]:
+    ) -> Union[GenerateResponse, ToolCallResponse, AsyncGenerator[Union[GenerateResponse, ToolCallResponse], None]]:
         """
         Asynchronously generate a response using Ollama API.
         
@@ -1272,46 +1279,4 @@ class OllamaProvider(BaseProvider):
             
         return capabilities
 
-# Simple adapter class for tests
-class OllamaLLM:
-    """
-    Simple adapter around OllamaProvider for test compatibility.
-    """
-    
-    def __init__(self, model="llava", api_key=None):
-        """
-        Initialize an Ollama LLM instance.
-        
-        Args:
-            model: The model to use
-            api_key: Not used for Ollama but included for API consistency
-        """
-        config = {
-            ModelParameter.MODEL: model,
-        }
-            
-        self.provider = OllamaProvider(config)
-        
-    def generate(self, prompt, image=None, images=None, **kwargs):
-        """
-        Generate a response using the provider.
-        
-        Args:
-            prompt: The prompt to send
-            image: Optional single image
-            images: Optional list of images
-            return_format: Format to return the response in
-            **kwargs: Additional parameters
-            
-        Returns:
-            The generated response
-        """
-        # Add images to kwargs if provided
-        if image:
-            kwargs["image"] = image
-        if images:
-            kwargs["images"] = images
-            
-        response = self.provider.generate(prompt, **kwargs)
-        
-        return response 
+ 

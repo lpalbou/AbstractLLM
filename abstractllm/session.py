@@ -291,6 +291,207 @@ class Message:
         return message
 
 
+# ==============================================================================
+# UNIFIED GENERATION IMPLEMENTATION
+# ==============================================================================
+
+class UnifiedGenerationHelpers:
+    """
+    Helper methods for implementing a unified generation interface.
+
+    This class extracts common logic that was previously duplicated
+    between generate() and generate_with_tools_streaming().
+    """
+
+    def __init__(self, session):
+        """Initialize with a reference to the session."""
+        self.session = session
+
+    def _filter_tool_call_markup(self, text: str) -> str:
+        """Filter out tool call markup patterns from text."""
+        import re
+        if not text:
+            return text
+
+        # Define tool call patterns to remove
+        patterns = [
+            r'<\|tool_call\|>.*?</\|tool_call\|>',  # Qwen format: <|tool_call|>...</|tool_call|>
+            r'<\|tool_call\|>.*?<\|tool_call\|>',   # Qwen format without closing tag
+            r'<function_call>.*?</function_call>',   # Llama format: <function_call>...</function_call>
+            r'<tool_call>.*?</tool_call>',          # Phi format: <tool_call>...</tool_call>
+            r'```tool_code.*?```',                  # Gemma format: ```tool_code...```
+        ]
+
+        # Remove each pattern, handling multiline content
+        filtered_text = text
+        for pattern in patterns:
+            filtered_text = re.sub(pattern, '', filtered_text, flags=re.DOTALL)
+
+        return filtered_text
+
+    def create_unified_streaming_wrapper(
+        self,
+        stream_response: Generator,
+        tool_functions: Optional[Dict[str, Callable]] = None,
+        max_tool_calls: int = 0,
+        accumulate_message: bool = True
+    ) -> Generator:
+        """
+        Create a unified streaming wrapper that yields GenerateResponse objects.
+
+        This ensures API consistency by always yielding GenerateResponse objects
+        instead of raw strings, fixing the original inconsistency.
+
+        Args:
+            stream_response: The raw stream from the provider
+            accumulate_message: Whether to add the final message to conversation
+
+        Yields:
+            GenerateResponse objects with consistent interface
+        """
+        accumulated_content = ""
+        final_response_metadata = {}
+
+        for chunk in stream_response:
+            # Handle different chunk types from providers
+            if isinstance(chunk, str):
+                # Raw string chunk (most common)
+                # Filter out tool call markup if tools are enabled
+                if tool_functions and max_tool_calls > 0:
+                    # Remove tool call markup patterns
+                    filtered_chunk = self._filter_tool_call_markup(chunk)
+                else:
+                    filtered_chunk = chunk
+
+                accumulated_content += chunk  # Keep original for tool detection
+
+                # Only yield if there's content after filtering
+                if filtered_chunk:
+                    yield GenerateResponse(
+                        content=filtered_chunk,
+                        raw_response={"chunk_type": "string"},
+                        model=None,
+                        usage=None
+                    )
+
+            elif hasattr(chunk, "content"):
+                # GenerateResponse or similar object
+                content_chunk = chunk.content or ""
+
+                # Filter out tool call markup if tools are enabled
+                if tool_functions and max_tool_calls > 0:
+                    filtered_content = self._filter_tool_call_markup(content_chunk)
+                else:
+                    filtered_content = content_chunk
+
+                accumulated_content += content_chunk  # Keep original for tool detection
+
+                # Capture metadata from the chunk
+                if hasattr(chunk, 'usage') and chunk.usage:
+                    final_response_metadata["usage"] = chunk.usage
+                if hasattr(chunk, 'model') and chunk.model:
+                    final_response_metadata["model"] = chunk.model
+
+                # Only yield if there's content after filtering
+                if filtered_content:
+                    yield GenerateResponse(
+                        content=filtered_content,
+                        raw_response=getattr(chunk, 'raw_response', {}),
+                        model=getattr(chunk, 'model', None),
+                        usage=getattr(chunk, 'usage', None)
+                    )
+
+            elif isinstance(chunk, dict):
+                # Dictionary chunk (tool results, etc.)
+                yield GenerateResponse(
+                    content="",  # Tool results don't have content
+                    raw_response=chunk,
+                    model=None,
+                    usage=None
+                )
+
+            else:
+                # Unknown chunk type - convert to string
+                chunk_str = str(chunk)
+                accumulated_content += chunk_str
+                yield GenerateResponse(
+                    content=chunk_str,
+                    raw_response={"chunk_type": "unknown", "original": chunk},
+                    model=None,
+                    usage=None
+                )
+
+        # Handle tool detection and execution if tools are available
+        if tool_functions and max_tool_calls > 0 and accumulated_content:
+            try:
+                from abstractllm.tools.parser import parse_tool_calls
+                tool_calls = parse_tool_calls(accumulated_content)
+
+                if tool_calls:
+                    # Execute detected tool calls
+                    for i, tool_call in enumerate(tool_calls):
+                        if i >= max_tool_calls:
+                            break
+
+                        # Display tool execution message (like in non-streaming mode)
+                        args_str = ""
+                        if tool_call.arguments:
+                            args_parts = []
+                            for key, value in tool_call.arguments.items():
+                                if isinstance(value, str):
+                                    args_parts.append(f"{key}={repr(value)}")
+                                else:
+                                    args_parts.append(f"{key}={value}")
+                            args_str = ", ".join(args_parts)
+
+                        if args_str:
+                            tool_message = f"🔧 LLM called {tool_call.name}({args_str})"
+                        else:
+                            tool_message = f"🔧 LLM called {tool_call.name}()"
+
+                        # Print the tool execution message (yellow colored)
+                        # Use proper colors if available, fallback to ANSI codes
+                        try:
+                            from abstractllm.utils.display import Colors
+                            print(f"{Colors.YELLOW}{tool_message}{Colors.RESET}", flush=True)
+                        except ImportError:
+                            print(f"\033[33m{tool_message}\033[0m", flush=True)
+
+                        # Execute the tool
+                        tool_result = self.session.execute_tool_call(tool_call, tool_functions)
+
+                        # Yield tool execution result
+                        yield GenerateResponse(
+                            content=f"\n\n{tool_result.get('output', '')}",
+                            raw_response={"type": "tool_result", "tool_call": tool_result},
+                            model=None,
+                            usage=None
+                        )
+
+                        # Update accumulated content
+                        accumulated_content += f"\n\n{tool_result.get('output', '')}"
+
+            except ImportError:
+                # Tool parser not available - skip tool execution
+                pass
+            except Exception as e:
+                # Tool execution failed - log but continue
+                import logging
+                logging.getLogger(__name__).warning(f"Tool execution failed during streaming: {e}")
+
+        # Add the final message to conversation if requested
+        if accumulate_message and accumulated_content:
+            self.session.add_message(
+                MessageRole.ASSISTANT,
+                accumulated_content,
+                metadata=final_response_metadata
+            )
+
+            # Complete ReAct cycle if one is active
+            if hasattr(self.session, 'current_cycle') and self.session.current_cycle:
+                self.session.current_cycle.complete(accumulated_content, success=True)
+
+
 class Session:
     """
     Enhanced session with comprehensive LLM conversation management and optional SOTA features.
@@ -478,6 +679,9 @@ class Session:
                 self.scratchpad = None
         else:
             self.scratchpad = None
+
+        # Initialize unified generation helpers for API consistency
+        self._unified_helpers = UnifiedGenerationHelpers(self)
 
     def _is_deterministic_mode(self) -> bool:
         """Check if the session is in deterministic mode (seed is set)."""
@@ -2059,6 +2263,15 @@ class Session:
         Yields:
             Content chunks (strings) or tool result dictionaries
         """
+        # DEPRECATION WARNING: This method is deprecated
+        import warnings
+        warnings.warn(
+            "generate_with_tools_streaming is deprecated. Use generate(stream=True) instead. "
+            "The unified generate method now provides consistent API for all scenarios.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+
         # Ensure we have tools available
         if not TOOLS_AVAILABLE:
             raise ValueError(TOOLS_ERROR_MESSAGE)
@@ -2613,15 +2826,18 @@ class Session:
         create_react_cycle: bool = True,
         structured_config: Optional[StructuredResponseConfig] = None,
         **kwargs
-    ) -> Union[str, "GenerateResponse", Generator[Union[str, Dict[str, Any]], None, None]]:
+    ) -> Union[str, "GenerateResponse", Generator["GenerateResponse", None, None]]:
         """
         Enhanced unified method to generate a response with or without tool support and SOTA features.
-        
-        This method intelligently handles all generation use cases:
+
+        This method intelligently handles all generation use cases with CONSISTENT API:
         1. Simple text generation with no tools
         2. Generation with tool support including executing tools and follow-up
-        3. Streaming response with or without tools
+        3. UNIFIED STREAMING: Both with and without tools now yield GenerateResponse objects
         4. Enhanced generation with memory context, ReAct cycles, and structured responses
+
+        🎯 API CONSISTENCY: Streaming now always yields GenerateResponse objects with .content attribute,
+        fixing the previous inconsistency where tools vs non-tools had different return types.
         
         Args:
             prompt: The input prompt or user query
@@ -2643,9 +2859,12 @@ class Session:
             **kwargs: Additional provider-specific parameters
             
         Returns:
-            - String response for simple generation
-            - GenerateResponse for tool-using generation
-            - Generator for streaming responses
+            - GenerateResponse: For non-streaming generation (consistent type)
+            - Generator[GenerateResponse]: For streaming generation (consistent chunks)
+
+        Note: The unified implementation ensures API consistency across all scenarios.
+              All streaming chunks now have .content attribute, fixing the original
+              inconsistency that caused AttributeError in streaming tool scenarios.
         """
         logger = logging.getLogger("abstractllm.session")
         
@@ -2783,35 +3002,18 @@ class Session:
             use_tools = True
             logger.info(f"Tool support enabled with {len(self.tools)} registered tools")
         
-        # If streaming is requested with tools, use specialized streaming method
-        if stream and use_tools:
-            return self.generate_with_tools_streaming(
-                prompt=enhanced_prompt,
-                tool_functions=tool_functions,
-                tools=tools,  # Pass tools parameter
-                temperature=temperature,
-                max_tokens=max_tokens,
-                top_p=top_p,
-                frequency_penalty=frequency_penalty,
-                presence_penalty=presence_penalty,
-                max_tool_calls=max_tool_calls,
-                adjust_system_prompt=adjust_system_prompt,
-                files=files,
-                **kwargs
-            )
-        
-        # For regular streaming without tools
-        if stream and not use_tools:
-            # Add the user message if provided
+        # UNIFIED STREAMING: Handle all streaming scenarios with consistent API
+        if stream:
+            # Add user message to conversation
             if enhanced_prompt:
                 self.add_message(MessageRole.USER, enhanced_prompt)
-                
+
             # Get conversation history
             system_prompt_to_use = system_prompt or self.system_prompt
             messages = self.get_messages_for_provider(provider_name)
-            
+
             # Generate streaming response
-            stream_response = provider_instance.generate(
+            raw_stream = provider_instance.generate(
                 prompt=enhanced_prompt,
                 system_prompt=system_prompt_to_use,
                 messages=messages,
@@ -2825,35 +3027,14 @@ class Session:
                 files=files,
                 **kwargs
             )
-            
-            # Create generator that adds the assistant message at the end
-            accumulated_content = ""
-            final_response_metadata = {}
-            
-            def stream_wrapper():
-                nonlocal accumulated_content, final_response_metadata
-                for chunk in stream_response:
-                    if isinstance(chunk, str):
-                        accumulated_content += chunk
-                        yield chunk
-                    elif hasattr(chunk, "content"):
-                        content_chunk = chunk.content
-                        if content_chunk:
-                            accumulated_content += content_chunk
-                            yield content_chunk
-                        
-                        # Capture metadata from the chunk (especially the last one)
-                        if hasattr(chunk, 'usage') and chunk.usage:
-                            final_response_metadata["usage"] = chunk.usage
-                        if hasattr(chunk, 'model') and chunk.model:
-                            final_response_metadata["provider"] = provider_name
-                            final_response_metadata["model"] = chunk.model
-                
-                # Add the final message to the conversation with metadata
-                if accumulated_content:
-                    self.add_message(MessageRole.ASSISTANT, accumulated_content, metadata=final_response_metadata)
-            
-            return stream_wrapper()
+
+            # Return unified streaming wrapper that handles tools automatically
+            return self._unified_helpers.create_unified_streaming_wrapper(
+                raw_stream,
+                tool_functions=tool_functions or self._create_tool_functions_dict() if use_tools else None,
+                max_tool_calls=max_tool_calls if use_tools else 0,
+                accumulate_message=True
+            )
         
         # Define generation function for SOTA retry support
         def _generate():
@@ -2889,6 +3070,7 @@ class Session:
                     prompt=enhanced_prompt,
                     system_prompt=system_prompt_to_use,
                     messages=messages,
+                    stream=stream,  # CRITICAL: Pass stream parameter to provider
                     temperature=temperature,
                     max_tokens=max_tokens,
                     top_p=top_p,
@@ -2898,24 +3080,29 @@ class Session:
                     files=files,
                     **kwargs
                 )
-                
-                # Extract content and metadata from the response
-                if isinstance(response, str):
-                    content = response
-                    metadata = {}
+
+                # Handle streaming vs non-streaming response
+                if stream:
+                    # For streaming, return the generator directly
+                    return response
                 else:
-                    content = response.content if hasattr(response, 'content') else str(response)
-                    
-                    # Extract usage information and other metadata from response
-                    metadata = {}
-                    if hasattr(response, 'usage') and response.usage:
-                        metadata["usage"] = response.usage
-                    if hasattr(response, 'model') and response.model:
-                        metadata["provider"] = provider_name
-                        metadata["model"] = response.model
-                
-                # Add the response to the conversation with metadata
-                self.add_message(MessageRole.ASSISTANT, content, metadata=metadata)
+                    # Extract content and metadata from the response
+                    if isinstance(response, str):
+                        content = response
+                        metadata = {}
+                    else:
+                        content = response.content if hasattr(response, 'content') else str(response)
+
+                        # Extract usage information and other metadata from response
+                        metadata = {}
+                        if hasattr(response, 'usage') and response.usage:
+                            metadata["usage"] = response.usage
+                        if hasattr(response, 'model') and response.model:
+                            metadata["provider"] = provider_name
+                            metadata["model"] = response.model
+
+                    # Add the response to the conversation with metadata
+                    self.add_message(MessageRole.ASSISTANT, content, metadata=metadata)
 
                 # Capture context for observability
                 try:

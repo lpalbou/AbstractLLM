@@ -86,6 +86,110 @@ response = anthropic_llm.generate("Tell me about yourself.")
 print(response)
 ```
 
+### Unified API Examples
+
+AbstractLLM now provides a unified `generate()` method that handles all scenarios consistently:
+
+```python
+from abstractllm import create_llm
+from abstractllm.session import Session
+from abstractllm.tools import register
+
+# Create tools for testing
+@register
+def get_current_time():
+    import datetime
+    return datetime.datetime.now().strftime("%H:%M:%S")
+
+# Create session
+llm = create_llm("anthropic", model="claude-3-5-sonnet-20241022")
+session = Session(provider=llm, tools=[get_current_time])
+
+# 1. Basic generation
+response = session.generate("Explain quantum computing")
+print(response.content)  # Always has .content attribute
+
+# 2. Tool usage (automatically detected)
+response = session.generate("What time is it?")
+print(response.content)  # Tools executed transparently
+
+# 3. Streaming without tools
+for chunk in session.generate("Count from 1 to 5", stream=True):
+    print(chunk.content, end="")  # Every chunk has .content
+
+# 4. Streaming with tools (NEW: Now works consistently!)
+for chunk in session.generate("What time is it?", stream=True):
+    print(chunk.content, end="")  # Fixed: No more AttributeError!
+```
+
+**Key Benefits of Unified API:**
+- ✅ **Consistent Interface**: All scenarios return `GenerateResponse` or `Generator[GenerateResponse]`
+- ✅ **No More Errors**: Streaming with tools now works without `AttributeError`
+- ✅ **Single Method**: No need to choose between `generate()` and `generate_with_tools_streaming()`
+- ✅ **Future-Proof**: Follows OpenAI 2025 unified pattern
+
+### Stateless vs Stateful Architecture
+
+AbstractLLM provides two distinct access patterns for different use cases:
+
+#### **1. Stateless LLM Access (Direct Provider)**
+For rapid inference without memory or conversation history:
+
+```python
+from abstractllm import create_llm
+
+# Direct provider access - no memory, no conversation history
+llm = create_llm("anthropic", model="claude-3-5-sonnet-20241022")
+
+# Simple stateless generation
+response = llm.generate("What is quantum computing?")
+print(response.content)  # Always returns GenerateResponse object
+
+# Stateless with tools
+from abstractllm.tools import register
+
+@register
+def get_weather(city: str) -> str:
+    return f"Weather in {city}: Sunny, 25°C"
+
+response = llm.generate("What's the weather in Paris?", tools=[get_weather])
+print(response.content)  # Tool executed without session memory
+```
+
+#### **2. Stateful Session Access (Memory + Conversation)**
+For persistent conversations with memory, reasoning, and advanced features:
+
+```python
+from abstractllm.session import Session
+
+# Stateful session with memory and conversation history
+session = Session(provider=llm, enable_memory=True)  # Alpha feature
+
+# Conversation with memory
+response1 = session.generate("My name is Alice and I like AI research")
+response2 = session.generate("What do you remember about me?")  # Uses memory context
+
+# ReAct reasoning cycles (alpha)
+response = session.generate(
+    "Analyze the project structure and recommend improvements",
+    create_react_cycle=True,     # Alpha: Complete reasoning traces
+    use_memory_context=True      # Alpha: Inject relevant memories
+)
+```
+
+#### **Architecture Flow**
+```
+Session.generate() → Enhanced with memory/reasoning → Provider.generate() → LLM API
+     ↓                                                      ↓
+ [Stateful]                                            [Stateless]
+ - Memory context                                      - Direct inference
+ - ReAct reasoning                                     - Tool execution
+ - Conversation history                                - @file parsing
+ - Cross-session persistence                           - Response metadata
+```
+
+**Note**: We may later simplify AbstractLLM to ONLY handle stateless LLM operations and move memory/agent capabilities to separate packages for better modularity.
+
 ### Third-Party Integration
 
 AbstractLLM is designed for easy integration into existing projects:
@@ -105,9 +209,16 @@ class MyAIAssistant:
         return response.content
     
     def ask_with_tools(self, question: str, tools: list) -> str:
-        """Ask with tool support."""
-        response = self.session.generate_with_tools(question, tools=tools)
+        """Ask with tool support using unified API."""
+        response = self.session.generate(question, tools=tools)
         return response.content
+
+    def ask_streaming(self, question: str) -> str:
+        """Ask with streaming response - unified API ensures consistent .content access."""
+        accumulated = ""
+        for chunk in self.session.generate(question, stream=True):
+            accumulated += chunk.content  # Always available with unified API
+        return accumulated
 
 # Usage in your application
 assistant = MyAIAssistant(provider="anthropic")
@@ -291,6 +402,69 @@ if session.memory:
     print(f"ReAct cycles: {stats['total_react_cycles']}")
 ```
 
+## Response Format & Metadata
+
+All AbstractLLM providers return a consistent `GenerateResponse` object with rich metadata:
+
+### **GenerateResponse Structure**
+
+```python
+@dataclass
+class GenerateResponse:
+    # Core response data
+    content: Optional[str] = None              # The actual LLM response text
+    raw_response: Any = None                   # Original provider response
+    model: Optional[str] = None                # Model that generated the response
+    finish_reason: Optional[str] = None        # Why generation stopped
+
+    # Usage and performance metadata
+    usage: Optional[Dict[str, int]] = None     # Token counts (prompt/completion/total)
+
+    # Tool execution metadata
+    tool_calls: Optional[List[Dict[str, Any]]] = None    # Tools that were called
+    tools_executed: Optional[List[Dict[str, Any]]] = None # Execution results
+
+    # Enhanced agent capabilities (Alpha)
+    react_cycle_id: Optional[str] = None       # ReAct reasoning cycle ID
+    facts_extracted: Optional[List[str]] = None # Knowledge extracted
+    reasoning_trace: Optional[str] = None      # Complete reasoning steps
+    total_reasoning_time: Optional[float] = None # Time spent reasoning
+    scratchpad_file: Optional[str] = None      # Path to detailed traces
+
+    # Vision capabilities
+    image_paths: Optional[List[str]] = None    # Images used in generation
+```
+
+### **Why This Metadata Matters**
+
+1. **Consistent API**: All providers return the same structure regardless of underlying differences
+2. **Observability**: Track token usage, execution time, and tool calls across providers
+3. **Agent Capabilities**: Access reasoning traces, extracted facts, and memory updates
+4. **Debugging**: Raw responses and detailed traces for troubleshooting
+5. **Cost Tracking**: Token usage data for monitoring API costs
+6. **Tool Monitoring**: See exactly which tools were called and their results
+
+### **Usage Examples**
+
+```python
+# Basic response access
+response = llm.generate("Explain machine learning")
+print(response.content)                    # The response text
+print(response.model)                      # "claude-3-5-sonnet-20241022"
+print(response.usage)                      # {"prompt_tokens": 15, "completion_tokens": 150}
+
+# Tool execution metadata
+response = llm.generate("What time is it?", tools=[get_time])
+print(response.has_tool_calls())           # True
+print(response.get_tools_executed())       # ["get_time"]
+
+# Agent reasoning (Alpha)
+response = session.generate("Complex task", create_react_cycle=True)
+print(response.get_summary())              # "ReAct Cycle: cycle_abc123 | Tools: 2 executed | Facts: 5 extracted"
+print(response.get_scratchpad_trace())     # Detailed reasoning steps
+print(response.react_cycle_id)             # "cycle_abc123"
+```
+
 ## Provider Support
 
 ### OpenAI - Manual Provider Improvements
@@ -462,6 +636,13 @@ user> /mem
 - **Unified Parameter System**: Consistent parameter handling across all providers
 - **Architecture Templates**: Automatic message formatting for 7+ model families
 
+### Unified Generation API (Latest)
+- **API Consistency**: Streaming now always returns `GenerateResponse` objects with `.content` attribute
+- **Single Method**: `session.generate()` handles all scenarios (streaming/non-streaming, tools/no-tools)
+- **Bug Fix**: Resolved "AttributeError: 'str' object has no attribute 'content'" in streaming tool scenarios
+- **Backward Compatible**: `generate_with_tools_streaming()` deprecated but still functional with warnings
+- **SOTA Compliance**: Follows OpenAI 2025 unified pattern for consistent developer experience
+
 ### OpenAI Provider Improvements
 - **Manual Provider Enhancements**: Improved OpenAI provider through custom implementation
 - **Enhanced Parameters**: Support for seed, frequency_penalty, presence_penalty
@@ -486,6 +667,27 @@ user> /mem
 - **Provider Detection**: Automatic capability detection and optimization
 - **Memory Consolidation**: Integration of memory features
 - **Error Recovery**: Intelligent fallback and retry strategies
+
+## Recent Implementation Improvements
+
+### **✅ COMPLETED: Fixed Streaming Import Issue**
+
+**Achievement**: Resolved "cannot access free variable 'GenerateResponse'" error with simple import fix.
+
+**Simple Fix Applied**:
+- ✅ **Proper imports**: GenerateResponse correctly imported in all providers
+- ✅ **Consistent returns**: All providers return GenerateResponse objects uniformly
+- ✅ **Streaming fixed**: No more scope/import errors in streaming mode
+- ✅ **Architecture preserved**: Kept existing working design, just fixed imports
+
+### **✅ COMPLETED: Removed Legacy Wrapper Classes**
+
+**Achievement**: Cleaned up codebase by removing unnecessary compatibility classes.
+
+**Removed Classes**:
+- ❌ `OllamaLLM`, `OpenAILLM`, `AnthropicLLM`, `LMStudioLLM`, `HuggingFaceLLM` (deleted)
+- ✅ **Simplified Architecture**: Use `create_llm()` factory method for all provider instantiation
+- ✅ **Reduced Maintenance**: Eliminated duplicate wrapper code
 
 ## Integration Examples
 

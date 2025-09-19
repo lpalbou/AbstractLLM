@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from abstractllm.interface import ModelParameter, ModelCapability
 from abstractllm.providers.base import BaseProvider
 from abstractllm.types import GenerateResponse
+from abstractllm.tools.core import ToolCallResponse
 from abstractllm.utils.logging import (
     log_request, 
     log_response, 
@@ -244,13 +245,13 @@ class AnthropicProvider(BaseProvider):
             
         return sanitized_messages
     
-    def _generate_impl(self, 
-                      prompt: str, 
-                      system_prompt: Optional[str] = None, 
+    def _generate_impl(self,
+                      prompt: str,
+                      system_prompt: Optional[str] = None,
                       files: Optional[List[Union[str, Path]]] = None,
                       stream: bool = False,
                       tools: Optional[List[Union[Dict[str, Any], callable]]] = None,
-                      **kwargs) -> Union[str, Generator[str, None, None], Generator[Dict[str, Any], None, None]]:
+                      **kwargs) -> Union[GenerateResponse, ToolCallResponse, Generator[Union[GenerateResponse, ToolCallResponse], None, None]]:
         """
         Generate a response using Anthropic API.
         
@@ -445,7 +446,11 @@ class AnthropicProvider(BaseProvider):
                         for chunk in stream:
                             if hasattr(chunk, 'delta') and hasattr(chunk.delta, 'text'):
                                 current_content += chunk.delta.text
-                                yield chunk.delta.text
+                                yield GenerateResponse(
+                                    content=chunk.delta.text,
+                                    model=model,
+                                    raw_response=chunk
+                                )
                             
                             # For tool calls, collect them but don't yield until the end
                             if hasattr(chunk, 'delta') and hasattr(chunk.delta, 'tool_use'):
@@ -512,9 +517,14 @@ class AnthropicProvider(BaseProvider):
                         if tool_calls:
                             # Yield the ToolCallRequest with complete tool calls
                             logger.debug(f"Yielding tool call request with {len(tool_calls)} tool calls")
-                            yield ToolCallRequest(
+                            yield GenerateResponse(
                                 content=current_content,
-                                tool_calls=tool_calls
+                                tool_calls=ToolCallRequest(
+                                    content=current_content,
+                                    tool_calls=tool_calls
+                                ),
+                                model=model,
+                                raw_response=chunk
                             )
                 
                 return response_generator()
@@ -577,11 +587,10 @@ class AnthropicProvider(BaseProvider):
                         model=model,
                         usage=response.usage.model_dump() if hasattr(response, 'usage') else None
                     )
-                    # Return a GenerateResponse object for consistency
                     return GenerateResponse(
                         content=content,
-                        raw_response=response,
-                        model=model
+                        model=model,
+                        raw_response=response
                     )
                 
         except Exception as e:
@@ -591,13 +600,13 @@ class AnthropicProvider(BaseProvider):
                 original_exception=e
             )
     
-    async def generate_async(self, 
-                          prompt: str, 
-                          system_prompt: Optional[str] = None, 
+    async def generate_async(self,
+                          prompt: str,
+                          system_prompt: Optional[str] = None,
                           files: Optional[List[Union[str, Path]]] = None,
                           stream: bool = False,
                           tools: Optional[List[Union[Dict[str, Any], callable]]] = None,
-                          **kwargs) -> Union[str, AsyncGenerator[str, None], AsyncGenerator[Dict[str, Any], None]]:
+                          **kwargs) -> Union[GenerateResponse, ToolCallResponse, AsyncGenerator[Union[GenerateResponse, ToolCallResponse], None]]:
         """
         Asynchronously generate a response using Anthropic API.
         
@@ -786,7 +795,11 @@ class AnthropicProvider(BaseProvider):
                         async for chunk in stream:
                             if hasattr(chunk, 'delta') and hasattr(chunk.delta, 'text'):
                                 current_content += chunk.delta.text
-                                yield chunk.delta.text
+                                yield GenerateResponse(
+                                    content=chunk.delta.text,
+                                    model=model,
+                                    raw_response=chunk
+                                )
                             
                             # For tool calls, collect them but don't yield until the end
                             if hasattr(chunk, 'delta') and hasattr(chunk.delta, 'tool_use'):
@@ -853,9 +866,14 @@ class AnthropicProvider(BaseProvider):
                         if tool_calls:
                             # Yield the ToolCallRequest with complete tool calls
                             logger.debug(f"Yielding tool call request with {len(tool_calls)} tool calls")
-                            yield ToolCallRequest(
+                            yield GenerateResponse(
                                 content=current_content,
-                                tool_calls=tool_calls
+                                tool_calls=ToolCallRequest(
+                                    content=current_content,
+                                    tool_calls=tool_calls
+                                ),
+                                model=model,
+                                raw_response=chunk
                             )
                 
                 return async_generator()
@@ -918,11 +936,10 @@ class AnthropicProvider(BaseProvider):
                         model=model,
                         usage=response.usage.model_dump() if hasattr(response, 'usage') else None
                     )
-                    # Return a GenerateResponse object for consistency
                     return GenerateResponse(
                         content=content,
-                        raw_response=response,
-                        model=model
+                        model=model,
+                        raw_response=response
                     )
                 
         except Exception as e:
@@ -954,49 +971,4 @@ class AnthropicProvider(BaseProvider):
             ModelCapability.JSON_MODE: True
         }
 
-# Add a wrapper class for backward compatibility with the test suite
-class AnthropicLLM:
-    """
-    Simple adapter around AnthropicProvider for test compatibility.
-    """
-    
-    def __init__(self, model="claude-3-haiku", api_key=None):
-        """
-        Initialize an Anthropic LLM instance.
-        
-        Args:
-            model: The model to use
-            api_key: Optional API key (will use environment variable if not provided)
-        """
-        config = {
-            ModelParameter.MODEL: model,
-        }
-        
-        if api_key:
-            config[ModelParameter.API_KEY] = api_key
-            
-        self.provider = AnthropicProvider(config)
-        
-    def generate(self, prompt, image=None, images=None, **kwargs):
-        """
-        Generate a response using the provider.
-        
-        Args:
-            prompt: The prompt to send
-            image: Optional single image
-            images: Optional list of images
-            return_format: Format to return the response in
-            **kwargs: Additional parameters
-            
-        Returns:
-            The generated response
-        """
-        # Add images to kwargs if provided
-        if image:
-            kwargs["image"] = image
-        if images:
-            kwargs["images"] = images
-            
-        response = self.provider.generate(prompt, **kwargs)
-        
-        return response 
+ 

@@ -749,13 +749,5 @@ class HuggingFaceProvider(BaseProvider):
         raise UnsupportedFeatureError("async_generation", "Async generation not implemented yet", provider="huggingface")
 
 
-# Legacy compatibility class
-class HuggingFaceLLM:
-    """Legacy compatibility wrapper."""
-    
-    def __init__(self, model="microsoft/DialoGPT-medium", api_key=None):
-        self.provider = HuggingFaceProvider({ModelParameter.MODEL: model})
-    
-    def generate(self, prompt, image=None, images=None, **kwargs):
-        return self.provider.generate(prompt, **kwargs) 
+ 
     

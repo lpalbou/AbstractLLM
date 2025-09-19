@@ -95,21 +95,13 @@ def run_query(session, prompt, structured_output=None):
         )
     
     try:
-        # Try SOTA features first, fallback to simple generation
-        try:
-            response = session.generate(
-                prompt=prompt,
-                use_memory_context=True,    # Inject relevant memories
-                create_react_cycle=True,     # Create ReAct cycle with scratchpad
-                structured_config=config     # Structured output if configured
-            )
-        except Exception as sota_error:
-            # Fallback to simple generation without SOTA features
-            print(f"{Colors.DIM}Note: Using simplified mode due to session compatibility{Colors.RESET}")
-            response = session.generate_with_tools(
-                prompt=prompt,
-                max_tool_calls=session.max_tool_calls if hasattr(session, 'max_tool_calls') else 25
-            )
+        # Use unified generate API with SOTA features
+        response = session.generate(
+            prompt=prompt,
+            use_memory_context=True,    # Inject relevant memories
+            create_react_cycle=True,     # Create ReAct cycle with scratchpad
+            structured_config=config     # Structured output if configured
+        )
         
         # Convert string responses to enhanced GenerateResponse objects
         if isinstance(response, str):

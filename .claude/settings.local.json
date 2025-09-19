@@ -49,7 +49,11 @@
       "Bash(PYTHONPATH=/Users/albou/projects/abstractllm python -m abstractllm.providers.lmstudio_provider)",
       "WebFetch(domain:lmstudio.ai)",
       "WebFetch(domain:medium.com)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__get-library-docs",
+      "WebFetch(domain:docs.llamaindex.ai)",
+      "Read(///**)"
     ],
     "deny": []
   },

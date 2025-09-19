@@ -138,16 +138,17 @@ def write_file(
 
 def create_agent(provider="ollama", model="qwen3:4b", memory_path=None, max_tool_calls=25,
                  seed=None, top_p=None, max_input_tokens=None, frequency_penalty=None, presence_penalty=None,
-                 enable_facts=False):
+                 enable_facts=False, stream=False, quiet=False):
     """Create an enhanced agent with all SOTA features including cognitive abstractions."""
 
-    print(f"{BLUE}🧠 Creating intelligent agent with:{RESET}")
-    print(f"  • Hierarchical memory system")
-    print(f"  • ReAct reasoning cycles")
-    print(f"  • Enhanced semantic fact extraction")
-    print(f"  • Value resonance evaluation")
-    print(f"  • Tool capabilities")
-    print(f"  • Retry strategies\n")
+    if not quiet:
+        print(f"{BLUE}🧠 Creating intelligent agent with:{RESET}")
+        print(f"  • Hierarchical memory system")
+        print(f"  • ReAct reasoning cycles")
+        print(f"  • Enhanced semantic fact extraction")
+        print(f"  • Value resonance evaluation")
+        print(f"  • Tool capabilities")
+        print(f"  • Retry strategies\n")
 
     # Build configuration with SOTA parameters
     config = {
@@ -196,37 +197,51 @@ def create_agent(provider="ollama", model="qwen3:4b", memory_path=None, max_tool
                 **cognitive_config
             )
 
-            print(f"{GREEN}✨ Cognitive enhancements loaded successfully{RESET}")
-            print(f"  • Semantic fact extraction with granite3.3:2b")
-            print(f"  • Enhanced ontological knowledge extraction")
-            print(f"  • Dublin Core, Schema.org, SKOS, CiTO frameworks")
-            print(f"  • Use /facts to view extracted knowledge\n")
+            if not quiet:
+                print(f"{GREEN}✨ Cognitive enhancements loaded successfully{RESET}")
+                print(f"  • Semantic fact extraction with granite3.3:2b")
+                print(f"  • Enhanced ontological knowledge extraction")
+                print(f"  • Dublin Core, Schema.org, SKOS, CiTO frameworks")
+                print(f"  • Use /facts to view extracted knowledge\n")
 
         except ImportError as e:
-            print(f"{BLUE}ℹ️ Cognitive features not available: {e}{RESET}")
-            print(f"  • Using standard session with basic features\n")
+            if not quiet:
+                print(f"{BLUE}ℹ️ Cognitive features not available: {e}{RESET}")
+                print(f"  • Using standard session with basic features\n")
             session = create_session(provider, **config)
         except Exception as e:
-            print(f"{BLUE}ℹ️ Falling back to standard session: {e}{RESET}\n")
+            if not quiet:
+                print(f"{BLUE}ℹ️ Falling back to standard session: {e}{RESET}\n")
             session = create_session(provider, **config)
     else:
         # Create standard session without cognitive features
-        print(f"{BLUE}ℹ️ Using standard session (facts extraction disabled){RESET}")
-        print(f"  • Use --enable-facts to enable cognitive features\n")
+        if not quiet:
+            print(f"{BLUE}ℹ️ Using standard session (facts extraction disabled){RESET}")
+            print(f"  • Use --enable-facts to enable cognitive features\n")
         session = create_session(provider, **config)
 
-    if memory_path:
+    if memory_path and not quiet:
         print(f"{GREEN}💾 Memory persisted to: {memory_path}{RESET}\n")
+
+    # Configure streaming mode if requested
+    if stream:
+        session.default_streaming = True
+        if not quiet:
+            print(f"{GREEN}🔄 Streaming mode enabled{RESET}")
+            print(f"  • Responses will stream progressively\n")
 
     return session
 
 
-def run_query(session, prompt, structured_output=None):
+def run_query(session, prompt, structured_output=None, quiet=False):
     """Execute a query with the agent and display beautiful results."""
     
-    # Start thinking animation
-    spinner = Spinner()
-    spinner.start()
+    # Start thinking animation (unless in quiet mode)
+    if not quiet:
+        spinner = Spinner()
+        spinner.start()
+    else:
+        spinner = None
     
     # Configure structured output if requested
     config = None
@@ -239,21 +254,14 @@ def run_query(session, prompt, structured_output=None):
         )
     
     try:
-        # Try SOTA features first, fallback to simple generation
-        try:
-            response = session.generate(
-                prompt=prompt,
-                use_memory_context=True,    # Inject relevant memories
-                create_react_cycle=True,     # Create ReAct cycle with scratchpad
-                structured_config=config     # Structured output if configured
-            )
-        except Exception as sota_error:
-            # Fallback to simple generation without SOTA features
-            print(f"\r{Colors.DIM}Note: Using simplified mode due to session compatibility{Colors.RESET}")
-            response = session.generate_with_tools(
-                prompt=prompt,
-                max_tool_calls=session.max_tool_calls if hasattr(session, 'max_tool_calls') else 25
-            )
+        # Use unified generate API with SOTA features
+        # Note: streaming respects session.default_streaming when no explicit stream param provided
+        response = session.generate(
+            prompt=prompt,
+            use_memory_context=True,    # Inject relevant memories
+            create_react_cycle=True,     # Create ReAct cycle with scratchpad
+            structured_config=config     # Structured output if configured
+        )
         
         # Convert string responses to enhanced GenerateResponse objects
         if isinstance(response, str):
@@ -265,14 +273,16 @@ def run_query(session, prompt, structured_output=None):
         # Handle streaming generator responses
         elif hasattr(response, '__iter__') and hasattr(response, '__next__'):
             # Stop spinner before streaming starts
-            spinner.stop()
+            if spinner:
+                spinner.stop()
 
             # Start timing for accurate duration calculation
             import time
             start_time = time.time()
 
-            # Start with clean newline (no header)
-            print()
+            # Start with clean newline (no header) unless in quiet mode
+            if not quiet:
+                print()
             accumulated_content = ""
             tool_results = []
             provider_usage = None  # Capture actual provider usage data
@@ -282,20 +292,61 @@ def run_query(session, prompt, structured_output=None):
                 first_content_line = True  # Track if we need to add alma> prefix
 
                 for chunk in response:
-                    if isinstance(chunk, str):
+                    # Handle GenerateResponse objects with content
+                    if hasattr(chunk, 'content') and chunk.content is not None:
+                        chunk_text = chunk.content
+                        accumulated_content += chunk_text
+
+                        if quiet:
+                            # In quiet mode, just print the content without formatting
+                            print(chunk_text, end="", flush=True)
+                        else:
+                            # Full formatting for interactive mode
+                            # Check for thinking tags to style appropriately
+                            if '<think>' in chunk_text and not thinking_mode:
+                                thinking_mode = True
+                                # Apply dim italic styling for thinking content
+                                chunk_to_display = chunk_text.replace('<think>', f'{Colors.DIM}<think>{Colors.RESET}{Colors.DIM}')
+                            elif '</think>' in chunk_text and thinking_mode:
+                                thinking_mode = False
+                                chunk_to_display = chunk_text.replace('</think>', f'</think>{Colors.RESET}')
+                            elif thinking_mode:
+                                # We're inside thinking tags - apply dim italic styling
+                                chunk_to_display = f'{Colors.DIM}{chunk_text}{Colors.RESET}' if chunk_text.strip() else chunk_text
+                            else:
+                                chunk_to_display = chunk_text
+
+                            # Text content - add alma> prefix to first content line
+                            if first_content_line and not thinking_mode and chunk_to_display.strip():
+                                # First non-thinking content gets alma> prefix
+                                lines = chunk_to_display.split('\n')
+                                if lines:
+                                    lines[0] = f"{Colors.BLUE}alma>{Colors.RESET} {lines[0]}"
+                                    chunk_to_display = '\n'.join(lines)
+                                first_content_line = False
+
+                            print(chunk_to_display, end="", flush=True)
+
+                        # Capture usage data if available
+                        if hasattr(chunk, 'usage') and chunk.usage:
+                            provider_usage = chunk.usage
+                    elif isinstance(chunk, str):
+                        # Fallback for string chunks (legacy support)
+                        chunk_text = chunk
+
                         # Check for thinking tags to style appropriately
-                        if '<think>' in chunk and not thinking_mode:
+                        if '<think>' in chunk_text and not thinking_mode:
                             thinking_mode = True
                             # Apply dim italic styling for thinking content
-                            chunk_to_display = chunk.replace('<think>', f'{Colors.DIM}<think>{Colors.RESET}{Colors.DIM}')
-                        elif '</think>' in chunk and thinking_mode:
+                            chunk_to_display = chunk_text.replace('<think>', f'{Colors.DIM}<think>{Colors.RESET}{Colors.DIM}')
+                        elif '</think>' in chunk_text and thinking_mode:
                             thinking_mode = False
-                            chunk_to_display = chunk.replace('</think>', f'</think>{Colors.RESET}')
+                            chunk_to_display = chunk_text.replace('</think>', f'</think>{Colors.RESET}')
                         elif thinking_mode:
                             # We're inside thinking tags - apply dim italic styling
-                            chunk_to_display = f'{Colors.DIM}{chunk}{Colors.RESET}' if chunk.strip() else chunk
+                            chunk_to_display = f'{Colors.DIM}{chunk_text}{Colors.RESET}' if chunk_text.strip() else chunk_text
                         else:
-                            chunk_to_display = chunk
+                            chunk_to_display = chunk_text
 
                         # Text content - add alma> prefix to first content line
                         if first_content_line and not thinking_mode and chunk_to_display.strip():
@@ -307,8 +358,7 @@ def run_query(session, prompt, structured_output=None):
                             first_content_line = False
 
                         print(chunk_to_display, end="", flush=True)
-
-                        accumulated_content += chunk
+                        accumulated_content += chunk_text
                     elif hasattr(chunk, 'usage') and chunk.usage:
                         # Capture actual provider usage data when available
                         provider_usage = chunk.usage
@@ -398,14 +448,18 @@ def run_query(session, prompt, structured_output=None):
                 # Save interaction context
                 save_interaction_context(response, prompt)
 
-                # Display metrics line (same as non-streaming mode)
-                from abstractllm.utils.display import format_metrics_line
-                metrics_line = format_metrics_line(response)
-                if metrics_line:
-                    print(f"{metrics_line}")
+                # Display metrics line (same as non-streaming mode) unless in quiet mode
+                if not quiet:
+                    from abstractllm.utils.display import format_metrics_line
+                    metrics_line = format_metrics_line(response)
+                    if metrics_line:
+                        print(f"{metrics_line}")
 
-                # Add final newline (matching non-streaming mode)
-                print()
+                    # Add final newline (matching non-streaming mode)
+                    print()
+                else:
+                    # In quiet mode, just add a single newline after content
+                    print()
 
                 return response
 
@@ -414,22 +468,34 @@ def run_query(session, prompt, structured_output=None):
                 return None
 
         # Stop spinner before displaying response (non-streaming path)
-        spinner.stop()
+        if spinner:
+            spinner.stop()
 
         # Save interaction context for facts/scratchpad commands
         if isinstance(response, GenerateResponse):
             save_interaction_context(response, prompt)
-            display_response(response)
+            if quiet:
+                # In quiet mode, only show the content
+                print(response.content or "")
+            else:
+                display_response(response)
         else:
             # Ultimate fallback
-            print(f"\n{Colors.BRIGHT_GREEN}Response:{Colors.RESET} {response}")
+            if quiet:
+                print(response)
+            else:
+                print(f"\n{Colors.BRIGHT_GREEN}Response:{Colors.RESET} {response}")
         
         return response
         
     except Exception as e:
         # Stop spinner before displaying error
-        spinner.stop()
-        display_error(str(e))
+        if spinner:
+            spinner.stop()
+        if not quiet:
+            display_error(str(e))
+        else:
+            print(f"Error: {e}", file=sys.stderr)
         return None
 
 
@@ -649,6 +715,12 @@ Examples:
         action="store_true",
         help="Enable cognitive fact extraction (disabled by default)"
     )
+
+    parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="Enable streaming mode for progressive response display"
+    )
     
     args = parser.parse_args()
     
@@ -658,7 +730,7 @@ Examples:
     else:
         configure_logging(console_level=logging.WARNING)
     
-    # Create agent
+    # Create agent (quiet mode for single prompt execution)
     session = create_agent(
         provider=args.provider,
         model=args.model,
@@ -669,17 +741,15 @@ Examples:
         max_input_tokens=getattr(args, 'max_input_tokens', None),
         frequency_penalty=getattr(args, 'frequency_penalty', None),
         presence_penalty=getattr(args, 'presence_penalty', None),
-        enable_facts=getattr(args, 'enable_facts', False)
+        enable_facts=getattr(args, 'enable_facts', False),
+        stream=getattr(args, 'stream', False),
+        quiet=bool(args.prompt)  # Quiet mode when using --prompt
     )
     
     # Execute single prompt or start interactive mode
     if args.prompt:
-        print(f"\n{Colors.BRIGHT_CYAN}{Symbols.TARGET} Query:{Colors.RESET} {Colors.WHITE}{args.prompt}{Colors.RESET}\n")
-        response = run_query(session, args.prompt, args.structured)
-        
-        # Only show memory insights if response was successful
-        if response is not None:
-            show_memory_insights(session)
+        # Use quiet mode for --prompt (clean output for scripting)
+        response = run_query(session, args.prompt, args.structured, quiet=True)
     else:
         interactive_mode(session)
     

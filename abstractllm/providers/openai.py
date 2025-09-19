@@ -12,6 +12,7 @@ from pathlib import Path
 from abstractllm.interface import ModelParameter, ModelCapability
 from abstractllm.providers.base import BaseProvider
 from abstractllm.types import GenerateResponse
+from abstractllm.tools.core import ToolCallResponse
 from abstractllm.utils.logging import (
     log_request, 
     log_response, 
@@ -194,13 +195,13 @@ class OpenAIProvider(BaseProvider):
             tool_calls=tool_calls
         )
     
-    def _generate_impl(self, 
-                      prompt: str, 
-                      system_prompt: Optional[str] = None, 
+    def _generate_impl(self,
+                      prompt: str,
+                      system_prompt: Optional[str] = None,
                       files: Optional[List[Union[str, Path]]] = None,
                       stream: bool = False,
                       tools: Optional[List[Union[Dict[str, Any], callable]]] = None,
-                      **kwargs) -> Union[str, Generator[str, None, None], Generator[Dict[str, Any], None, None]]:
+                      **kwargs) -> Union[GenerateResponse, ToolCallResponse, Generator[Union[GenerateResponse, ToolCallResponse], None, None]]:
         """
         Generate a response using OpenAI API.
         
@@ -382,7 +383,11 @@ class OpenAIProvider(BaseProvider):
                         # Extract content from delta if available
                         if chunk.choices and hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
                             current_content += chunk.choices[0].delta.content
-                            yield chunk.choices[0].delta.content
+                            yield GenerateResponse(
+                                content=chunk.choices[0].delta.content,
+                                model=model,
+                                raw_response=chunk
+                            )
                             
                         # Check for tool calls in the delta
                         if chunk.choices and hasattr(chunk.choices[0].delta, 'tool_calls') and chunk.choices[0].delta.tool_calls:
@@ -439,9 +444,14 @@ class OpenAIProvider(BaseProvider):
                                 arguments=args
                             ))
                         
-                        yield ToolCallRequest(
+                        yield GenerateResponse(
                             content=current_content,
-                            tool_calls=tool_calls
+                            tool_calls=ToolCallRequest(
+                                content=current_content,
+                                tool_calls=tool_calls
+                            ),
+                            model=model,
+                            raw_response=chunk
                         )
                 
                 return response_generator()
@@ -495,7 +505,6 @@ class OpenAIProvider(BaseProvider):
                         model=model,
                         usage=completion.usage.model_dump() if hasattr(completion, 'usage') else None
                     )
-                    # Return GenerateResponse object for consistency with other providers
                     return GenerateResponse(
                         content=response_text,
                         model=model,
@@ -509,13 +518,13 @@ class OpenAIProvider(BaseProvider):
                 original_exception=e
             )
     
-    async def generate_async(self, 
-                          prompt: str, 
-                          system_prompt: Optional[str] = None, 
+    async def generate_async(self,
+                          prompt: str,
+                          system_prompt: Optional[str] = None,
                           files: Optional[List[Union[str, Path]]] = None,
                           stream: bool = False,
                           tools: Optional[List[Union[Dict[str, Any], callable]]] = None,
-                          **kwargs) -> Union[str, AsyncGenerator[str, None], AsyncGenerator[Dict[str, Any], None]]:
+                          **kwargs) -> Union[GenerateResponse, ToolCallResponse, AsyncGenerator[Union[GenerateResponse, ToolCallResponse], None]]:
         """
         Asynchronously generate a response using OpenAI API.
         
@@ -702,7 +711,11 @@ class OpenAIProvider(BaseProvider):
                         # Extract content from delta if available
                         if chunk.choices and hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
                             current_content += chunk.choices[0].delta.content
-                            yield chunk.choices[0].delta.content
+                            yield GenerateResponse(
+                                content=chunk.choices[0].delta.content,
+                                model=model,
+                                raw_response=chunk
+                            )
                             
                         # Check for tool calls in the delta
                         if chunk.choices and hasattr(chunk.choices[0].delta, 'tool_calls') and chunk.choices[0].delta.tool_calls:
@@ -759,9 +772,14 @@ class OpenAIProvider(BaseProvider):
                                 arguments=args
                             ))
                         
-                        yield ToolCallRequest(
+                        yield GenerateResponse(
                             content=current_content,
-                            tool_calls=tool_calls
+                            tool_calls=ToolCallRequest(
+                                content=current_content,
+                                tool_calls=tool_calls
+                            ),
+                            model=model,
+                            raw_response=chunk
                         )
                 
                 return async_generator()
@@ -815,7 +833,6 @@ class OpenAIProvider(BaseProvider):
                         model=model,
                         usage=completion.usage.model_dump() if hasattr(completion, 'usage') else None
                     )
-                    # Return GenerateResponse object for consistency with other providers
                     return GenerateResponse(
                         content=response_text,
                         model=model,
@@ -856,7 +873,11 @@ class OpenAIProvider(BaseProvider):
         if not TOOLS_AVAILABLE:
             async for chunk in response:
                 if chunk.choices[0].delta.content is not None:
-                    yield {"text": chunk.choices[0].delta.content}
+                    yield GenerateResponse(
+                        content=chunk.choices[0].delta.content,
+                        model=model,
+                        raw_response=chunk
+                    )
             return
 
         # Extract content and tool_calls incrementally
@@ -870,7 +891,11 @@ class OpenAIProvider(BaseProvider):
             # Build content
             if hasattr(delta, "content") and delta.content is not None:
                 content += delta.content
-                yield ToolCallRequest(content=content)
+                yield GenerateResponse(
+                    content=delta.content,
+                    model=model,
+                    raw_response=chunk
+                )
             
             # Process tool calls if present
             if hasattr(delta, "tool_calls") and delta.tool_calls:
@@ -920,54 +945,13 @@ class OpenAIProvider(BaseProvider):
                 
                 # Yield a ToolCallRequest if we have any completed tool calls
                 if completed_tool_calls:
-                    yield ToolCallRequest(
+                    yield GenerateResponse(
                         content=content,
-                        tool_calls=completed_tool_calls
+                        tool_calls=ToolCallRequest(
+                            content=content,
+                            tool_calls=completed_tool_calls
+                        ),
+                        model=model,
+                        raw_response=chunk
                     )
 
-# Add a wrapper class for backward compatibility with the test suite
-class OpenAILLM:
-    """
-    Wrapper around OpenAIProvider for backward compatibility with the test suite.
-    """
-    
-    def __init__(self, model="gpt-4o", api_key=None):
-        """
-        Initialize an OpenAI LLM instance.
-        
-        Args:
-            model: The model to use
-            api_key: Optional API key (will use environment variable if not provided)
-        """
-        config = {
-            ModelParameter.MODEL: model,
-        }
-        
-        if api_key:
-            config[ModelParameter.API_KEY] = api_key
-            
-        self.provider = OpenAIProvider(config)
-        
-    def generate(self, prompt, image=None, images=None, **kwargs):
-        """
-        Generate a response using the OpenAI provider.
-        
-        Args:
-            prompt: The prompt to send
-            image: Optional single image
-            images: Optional list of images
-            return_format: Format to return the response in
-            **kwargs: Additional parameters
-            
-        Returns:
-            The generated response
-        """
-        # Add images to kwargs if provided
-        if image:
-            kwargs["image"] = image
-        if images:
-            kwargs["images"] = images
-            
-        response = self.provider.generate(prompt, **kwargs)
-
-        return response

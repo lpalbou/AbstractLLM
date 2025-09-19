@@ -115,11 +115,11 @@ class BaseProvider(AbstractLLMInterface, ABC):
         )
     
     @abstractmethod
-    def _generate_impl(self, 
-                      prompt: str, 
-                      system_prompt: Optional[str] = None, 
+    def _generate_impl(self,
+                      prompt: str,
+                      system_prompt: Optional[str] = None,
                       files: Optional[List[Union[str, Path]]] = None,
-                      stream: bool = False, 
+                      stream: bool = False,
                       tools: Optional[List[Union[Dict[str, Any], Callable]]] = None,
                       **kwargs) -> Union[GenerateResponse, Generator[GenerateResponse, None, None]]:
         """
