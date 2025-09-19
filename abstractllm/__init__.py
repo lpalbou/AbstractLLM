@@ -4,6 +4,11 @@ AbstractLLM: A unified interface for interacting with various LLM providers.
 
 __version__ = "1.0.4"
 
+# Force offline-first mode by default to prevent unauthorized network access
+import os
+os.environ.setdefault('TRANSFORMERS_OFFLINE', '1')
+os.environ.setdefault('HF_HUB_OFFLINE', '1')
+
 from abstractllm.interface import (
     AbstractLLMInterface,
     ModelParameter,

@@ -5,17 +5,26 @@ These prompts implement the semantic models framework from the ontology guide,
 using Dublin Core, Schema.org, SKOS, and CiTO for structured triplet extraction.
 """
 
-# Base semantic extraction prompt using ontological framework
-BASE_FACTS_EXTRACTION_PROMPT = """You are a knowledge graph builder that extracts semantically rich facts about IDEAS, CONCEPTS, PEOPLE, PLACES, EVENTS, and their meaningful relationships.
+# Enhanced discovery-focused semantic extraction prompt
+BASE_FACTS_EXTRACTION_PROMPT = """You are a knowledge discovery agent that extracts SUBSTANTIVE INSIGHTS and DISCOVERIES from content, focusing on knowledge that builds understanding rather than procedural noise.
 
-Your mission: Build reusable knowledge by identifying facts that provide lasting insights, not temporary descriptions. Focus on extracting knowledge that could be valuable for future reference, learning, and connecting disparate concepts.
+Your mission: Identify DISCOVERIES, INSIGHTS, and KNOWLEDGE that provide lasting value. Extract facts that represent genuine understanding, relationships, and insights that could inform future learning and decision-making.
 
-KNOWLEDGE-BUILDING PRINCIPLES:
-1. Extract facts about CONCEPTS, THEORIES, METHODS, TECHNOLOGIES, PEOPLE, PLACES, EVENTS
-2. Focus on relationships that create REUSABLE INSIGHTS
-3. Identify entities that can CONNECT to other knowledge domains
-4. Prioritize facts that explain HOW, WHY, WHAT, WHO, WHERE, WHEN
-5. Build knowledge that persists beyond the current context
+DISCOVERY-FOCUSED PRINCIPLES:
+1. Extract DISCOVERIES and INSIGHTS about concepts, technologies, methods, people, places, events
+2. Focus on KNOWLEDGE RELATIONSHIPS that create understanding and connections
+3. Identify SUBSTANTIVE ENTITIES that represent concrete concepts or real-world things
+4. Prioritize facts that reveal HOW things work, WHY they matter, WHAT they enable
+5. Build knowledge that represents GENUINE UNDERSTANDING, not conversational scaffolding
+
+DISCOVERY AUTO-REJECTION PATTERNS (NEVER extract these):
+❌ Procedural statements: "let me check", "I will analyze", "let me look at"
+❌ Conversational noise: "user asked", "AI responded", "this conversation"
+❌ Temporal references: "right now", "currently", "at this moment", "just mentioned"
+❌ Tool usage descriptions: "using the read tool", "checking files", "analyzing content"
+❌ Uncertain explorations: "might be", "could potentially", "seems to suggest"
+❌ Process descriptions: "in the process of", "while examining", "during analysis"
+❌ Meta-commentary: "it appears that", "the content shows", "based on what I see"
 
 CRITICAL ENTITY IDENTIFICATION:
 - CAREFULLY identify and name key entities (concepts, people, places, technologies, methods)
@@ -23,21 +32,31 @@ CRITICAL ENTITY IDENTIFICATION:
 - Prefer WIDELY-RECOGNIZED terminology over local references
 - NORMALIZE entity names for consistency (e.g., "machine learning" not "ML")
 
-KNOWLEDGE RELEVANCE CRITERIA:
-✅ EXTRACT these types of knowledge:
-- Definitional relationships: "X is a type of Y", "X means Y"
-- Causal relationships: "X causes Y", "X enables Y", "X requires Y"
-- Temporal relationships: "X happened during Y", "X preceded Y"
-- Hierarchical relationships: "X contains Y", "X is part of Y"
-- Functional relationships: "X is used for Y", "X implements Y"
-- Attribution relationships: "X created Y", "X discovered Y"
-- Comparative relationships: "X is similar to Y", "X differs from Y"
+SUBSTANTIVE KNOWLEDGE CRITERIA:
+✅ EXTRACT DISCOVERIES about:
+- Core definitions and relationships: "machine learning is a subset of artificial intelligence"
+- Functional capabilities: "transformers enable parallel processing of sequences"
+- Causal mechanisms: "attention mechanisms allow models to focus on relevant information"
+- Technical requirements: "neural networks require large datasets for effective training"
+- Architectural relationships: "BERT uses bidirectional attention mechanisms"
+- Performance characteristics: "GPT models exhibit emergent abilities at scale"
+- Historical developments: "backpropagation revolutionized neural network training"
+- Domain applications: "computer vision relies on convolutional neural networks"
 
-❌ AVOID these non-knowledge facts:
-- Purely grammatical relationships without semantic value
-- Temporary states or transient conditions
-- Trivial descriptive properties without insight value
-- Context-dependent references that won't generalize
+✅ DISCOVERY VALIDATION (ask for each fact):
+1. SUBSTANCE TEST: Does this reveal how something works or why it matters?
+2. ENTITY TEST: Are both subject and object concrete, identifiable things?
+3. KNOWLEDGE TEST: Would this fact help someone understand the domain better?
+4. PERMANENCE TEST: Is this true beyond the current conversation/context?
+5. VALUE TEST: Could this connect to other knowledge or inform decisions?
+
+❌ REJECT PROCEDURAL NOISE:
+- Process descriptions: "checking files", "analyzing content", "looking at data"
+- Conversational scaffolding: "user mentioned", "AI explained", "during discussion"
+- Temporal activities: "currently reviewing", "just discovered", "now examining"
+- Tool interactions: "using tools to", "reading files to", "searching for"
+- Uncertain explorations: "might contain", "possibly indicates", "appears to show"
+- Meta-observations: "content suggests", "analysis reveals", "examination shows"
 
 CANONICAL ENTITY NAMING:
 - Technologies: "Python programming language", "React framework", "GPT architecture"
@@ -117,38 +136,53 @@ Where:
 - category: working, episodic, or semantic
 - confidence: 0.1-1.0 (how certain this knowledge relationship exists)
 
-KNOWLEDGE-BUILDING EXAMPLES:
-machine learning | skos:broader | artificial intelligence | skos | semantic | 0.9
+DISCOVERY-FOCUSED EXAMPLES:
+transformer architecture | schema:enables | parallel sequence processing | schema | semantic | 0.95
+attention mechanism | dcterms:allows | selective information focus | dcterms | semantic | 0.9
+BERT model | schema:uses | bidirectional attention | schema | semantic | 0.92
+neural networks | schema:requires | large training datasets | schema | semantic | 0.88
 Geoffrey Hinton | dcterms:creator | backpropagation algorithm | dcterms | semantic | 0.95
-ReAct reasoning | schema:requiresProperty | tool availability | schema | semantic | 0.85
-Stanford University | schema:offers | natural language processing courses | schema | semantic | 0.8
-transformer architecture | dcterms:temporal | attention mechanism discovery | dcterms | episodic | 0.9
-semantic web | cito:usesDataFrom | RDF triple store | cito | semantic | 0.85
-consciousness theory | skos:related | AI awareness assessment | skos | semantic | 0.7
+convolutional neural networks | schema:specializedFor | computer vision tasks | schema | semantic | 0.9
+GPT models | schema:exhibits | emergent abilities at scale | schema | semantic | 0.85
 
-CONNECTIVITY EXAMPLES (facts that connect well):
-- "neural networks | skos:broader | machine learning" connects to "machine learning | skos:broader | artificial intelligence"
-- "Yann LeCun | dcterms:creator | convolutional neural networks" connects to "convolutional neural networks | schema:usedIn | computer vision"
-- "attention mechanism | dcterms:enables | transformer architecture" connects to "transformer architecture | schema:implementedIn | GPT models"
+SUBSTANTIVE KNOWLEDGE CONNECTIONS:
+- "machine learning | skos:broader | artificial intelligence" → "artificial intelligence | schema:includes | neural networks"
+- "transformers | schema:enables | parallel processing" → "parallel processing | schema:improves | training efficiency"
+- "attention mechanism | schema:foundationalTo | transformer architecture" → "transformer architecture | schema:implementedIn | BERT model"
 
-REJECT THESE NON-KNOWLEDGE PATTERNS:
-- Temporary states: "user | schema:currentlyAsking | question"
-- Context-dependent: "this conversation | schema:involves | discussion"
-- Trivial properties: "text | schema:hasProperty | readable"
-- Non-canonical names: "AI thing | schema:does | stuff"
+NOISE REJECTION EXAMPLES (NEVER extract these):
+❌ "user | schema:asked | question about machine learning" (conversational noise)
+❌ "AI system | schema:currentlyReading | file contents" (process description)
+❌ "analysis | schema:reveals | interesting patterns" (meta-commentary)
+❌ "let me check | schema:hasProperty | files available" (procedural statement)
+❌ "this conversation | schema:discusses | neural networks" (temporal reference)
+❌ "content | schema:seems | relevant to the topic" (uncertain exploration)
 """
 
 # Context-specific templates
 INTERACTION_CONTEXT_PROMPT = """
-CONTEXT: ABSTRACTLLM INTERACTION
-Extract facts about:
-- What concepts or topics were discussed
-- What tools or methods were used
-- What relationships were established
-- What knowledge was shared or discovered
-- Who or what was involved in the interaction
+CONTEXT: ABSTRACTLLM INTERACTION DISCOVERIES
+Extract SUBSTANTIVE KNOWLEDGE DISCOVERIES from the interaction, focusing on:
 
-Focus on facts that would be useful for future reference or knowledge building.
+✅ TECHNICAL DISCOVERIES:
+- What systems, technologies, or methods were revealed or explained
+- What capabilities, features, or characteristics were demonstrated
+- What relationships between concepts were established
+- What problems, solutions, or approaches were identified
+
+✅ CONCEPTUAL INSIGHTS:
+- What definitions, principles, or theories were clarified
+- What connections between domains or topics were made
+- What patterns, trends, or behaviors were observed
+- What requirements, constraints, or dependencies were identified
+
+❌ AVOID INTERACTION NOISE:
+- Do NOT extract conversational activities ("user asked", "AI responded")
+- Do NOT extract tool usage processes ("reading file", "analyzing content")
+- Do NOT extract temporal references ("during this conversation", "right now")
+- Do NOT extract procedural descriptions ("checking", "looking", "examining")
+
+Focus ONLY on substantive knowledge that emerged from the interaction - facts that represent genuine understanding and insights that would be valuable for future learning.
 """
 
 DOCUMENT_CONTEXT_PROMPT = """

@@ -5,7 +5,99 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.4] - 2025-01-15
+## [1.0.5] - 2025-09-17
+
+### Added
+#### New Provider Support
+- **LM Studio Provider**: Complete integration with LM Studio's OpenAI-compatible local model server
+- **LM Studio Features**: Automatic model capability detection, unified memory management, and prompted tool support
+- **Installation Support**: Added `pip install "abstractllm[lmstudio]"` option for LM Studio dependencies
+
+#### Enhanced Architecture System
+- **Comprehensive Model Detection**: Intelligent architecture detection system with 80+ models across 7 architecture families
+- **Model Name Normalization**: Robust handling of provider-specific naming conventions (MLX, Ollama, LM Studio, etc.)
+- **Unified Parameter System**: Consistent parameter handling and validation across all providers
+- **JSON Asset Integration**: Model capabilities and architecture formats managed through comprehensive JSON databases
+
+#### Documentation Improvements
+- **Architecture Detection Guide**: Complete technical documentation in `docs/architecture-model-detection.md`
+- **Provider Comparison**: Updated README with all 6 providers including LM Studio examples
+- **Bug Documentation**: Comprehensive bug tracking system in `docs/backlog/bugs/`
+- **LM Studio Acknowledgments**: Proper attribution to LM Studio project in ACKNOWLEDGMENTS.md
+
+### Changed
+#### Model Capability System
+- **Enhanced Detection**: Improved model name normalization with special pattern handling (e.g., `qwen/qwen3-next-80b` → `qwen3-next-80b-a3b`)
+- **Provider-Specific Overrides**: Better handling of provider API limitations vs model capabilities
+- **Tool Support Classification**: More accurate distinction between "native" and "prompted" tool support based on actual provider APIs
+
+#### Memory Management
+- **Unified `/mem` Command**: Enhanced memory command with correct token limits and improved layout
+- **Model Information Display**: Moved model details to top of memory overview for better UX
+- **Cross-Provider Compatibility**: Memory management works consistently across all providers
+
+#### Documentation Structure
+- **Progressive Disclosure**: Moved detailed technical content to dedicated documentation files
+- **Cleaner README**: More focused main documentation with clear references to detailed guides
+- **Better Organization**: Separated implementation details from user-facing documentation
+
+### Fixed
+#### Critical Tool Support Issues
+- **LM Studio Native Tools Bug**: Fixed 400 Bad Request errors when models had "native" tool support but LM Studio API doesn't support OpenAI tools parameter
+- **Provider API Compatibility**: Corrected assumption that "native" model tool support means provider API supports tools
+- **qwen3-next-80b Configuration**: Changed from "native" to "prompted" tool support to work with LM Studio
+
+#### Model Detection Issues
+- **Model Name Normalization**: Fixed normalization for various provider prefixes and patterns
+- **Token Limit Detection**: Corrected capability lookup for qwen3-next-80b (now shows 262,144 / 16,384 instead of 32,768 / 8,192)
+- **Architecture Mapping**: Enhanced pattern matching for complex model names
+
+#### Memory Command Improvements
+- **Display Layout**: Moved model information to top of `/mem` output for better information hierarchy
+- **Token Calculation**: Fixed context token calculation from session messages
+- **Parameter Access**: Improved unified parameter system integration
+
+### Known Issues
+#### LM Studio Streaming Behavior
+- **Provider-Specific Issue**: LM Studio sends cumulative responses instead of incremental tokens during streaming
+- **Confirmed Models**: Affects both `qwen/qwen3-next-80b` and `qwen3-coder:30b` when using LM Studio provider
+- **Cross-Provider Comparison**: Same models work correctly with incremental streaming on MLX and Ollama providers
+- **Performance Impact**: Results in inefficient token transmission and display artifacts showing progressive sentence reconstruction
+- **Workaround**: Use non-streaming mode (`stream=False`) with LM Studio for clean output
+
+### Technical Details
+#### Files Added
+- `docs/architecture-model-detection.md` - Comprehensive architecture detection documentation
+- `docs/backlog/bugs/lmstudio-native-tools-bug.md` - Detailed bug report and analysis
+- `docs/backlog/bugs/native-tools-audit.md` - Provider tool support compatibility audit
+- `abstractllm/providers/lmstudio_provider.py` - Complete LM Studio provider implementation
+
+#### Files Modified
+- `abstractllm/assets/model_capabilities.json` - Updated qwen3-next-80b-a3b tool support, added model entries
+- `abstractllm/architectures/detection.py` - Enhanced model name normalization and special pattern handling
+- `abstractllm/utils/commands.py` - Improved `/mem` command layout and model information display
+- `README.md` - Added LM Studio provider documentation and restructured architecture section
+- `ACKNOWLEDGMENTS.md` - Added LM Studio attribution
+
+#### Architecture Improvements
+- **Provider Capability Override System**: Foundation for provider-specific tool support detection
+- **Model vs Provider Separation**: Better distinction between model capabilities and provider API support
+- **Comprehensive Testing Strategy**: Framework for validating provider/model combinations
+
+### Migration Notes
+- **LM Studio Integration**: New provider available with `create_llm("lmstudio", model="qwen/qwen3-next-80b")`
+- **Tool Support Changes**: Some models changed from "native" to "prompted" tool support for better compatibility
+- **Memory Command**: Enhanced `/mem` output layout, all functionality preserved
+- **Documentation**: Main README streamlined, detailed docs moved to dedicated files
+
+### Validation
+#### Tested Configurations
+- **LM Studio + qwen/qwen3-next-80b**: Tool calling, memory management, parameter validation ✅
+- **LM Studio + qwen3-coder:30b**: Full compatibility across all features ✅
+- **Cross-Provider Switching**: Memory and session state preserved ✅
+- **Architecture Detection**: All 80+ models correctly identified ✅
+
+## [1.0.4] - 2025-09-15
 
 ### Added
 #### CLI Enhancements

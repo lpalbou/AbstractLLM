@@ -731,6 +731,17 @@
       "audio_support": false,
       "notes": "14B parameter model with prompted tool support",
       "source": "Alibaba official docs"
+    },
+    "qwen3-next-80b-a3b": {
+      "context_length": 262144,
+      "max_output_tokens": 16384,
+      "tool_support": "prompted",
+      "structured_output": "prompted",
+      "parallel_tools": true,
+      "vision_support": false,
+      "audio_support": false,
+      "notes": "Hybrid attention (Gated DeltaNet + Gated Attention), High-sparsity MoE with 512 experts/10 activated, Multi-Token Prediction, extensible to 1M tokens with YaRN scaling",
+      "source": "Hugging Face model card"
     }
   },
   "tool_support_levels": {

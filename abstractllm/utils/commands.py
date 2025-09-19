@@ -217,186 +217,247 @@ class CommandProcessor:
         # Add spacing after help for better readability
     
     def _cmd_memory(self, args: List[str]) -> None:
-        """Show memory system insights or set max tokens."""
-        # Check if setting max tokens
-        if args and args[0].isdigit():
-            new_max_tokens = int(args[0])
-            # Set max tokens in session config
-            if hasattr(self.session, '_provider') and self.session._provider:
-                if hasattr(self.session._provider, 'config_manager'):
-                    from abstractllm.interface import ModelParameter
-                    self.session._provider.config_manager.update_config({
-                        ModelParameter.MAX_INPUT_TOKENS: new_max_tokens
-                    })
-                    display_success(f"Max input tokens set to {new_max_tokens:,}")
-                else:
-                    display_error("Provider does not support configuration changes")
-            else:
-                display_error("No provider available to configure")
+        """Show memory system insights or set token limits.
+
+        Usage:
+        /mem                     - Show memory overview
+        /mem <number>           - Set max input tokens (legacy)
+        /mem input <number>     - Set max input tokens
+        /mem output <number>    - Set max output tokens
+        /mem input <in> output <out> - Set both limits
+        /mem reset              - Reset to model defaults
+        """
+        from abstractllm.enums import ModelParameter
+
+        # Check if we have a provider
+        if not hasattr(self.session, '_provider') or not self.session._provider:
+            display_error("No provider available")
             return
 
-        if not hasattr(self.session, 'memory') or not self.session.memory:
-            display_error("Memory system not available")
-            return
+        provider = self.session._provider
 
-        memory = self.session.memory
-        try:
-            stats = memory.get_statistics()
-
-            # Debug: Check if stats is actually a dictionary
-            if not isinstance(stats, dict):
-                display_error(f"Memory statistics returned {type(stats).__name__} instead of dict: {str(stats)[:200]}...")
+        # Parse arguments for token limit setting
+        if args:
+            if args[0] == "reset":
+                # Reset to model defaults
+                try:
+                    provider.apply_model_defaults()
+                    limits = provider.get_memory_limits()
+                    display_success("Memory limits reset to model defaults")
+                    input_tokens = f"{limits['input']:,}"
+                    output_tokens = f"{limits['output']:,}"
+                    print(f"  • Input: {colorize(input_tokens, Colors.WHITE)} tokens")
+                    print(f"  • Output: {colorize(output_tokens, Colors.WHITE)} tokens")
+                except Exception as e:
+                    display_error(f"Failed to reset limits: {e}")
                 return
 
-        except Exception as e:
-            display_error(f"Failed to get memory statistics: {str(e)}")
-            # Add debug info for streaming mode troubleshooting
-            print(f"{colorize('Debug:', Colors.DIM)} Session has memory: {hasattr(self.session, 'memory')}")
-            if hasattr(self.session, 'memory'):
-                print(f"{colorize('Debug:', Colors.DIM)} Memory object: {type(self.session.memory).__name__}")
-            return
-        
+            elif args[0].isdigit():
+                # Legacy: single number sets input tokens
+                new_input_tokens = int(args[0])
+                try:
+                    result = provider.set_memory_limits(max_input_tokens=new_input_tokens)
+                    display_success(f"Max input tokens set to {new_input_tokens:,}")
+                    if new_input_tokens > result['model_input_limit']:
+                        print(f"  {colorize('⚠️  Warning:', Colors.BRIGHT_YELLOW)} Exceeds model limit of {result['model_input_limit']:,}")
+                except Exception as e:
+                    display_error(f"Failed to set input tokens: {e}")
+                return
+
+            elif args[0] in ["input", "output"]:
+                # Enhanced syntax: /mem input 8000 output 2048
+                input_tokens = None
+                output_tokens = None
+
+                try:
+                    i = 0
+                    while i < len(args):
+                        if args[i] == "input" and i + 1 < len(args) and args[i + 1].isdigit():
+                            input_tokens = int(args[i + 1])
+                            i += 2
+                        elif args[i] == "output" and i + 1 < len(args) and args[i + 1].isdigit():
+                            output_tokens = int(args[i + 1])
+                            i += 2
+                        else:
+                            i += 1
+
+                    if input_tokens is None and output_tokens is None:
+                        display_error("Usage: /mem input <number> | /mem output <number> | /mem input <in> output <out>")
+                        return
+
+                    result = provider.set_memory_limits(max_input_tokens=input_tokens, max_output_tokens=output_tokens)
+
+                    if input_tokens is not None:
+                        display_success(f"Max input tokens set to {input_tokens:,}")
+                        if input_tokens > result['model_input_limit']:
+                            print(f"  {colorize('⚠️  Warning:', Colors.BRIGHT_YELLOW)} Exceeds model limit of {result['model_input_limit']:,}")
+
+                    if output_tokens is not None:
+                        display_success(f"Max output tokens set to {output_tokens:,}")
+                        if output_tokens > result['model_output_limit']:
+                            print(f"  {colorize('⚠️  Warning:', Colors.BRIGHT_YELLOW)} Exceeds model limit of {result['model_output_limit']:,}")
+
+                except Exception as e:
+                    display_error(f"Failed to set memory limits: {e}")
+                return
+
+            else:
+                display_error("Invalid argument. Use: /mem [input <number>] [output <number>] | /mem reset")
+                return
+
+        # Show memory overview (no arguments provided)
         print(f"\n{colorize(f'{Symbols.BRAIN} Memory System Overview', Colors.BRIGHT_BLUE, bold=True)}")
         print(create_divider(60, "─", Colors.BLUE))
 
-        # Context size information
-        from abstractllm.utils.context_logging import get_context_logger
-        logger = get_context_logger()
+        # Model information at the top
+        try:
+            limits = provider.get_memory_limits()
+            model_input_max = f"{limits['model_input_limit']:,}"
+            model_output_max = f"{limits['model_output_limit']:,}"
+            model_name = limits.get('model', 'Unknown')
+            print(f"  {colorize('Model:', Colors.BRIGHT_CYAN)} {colorize(model_name, Colors.WHITE)}")
+            print(f"  {colorize('Model Max:', Colors.BRIGHT_CYAN)} {colorize(model_input_max, Colors.WHITE)} input / {colorize(model_output_max, Colors.WHITE)} output")
+        except Exception:
+            print(f"  {colorize('Model:', Colors.BRIGHT_CYAN)} {colorize('Unknown', Colors.DIM)}")
 
-        # Get context usage and limits
+        # Simple context calculation from session messages
         used_tokens = 0
-        max_tokens = "Unknown"
+        context_source = "no context"
 
-        # Calculate used tokens from last context
-        if logger.last_context:
-            try:
-                context_str = json.dumps(logger.last_context, ensure_ascii=False)
-                char_count = len(context_str)
-                # Estimate tokens (roughly 4 chars per token)
-                used_tokens = char_count // 4
-            except Exception as e:
-                # Context exists but couldn't be serialized - use fallback
-                used_tokens = 0
-        else:
-            # No context available - this might happen in streaming mode
-            print(f"{colorize('Debug:', Colors.DIM)} Context logger has no last_context (streaming mode issue?)")
-            # Try to get token count from provider directly
-            if hasattr(self.session, '_provider') and hasattr(self.session._provider, '_last_verbatim_context'):
-                try:
-                    context = self.session._provider._last_verbatim_context
-                    if context:
-                        used_tokens = len(str(context)) // 4
-                        print(f"{colorize('Debug:', Colors.DIM)} Used provider context fallback: {used_tokens} tokens")
-                    else:
-                        print(f"{colorize('Debug:', Colors.DIM)} Provider has no verbatim context either")
-                except Exception as e:
-                    print(f"{colorize('Debug:', Colors.DIM)} Provider context fallback failed: {e}")
-            else:
-                print(f"{colorize('Debug:', Colors.DIM)} Provider has no verbatim context capability")
+        try:
+            # Get the current conversation context from session
+            if hasattr(self.session, 'messages') and self.session.messages:
+                # Build context from system prompt + messages
+                context_parts = []
 
-        # Get configured or model max tokens
-        if hasattr(self.session, '_provider') and self.session._provider:
-            provider = self.session._provider
-            model_name = None
-            user_max_tokens = None
+                # Add system prompt if available
+                if hasattr(self.session, 'system_prompt') and self.session.system_prompt:
+                    context_parts.append(f"System: {self.session.system_prompt}")
 
-            # Get model name and user configuration
-            if hasattr(provider, 'config_manager'):
-                from abstractllm.interface import ModelParameter
-                model_name = provider.config_manager.get_param(ModelParameter.MODEL)
-                user_max_tokens = provider.config_manager.get_param(ModelParameter.MAX_INPUT_TOKENS)
+                # Add conversation messages
+                for msg in self.session.messages:
+                    if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                        context_parts.append(f"{msg.role}: {msg.content}")
 
-            # Determine the actual max tokens being used
-            if user_max_tokens:
-                max_tokens = user_max_tokens
-                source = "user-configured"
-            elif model_name:
-                try:
-                    from abstractllm.architectures.detection import get_model_capabilities
-                    capabilities = get_model_capabilities(model_name)
-                    if capabilities:
-                        context_length = capabilities.get('context_length')
-                        if context_length and isinstance(context_length, int):
-                            max_tokens = context_length
-                            source = "model default"
-                except Exception:
-                    pass
+                if context_parts:
+                    full_context = "\n".join(context_parts)
+                    # Simple token estimation: ~4 characters per token
+                    used_tokens = len(full_context) // 4
+                    context_source = f"{len(self.session.messages)} messages"
 
-            # Display context usage in the requested format
-            print(f"  {colorize('Context Usage:', Colors.BRIGHT_CYAN)}")
-            if isinstance(max_tokens, int):
-                usage_ratio = (used_tokens / max_tokens) * 100 if max_tokens > 0 else 0
+        except Exception:
+            pass  # Skip if session doesn't have expected structure
+
+        # Token limits using unified system
+        try:
+            limits = provider.get_memory_limits()
+
+            print(f"  {colorize('Token Usage & Limits:', Colors.BRIGHT_CYAN)}")
+
+            # Input context usage vs limit
+            input_limit = limits['input']
+            if used_tokens > 0:
+                usage_ratio = (used_tokens / input_limit) * 100 if input_limit > 0 else 0
                 usage_color = Colors.GREEN if usage_ratio < 50 else Colors.YELLOW if usage_ratio < 80 else Colors.RED
-                print(f"    • Tokens: {colorize(f'{used_tokens:,}', Colors.WHITE)} / {colorize(f'{max_tokens:,}', Colors.WHITE)} ({colorize(f'{usage_ratio:.1f}%', usage_color)})")
-                print(f"    • Source: {colorize(source, Colors.DIM)}")
+                usage_display = f"{used_tokens:,}"
+                limit_display = f"{input_limit:,}"
+                percent_display = f"{usage_ratio:.1f}%"
+                print(f"    • Input Context: {colorize(usage_display, Colors.WHITE)} / {colorize(limit_display, Colors.DIM)} tokens ({colorize(percent_display, usage_color)})")
+                print(f"      {colorize(f'Source: {context_source}', Colors.DIM)}")
             else:
-                print(f"    • Tokens: {colorize(f'{used_tokens:,}', Colors.WHITE)} / {colorize(str(max_tokens), Colors.DIM)}")
+                limit_display = f"{input_limit:,}"
+                print(f"    • Input Context: {colorize('0', Colors.WHITE)} / {colorize(limit_display, Colors.DIM)} tokens ({colorize(context_source, Colors.DIM)})")
 
-            # Show max output tokens if available
-            if model_name:
-                try:
-                    from abstractllm.architectures.detection import get_model_capabilities
-                    capabilities = get_model_capabilities(model_name)
-                    if capabilities:
-                        max_output = capabilities.get('max_output_tokens', 'Unknown')
-                        if max_output != 'Unknown':
-                            print(f"    • Max Output: {colorize(f'{max_output:,}' if isinstance(max_output, int) else max_output, Colors.WHITE)}")
-                except Exception:
-                    pass
+            # Output generation limit
+            output_limit = limits['output']
+            output_display = f"{output_limit:,}"
+            print(f"    • Output Limit: {colorize(output_display, Colors.WHITE)} tokens max")
 
-            print(f"    • {colorize('Change limit:', Colors.DIM)} /mem <number>")
+            # Configuration info
+            print(f"    • {colorize('Commands:', Colors.DIM)} /mem input <n> | /mem output <n> | /mem reset")
+
+        except Exception as e:
+            print(f"  {colorize('Token Limits:', Colors.BRIGHT_CYAN)} {colorize('Error retrieving limits', Colors.RED)}")
+            print(f"    {colorize(f'Error: {e}', Colors.RED)}")
+
+        # Generation parameters using unified system
+        print(f"\n  {colorize('Generation Parameters:', Colors.BRIGHT_CYAN)}")
+        param_names = [
+            (ModelParameter.TEMPERATURE, "Temperature"),
+            (ModelParameter.TOP_P, "Top-P"),
+            (ModelParameter.SEED, "Seed"),
+            (ModelParameter.FREQUENCY_PENALTY, "Frequency Penalty"),
+            (ModelParameter.PRESENCE_PENALTY, "Presence Penalty"),
+            (ModelParameter.TOP_K, "Top-K"),
+            (ModelParameter.REPETITION_PENALTY, "Repetition Penalty")
+        ]
+
+        shown_params = 0
+        for param_enum, display_name in param_names:
+            value = provider.get_parameter(param_enum)
+            if value is not None:
+                print(f"    • {display_name}: {colorize(f'{value}', Colors.WHITE)}")
+                shown_params += 1
+
+        if shown_params == 0:
+            print(f"    • {colorize('Using model defaults', Colors.DIM)}")
+
+        # Provider info
+        provider_name = type(provider).__name__.replace('Provider', '').lower()
+        base_url = provider.get_parameter(ModelParameter.BASE_URL)
+        print(f"    • Provider: {colorize(provider_name.title(), Colors.DIM)}")
+        if base_url and base_url != "N/A":
+            print(f"    • Base URL: {colorize(base_url, Colors.DIM)}")
+
+        # Memory system stats (if available)
+        if hasattr(self.session, 'memory') and self.session.memory:
+            try:
+                memory = self.session.memory
+                stats = memory.get_statistics()
+
+                if isinstance(stats, dict):
+                    print(f"\n  {colorize('Memory System:', Colors.BRIGHT_GREEN)}")
+
+                    # Working memory
+                    if 'memory_distribution' in stats and isinstance(stats['memory_distribution'], dict):
+                        dist = stats['memory_distribution']
+                        working_memory_count = str(dist.get('working_memory', 0))
+                        episodic_memory_count = str(dist.get('episodic_memory', 0))
+                        print(f"    • Working Memory: {colorize(working_memory_count, Colors.WHITE)} items")
+                        print(f"    • Episodic Memory: {colorize(episodic_memory_count, Colors.WHITE)} experiences")
+
+                    # Knowledge graph
+                    if 'knowledge_graph' in stats and isinstance(stats['knowledge_graph'], dict):
+                        kg_stats = stats['knowledge_graph']
+                        total_facts_count = str(kg_stats.get('total_facts', 0))
+                        print(f"    • Knowledge Graph: {colorize(total_facts_count, Colors.WHITE)} facts")
+
+                    # ReAct cycles
+                    total_cycles = stats.get('total_react_cycles', 0)
+                    successful_cycles = stats.get('successful_cycles', 0)
+                    if total_cycles > 0:
+                        success_rate = (successful_cycles / total_cycles) * 100
+                        rate_color = Colors.GREEN if success_rate > 80 else Colors.YELLOW if success_rate > 50 else Colors.RED
+                        cycles_count = str(total_cycles)
+                        success_percent = f'{success_rate:.1f}%'
+                        print(f"    • ReAct Cycles: {colorize(cycles_count, Colors.WHITE)} total ({colorize(success_percent, rate_color)} success)")
+
+                    # Memory health
+                    if hasattr(memory, 'get_memory_health_report'):
+                        try:
+                            health = memory.get_memory_health_report()
+                            if isinstance(health, dict) and 'overall_health' in health:
+                                health_score = health['overall_health']
+                                health_color = Colors.BRIGHT_GREEN if health_score > 0.8 else Colors.BRIGHT_YELLOW if health_score > 0.5 else Colors.BRIGHT_RED
+                                health_percent = f'{health_score:.1%}'
+                                print(f"    • Health Score: {colorize(health_percent, health_color)}")
+                        except Exception:
+                            pass
+
+            except Exception as e:
+                print(f"  {colorize('Memory System:', Colors.BRIGHT_GREEN)} {colorize('Stats unavailable', Colors.DIM)}")
 
         print()  # Add spacing
-
-        # Memory distribution - check if keys exist
-        if 'memory_distribution' in stats and isinstance(stats['memory_distribution'], dict):
-            dist = stats['memory_distribution']
-            print(f"  {colorize('Working Memory:', Colors.BRIGHT_GREEN)} {dist.get('working_memory', 0)} items")
-            print(f"  {colorize('Episodic Memory:', Colors.BRIGHT_GREEN)} {dist.get('episodic_memory', 0)} experiences")
-        else:
-            print(f"  {colorize('Working Memory:', Colors.BRIGHT_GREEN)} 0 items")
-            print(f"  {colorize('Episodic Memory:', Colors.BRIGHT_GREEN)} 0 experiences")
-            
-        # Knowledge graph stats
-        if 'knowledge_graph' in stats and isinstance(stats['knowledge_graph'], dict):
-            kg_stats = stats['knowledge_graph']
-            print(f"  {colorize('Knowledge Graph:', Colors.BRIGHT_GREEN)} {kg_stats.get('total_facts', 0)} facts")
-        else:
-            print(f"  {colorize('Knowledge Graph:', Colors.BRIGHT_GREEN)} 0 facts")
-        
-        # ReAct cycles
-        total_cycles = stats.get('total_react_cycles', 0)
-        successful_cycles = stats.get('successful_cycles', 0)
-        print(f"  {colorize('ReAct Cycles:', Colors.BRIGHT_CYAN)} {total_cycles} total ({successful_cycles} successful)")
-        
-        # Links - check for both possible key names
-        total_links = 0
-        if 'link_statistics' in stats and isinstance(stats['link_statistics'], dict):
-            total_links = stats['link_statistics'].get('total_links', 0)
-        elif 'memory_distribution' in stats and isinstance(stats['memory_distribution'], dict):
-            total_links = stats['memory_distribution'].get('total_links', 0)
-            
-        print(f"  {colorize('Bidirectional Links:', Colors.BRIGHT_MAGENTA)} {total_links}")
-        
-        # Memory health - only if available
-        try:
-            if hasattr(memory, 'get_memory_health_report'):
-                health = memory.get_memory_health_report()
-                if isinstance(health, dict) and 'overall_health' in health:
-                    health_score = health['overall_health']
-                    health_color = Colors.BRIGHT_GREEN if health_score > 0.8 else Colors.BRIGHT_YELLOW if health_score > 0.5 else Colors.BRIGHT_RED
-                    print(f"  {colorize('Health Score:', health_color)} {health_score:.1%}")
-        except Exception:
-            pass  # Skip health if not available
-        
-        # Recent facts - only if available
-        try:
-            if hasattr(memory, 'knowledge_graph') and hasattr(memory.knowledge_graph, 'facts') and memory.knowledge_graph.facts:
-                print(f"\n{colorize('Recent Facts:', Colors.BRIGHT_YELLOW)}")
-                for i, (fact_id, fact) in enumerate(list(memory.knowledge_graph.facts.items())[-3:]):
-                    print(f"    {i+1}. {fact.subject} --[{fact.predicate}]--> {fact.object}")
-        except Exception:
-            pass  # Skip facts if not available
     
     def _cmd_save(self, args: List[str]) -> None:
         """Save complete session state."""
@@ -914,9 +975,11 @@ class CommandProcessor:
             print(f"  {displayed + 1}. {colorize(fact.subject, Colors.BRIGHT_BLUE)} "
                   f"--[{colorize(fact.predicate, Colors.BRIGHT_CYAN)}]--> "
                   f"{colorize(fact.object, Colors.BRIGHT_GREEN)}")
+            # Get usage count safely
+            usage_count = getattr(fact, 'usage_count', getattr(fact, 'access_count', 0))
             print(f"     {colorize(f'Confidence: {fact.confidence:.1%}', confidence_color)} "
                   f"{colorize(f'| Importance: {fact.importance:.1f}', Colors.DIM)} "
-                  f"{colorize(f'| Used: {fact.access_count}x', Colors.DIM)}")
+                  f"{colorize(f'| Used: {usage_count}x', Colors.DIM)}")
 
             displayed += 1
 

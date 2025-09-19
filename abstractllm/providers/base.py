@@ -743,4 +743,145 @@ IMPORTANT: The above files are already loaded in your context. Do NOT use tools 
             'timestamp': self._last_context_timestamp,
             'provider': self.provider_name,
             'model': self.config_manager.get_param(ModelParameter.MODEL)
-        } 
+        }
+
+    def get_parameter(self, param: Union[str, ModelParameter], default: Optional[Any] = None) -> Optional[Any]:
+        """
+        Get a parameter value using the unified configuration system.
+
+        Args:
+            param: Parameter to retrieve (ModelParameter enum or string)
+            default: Default value if parameter not found
+
+        Returns:
+            Parameter value or default
+        """
+        return self.config_manager.get_param(param, default)
+
+    def set_parameter(self, param: Union[str, ModelParameter], value: Any) -> None:
+        """
+        Set a parameter value using the unified configuration system.
+
+        Args:
+            param: Parameter to set (ModelParameter enum or string)
+            value: Value to set
+        """
+        self.config_manager.update_config({param: value})
+
+    def get_model_limits(self) -> Dict[str, int]:
+        """
+        Get the model's input and output token limits from architecture capabilities.
+
+        Returns:
+            Dictionary with 'input' and 'output' keys containing token limits
+        """
+        try:
+            from abstractllm.architectures import get_context_limits
+
+            model = self.get_parameter(ModelParameter.MODEL)
+            if not model:
+                return {"input": 4096, "output": 2048}  # Safe defaults
+
+            return get_context_limits(model)
+        except ImportError:
+            # Fallback if architecture module not available
+            return {"input": 4096, "output": 2048}
+
+    def set_memory_limits(self, max_input_tokens: Optional[int] = None, max_output_tokens: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Set memory limits for input and output tokens with intelligent defaults.
+
+        Args:
+            max_input_tokens: Maximum input context length (None to use model default)
+            max_output_tokens: Maximum output generation length (None to use model default)
+
+        Returns:
+            Dictionary with the actual limits that were set
+        """
+        # Get model capabilities for intelligent defaults
+        model_limits = self.get_model_limits()
+
+        # Set input tokens
+        if max_input_tokens is not None:
+            # Validate against model capability
+            if max_input_tokens > model_limits["input"]:
+                logger.warning(f"Input token limit {max_input_tokens} exceeds model capability {model_limits['input']}")
+            self.set_parameter(ModelParameter.MAX_INPUT_TOKENS, max_input_tokens)
+        else:
+            # Use model default if not already configured
+            current_input = self.get_parameter(ModelParameter.MAX_INPUT_TOKENS)
+            if current_input is None:
+                self.set_parameter(ModelParameter.MAX_INPUT_TOKENS, model_limits["input"])
+
+        # Set output tokens
+        if max_output_tokens is not None:
+            # Validate against model capability
+            if max_output_tokens > model_limits["output"]:
+                logger.warning(f"Output token limit {max_output_tokens} exceeds model capability {model_limits['output']}")
+            self.set_parameter(ModelParameter.MAX_OUTPUT_TOKENS, max_output_tokens)
+            # Also set the legacy MAX_TOKENS for backward compatibility
+            self.set_parameter(ModelParameter.MAX_TOKENS, max_output_tokens)
+        else:
+            # Use model default if not already configured
+            current_output = self.get_parameter(ModelParameter.MAX_OUTPUT_TOKENS)
+            if current_output is None:
+                self.set_parameter(ModelParameter.MAX_OUTPUT_TOKENS, model_limits["output"])
+                self.set_parameter(ModelParameter.MAX_TOKENS, model_limits["output"])
+
+        # Return current configured limits
+        return {
+            "input": self.get_parameter(ModelParameter.MAX_INPUT_TOKENS),
+            "output": self.get_parameter(ModelParameter.MAX_OUTPUT_TOKENS),
+            "model_input_limit": model_limits["input"],
+            "model_output_limit": model_limits["output"]
+        }
+
+    def get_memory_limits(self) -> Dict[str, Any]:
+        """
+        Get current memory limits with model capability information.
+
+        Returns:
+            Dictionary with current limits and model capabilities
+        """
+        model_limits = self.get_model_limits()
+
+        return {
+            "input": self.get_parameter(ModelParameter.MAX_INPUT_TOKENS) or model_limits["input"],
+            "output": self.get_parameter(ModelParameter.MAX_OUTPUT_TOKENS) or model_limits["output"],
+            "legacy_max_tokens": self.get_parameter(ModelParameter.MAX_TOKENS),
+            "model_input_limit": model_limits["input"],
+            "model_output_limit": model_limits["output"],
+            "model": self.get_parameter(ModelParameter.MODEL)
+        }
+
+    def apply_model_defaults(self) -> None:
+        """
+        Apply model-specific defaults from the architecture capabilities system.
+        Only sets defaults for parameters that aren't already configured.
+        """
+        try:
+            from abstractllm.architectures import get_model_capabilities
+
+            model = self.get_parameter(ModelParameter.MODEL)
+            if not model:
+                return
+
+            # Get full model capabilities
+            capabilities = get_model_capabilities(model)
+
+            # Apply token limits if not already set
+            if self.get_parameter(ModelParameter.MAX_INPUT_TOKENS) is None:
+                context_length = capabilities.get("context_length", 4096)
+                self.set_parameter(ModelParameter.MAX_INPUT_TOKENS, context_length)
+
+            if self.get_parameter(ModelParameter.MAX_OUTPUT_TOKENS) is None:
+                max_output = capabilities.get("max_output_tokens", 2048)
+                self.set_parameter(ModelParameter.MAX_OUTPUT_TOKENS, max_output)
+                # Backward compatibility
+                if self.get_parameter(ModelParameter.MAX_TOKENS) is None:
+                    self.set_parameter(ModelParameter.MAX_TOKENS, max_output)
+
+        except ImportError:
+            # Architecture module not available, skip defaults
+            logger.debug("Architecture module not available for model defaults")
+            pass 

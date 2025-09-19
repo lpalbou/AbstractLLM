@@ -36,6 +36,9 @@ This project makes use of several excellent open-source libraries. We extend our
 - **[Requests](https://github.com/psf/requests)** - HTTP library for Python (synchronous API calls)
 - **[aiohttp](https://github.com/aio-libs/aiohttp)** - Asynchronous HTTP client/server framework
 
+### LM Studio Integration
+- **[LM Studio](https://github.com/lmstudio-ai/lms)** - Local LLM server with OpenAI-compatible API for running models locally
+
 ## Utility Libraries
 
 ### Image Processing

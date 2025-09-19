@@ -55,13 +55,31 @@ class EmbeddingManager:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.max_cache_size = max_cache_size
 
-        # Initialize the model
+        # Initialize the model - try offline first to avoid network calls
         try:
+            # Try to load from local cache first (no network calls)
+            import os
+            os.environ['TRANSFORMERS_OFFLINE'] = '1'  # Force transformers to work offline
+            os.environ['HF_HUB_OFFLINE'] = '1'  # Force HuggingFace Hub offline
+
             self.model = SentenceTransformer(model_name)
-            logger.info(f"Initialized embedding model: {model_name}")
-        except Exception as e:
-            logger.error(f"Failed to load embedding model {model_name}: {e}")
-            raise
+            logger.info(f"Initialized embedding model: {model_name} (offline mode)")
+        except Exception as offline_error:
+            logger.warning(f"Offline initialization failed: {offline_error}")
+            try:
+                # Only try online as last resort if explicitly enabled
+                if os.environ.get('ABSTRACTLLM_ALLOW_DOWNLOADS') == '1':
+                    # Remove offline flags and try downloading
+                    os.environ.pop('TRANSFORMERS_OFFLINE', None)
+                    os.environ.pop('HF_HUB_OFFLINE', None)
+                    self.model = SentenceTransformer(model_name)
+                    logger.info(f"Initialized embedding model: {model_name} (downloaded)")
+                else:
+                    logger.error(f"Embedding model {model_name} not available offline and downloads disabled")
+                    raise RuntimeError(f"Embedding model {model_name} requires download. Set ABSTRACTLLM_ALLOW_DOWNLOADS=1 to enable.")
+            except Exception as e:
+                logger.error(f"Failed to load embedding model {model_name}: {e}")
+                raise
 
         # Set up persistent cache
         self.cache_file = self.cache_dir / f"{model_name.replace('/', '_')}_cache.pkl"

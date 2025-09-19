@@ -28,6 +28,7 @@ class ModelParameter(str, Enum):
     
     # Context and token management
     MAX_INPUT_TOKENS = "max_input_tokens"  # Maximum input context length
+    MAX_OUTPUT_TOKENS = "max_output_tokens"  # Maximum output generation length
     CONTEXT_WINDOW = "context_window"  # Total context window size
     TRUNCATION_STRATEGY = "truncation_strategy"  # How to handle context overflow
     

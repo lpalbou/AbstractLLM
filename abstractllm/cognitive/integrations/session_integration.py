@@ -148,9 +148,18 @@ class CognitiveSessionEnhancer:
         # Extract facts (only if enabled)
         if 'facts' in self.enabled_features and self.facts_extractor and self.facts_extractor.is_available():
             try:
-                facts = self.facts_extractor.extract_interaction_facts(interaction_context)
+                # Generate or retrieve interaction ID for provenance tracking
+                interaction_id = interaction_context.get('interaction_id')
+                if not interaction_id:
+                    # Generate a unique interaction ID if not provided
+                    import uuid
+                    import datetime
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    interaction_id = f"interaction_{timestamp}_{str(uuid.uuid4())[:8]}"
+
+                facts = self.facts_extractor.extract_interaction_facts(interaction_context, interaction_id)
                 self.extracted_facts.append(facts)
-                logger.debug(f"Extracted {facts.total_extracted} facts from interaction")
+                logger.debug(f"Extracted {facts.total_extracted} facts from interaction {interaction_id}")
             except Exception as e:
                 logger.error(f"Fact extraction failed: {e}")
 

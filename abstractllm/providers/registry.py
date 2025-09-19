@@ -34,6 +34,7 @@ def initialize_registry() -> None:
     register_provider("anthropic", "abstractllm.providers.anthropic", "AnthropicProvider")
     register_provider("ollama", "abstractllm.providers.ollama", "OllamaProvider")
     register_provider("huggingface", "abstractllm.providers.huggingface", "HuggingFaceProvider")
+    register_provider("lmstudio", "abstractllm.providers.lmstudio_provider", "LMStudioProvider")
     
     # Try to register MLX if the system supports it
     register_mlx_provider()

@@ -137,7 +137,8 @@ def write_file(
 
 
 def create_agent(provider="ollama", model="qwen3:4b", memory_path=None, max_tool_calls=25,
-                 seed=None, top_p=None, max_input_tokens=None, frequency_penalty=None, presence_penalty=None):
+                 seed=None, top_p=None, max_input_tokens=None, frequency_penalty=None, presence_penalty=None,
+                 enable_facts=False):
     """Create an enhanced agent with all SOTA features including cognitive abstractions."""
 
     print(f"{BLUE}🧠 Creating intelligent agent with:{RESET}")
@@ -160,7 +161,8 @@ def create_agent(provider="ollama", model="qwen3:4b", memory_path=None, max_tool
         },
         'tools': [read_file, list_files, search_files, write_file],
         'system_prompt': "You are an intelligent AI assistant with memory and reasoning capabilities.",
-        'max_tokens': 2048,
+        # Remove hardcoded max_tokens to let providers use their intelligent defaults
+        # Provider-specific defaults: OpenAI/Anthropic ~4k, Ollama ~2k, LM Studio ~8k, MLX ~4k
         'temperature': 0.7,
         'max_tool_calls': max_tool_calls
     }
@@ -177,34 +179,40 @@ def create_agent(provider="ollama", model="qwen3:4b", memory_path=None, max_tool
     if presence_penalty is not None:
         config[ModelParameter.PRESENCE_PENALTY] = presence_penalty
 
-    # Try to create cognitive-enhanced session
-    try:
-        from abstractllm.cognitive.integrations import create_cognitive_session
+    # Try to create cognitive-enhanced session only if facts are enabled
+    if enable_facts:
+        try:
+            from abstractllm.cognitive.integrations import create_cognitive_session
 
-        # Remove model from config to avoid duplicate parameter
-        cognitive_config = config.copy()
-        cognitive_config.pop('model', None)
+            # Remove model from config to avoid duplicate parameter
+            cognitive_config = config.copy()
+            cognitive_config.pop('model', None)
 
-        session = create_cognitive_session(
-            provider=provider,
-            model=model,
-            cognitive_features=['facts'],  # Only facts extraction for now
-            cognitive_model="granite3.3:2b",
-            **cognitive_config
-        )
+            session = create_cognitive_session(
+                provider=provider,
+                model=model,
+                cognitive_features=['facts'],  # Only facts extraction for now
+                cognitive_model="granite3.3:2b",
+                **cognitive_config
+            )
 
-        print(f"{GREEN}✨ Cognitive enhancements loaded successfully{RESET}")
-        print(f"  • Semantic fact extraction with granite3.3:2b")
-        print(f"  • Enhanced ontological knowledge extraction")
-        print(f"  • Dublin Core, Schema.org, SKOS, CiTO frameworks")
-        print(f"  • Use /facts to view extracted knowledge\n")
+            print(f"{GREEN}✨ Cognitive enhancements loaded successfully{RESET}")
+            print(f"  • Semantic fact extraction with granite3.3:2b")
+            print(f"  • Enhanced ontological knowledge extraction")
+            print(f"  • Dublin Core, Schema.org, SKOS, CiTO frameworks")
+            print(f"  • Use /facts to view extracted knowledge\n")
 
-    except ImportError as e:
-        print(f"{BLUE}ℹ️ Cognitive features not available: {e}{RESET}")
-        print(f"  • Using standard session with basic features\n")
-        session = create_session(provider, **config)
-    except Exception as e:
-        print(f"{BLUE}ℹ️ Falling back to standard session: {e}{RESET}\n")
+        except ImportError as e:
+            print(f"{BLUE}ℹ️ Cognitive features not available: {e}{RESET}")
+            print(f"  • Using standard session with basic features\n")
+            session = create_session(provider, **config)
+        except Exception as e:
+            print(f"{BLUE}ℹ️ Falling back to standard session: {e}{RESET}\n")
+            session = create_session(provider, **config)
+    else:
+        # Create standard session without cognitive features
+        print(f"{BLUE}ℹ️ Using standard session (facts extraction disabled){RESET}")
+        print(f"  • Use --enable-facts to enable cognitive features\n")
         session = create_session(provider, **config)
 
     if memory_path:
@@ -631,9 +639,15 @@ Examples:
     )
     
     parser.add_argument(
-        "--presence-penalty", 
+        "--presence-penalty",
         type=float,
         help="Presence penalty (-2.0 to 2.0, OpenAI only)"
+    )
+
+    parser.add_argument(
+        "--enable-facts",
+        action="store_true",
+        help="Enable cognitive fact extraction (disabled by default)"
     )
     
     args = parser.parse_args()
@@ -654,7 +668,8 @@ Examples:
         top_p=getattr(args, 'top_p', None),
         max_input_tokens=getattr(args, 'max_input_tokens', None),
         frequency_penalty=getattr(args, 'frequency_penalty', None),
-        presence_penalty=getattr(args, 'presence_penalty', None)
+        presence_penalty=getattr(args, 'presence_penalty', None),
+        enable_facts=getattr(args, 'enable_facts', False)
     )
     
     # Execute single prompt or start interactive mode

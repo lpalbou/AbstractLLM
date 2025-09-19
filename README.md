@@ -28,7 +28,7 @@ AbstractLLM provides a consistent interface for multiple LLM providers while off
 ## Key Features
 
 ### Core Infrastructure
-- 🔄 **Universal Provider Support**: OpenAI, Anthropic, Ollama, HuggingFace, and MLX with consistent API
+- 🔄 **Universal Provider Support**: OpenAI, Anthropic, Ollama, HuggingFace, MLX, and LM Studio with consistent API
 - 🔌 **Provider Agnostic**: Switch between providers with minimal code changes
 - 🛠️ **Enhanced Tool System**: Tool creation with Pydantic validation and retry logic (alpha phase)
 - 📊 **Model Capability Detection**: Automatic detection of tool support, vision capabilities, and context limits
@@ -59,6 +59,7 @@ pip install "abstractllm[anthropic]"    # Anthropic/Claude API support
 pip install "abstractllm[ollama]"       # Ollama local models
 pip install "abstractllm[huggingface]"  # HuggingFace models
 pip install "abstractllm[mlx]"          # Apple Silicon MLX support
+pip install "abstractllm[lmstudio]"     # LM Studio local API support
 pip install "abstractllm[tools]"        # Enhanced tool system
 
 # Comprehensive installation (recommended)
@@ -130,6 +131,10 @@ python alma-simple.py --provider openai --model gpt-4o-mini \
 # Use enhanced models that work well
 python alma-simple.py --provider ollama --model qwen3-coder:30b \
     --prompt "read README.md and summarize it"
+
+# LM Studio - Local models with OpenAI API compatibility
+python alma-simple.py --provider lmstudio --model qwen/qwen3-next-80b \
+    --prompt "analyze the project structure"
 ```
 
 **Note**: Our testing shows that `qwen3-coder:30b` works particularly well for coding tasks and tool usage.
@@ -326,6 +331,33 @@ llm = create_llm("huggingface", model="Qwen/Qwen3-4B")
 llm = create_llm("huggingface", model="microsoft/Phi-4-mini-instruct")
 ```
 
+### LM Studio - Local Model Server
+```python
+# LM Studio provides OpenAI-compatible API for local models
+llm = create_llm("lmstudio",
+                 model="qwen/qwen3-next-80b",           # Any model loaded in LM Studio
+                 base_url="http://localhost:1234/v1")   # Default LM Studio URL
+
+# Advanced parameters with model capability detection
+llm = create_llm("lmstudio",
+                 model="qwen/qwen3-next-80b",
+                 temperature=0.7,
+                 max_tokens=16384,                      # Automatically limited by model
+                 base_url="http://localhost:1234/v1")
+
+# Custom server configuration
+llm = create_llm("lmstudio",
+                 model="llama-3.2-3b-instruct",
+                 base_url="http://192.168.1.100:1234/v1")  # Remote LM Studio instance
+```
+
+#### LM Studio Features
+- **OpenAI-Compatible API**: Seamless integration with existing OpenAI code
+- **Local Model Hosting**: Run models locally with GPU acceleration
+- **Model Auto-Detection**: Automatically detects model capabilities from JSON assets
+- **Tool Support**: Works with prompted tool calling for compatible models
+- **Memory Management**: Unified `/mem` command shows correct token limits
+
 ## Command-Line Examples
 
 ### ALMA-Simple Agent Examples
@@ -380,11 +412,55 @@ python alma-simple.py --provider huggingface --model Qwen/Qwen3-4B \
 # MLX - Apple Silicon optimized
 python alma-simple.py --provider mlx --model mlx-community/GLM-4.5-Air-4bit \
     --prompt "list files"
+
+# LM Studio - Local model server
+python alma-simple.py --provider lmstudio --model qwen/qwen3-next-80b \
+    --prompt "read README.md and explain the key concepts"
 ```
 
 **Note**: `qwen3-coder:30b` via Ollama works well for coding tasks and reasoning.
 
+## Architecture Detection & Model Capabilities
+
+AbstractLLM features an intelligent architecture detection system that automatically configures providers and models based on comprehensive JSON assets. The system handles model name normalization, capability detection, and parameter validation across all providers.
+
+### Key Features
+- **Automatic Model Detection**: Recognizes 80+ models across 7 architecture families
+- **Provider Compatibility**: Handles OpenAI, Anthropic, LM Studio, Ollama, MLX, and HuggingFace
+- **Unified Parameter System**: Consistent parameter handling with model capability validation
+- **Smart Normalization**: Converts provider-specific names to canonical model identifiers
+
+### Quick Example
+```python
+from abstractllm import create_llm
+
+# Model capabilities are automatically detected
+llm = create_llm("lmstudio", model="qwen/qwen3-next-80b")
+# → Detects: 262,144 context / 16,384 output / prompted tools
+
+# Unified memory management
+user> /mem
+🧠 Memory System Overview
+  Model: qwen/qwen3-next-80b
+  Model Max: 262,144 input / 16,384 output
+  Token Usage & Limits: ...
+```
+
+**📚 For detailed documentation**: See [Architecture Detection & Model Capabilities](docs/architecture-model-detection.md)
+
 ## Key Improvements in Recent Versions
+
+### New LM Studio Provider
+- **OpenAI-Compatible API**: Seamless integration with LM Studio local model server
+- **Automatic Model Detection**: Intelligent capability detection based on JSON assets
+- **Unified Memory Management**: Correct token limits and parameter validation
+- **Tool Integration**: Prompted tool support for compatible models
+
+### Provider Architecture Improvements
+- **Enhanced Model Detection**: Robust model name normalization and capability lookup
+- **JSON Asset System**: Comprehensive model capabilities database with 80+ models
+- **Unified Parameter System**: Consistent parameter handling across all providers
+- **Architecture Templates**: Automatic message formatting for 7+ model families
 
 ### OpenAI Provider Improvements
 - **Manual Provider Enhancements**: Improved OpenAI provider through custom implementation

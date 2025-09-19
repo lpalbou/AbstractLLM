@@ -456,26 +456,16 @@ class Session:
         self.current_retry_attempts: int = 0
         self.facts_before_generation: int = 0
 
-        # Initialize LanceDB-based observability store for enhanced RAG capabilities
+        # Initialize LanceDB-based observability store lazily (only when needed)
         self.lance_store = None
         self.embedder = None
-        if LANCEDB_AVAILABLE:
-            try:
-                self.lance_store = ObservabilityStore()
-                self.embedder = EmbeddingManager()
+        self._lance_initialized = False
 
-                # Add or get user for this session
-                self.user_id = self._get_or_create_user()
+        # Store availability but defer initialization to avoid network calls at startup
+        self._lance_available = LANCEDB_AVAILABLE
+        if self._lance_available:
+            logger.debug("LanceDB available, will initialize on first use")
 
-                # Register this session in LanceDB
-                self._register_session()
-
-                logger.debug("LanceDB observability store initialized")
-            except Exception as e:
-                logger.warning(f"Failed to initialize LanceDB store: {e}")
-                self.lance_store = None
-                self.embedder = None
-        
         # SOTA Scratchpad Manager with complete observability (if available)
         if SOTA_FEATURES_AVAILABLE and persist_memory:
             try:
@@ -1043,43 +1033,45 @@ class Session:
                 if lines:
                     endpoint = lines[0].replace("ENDPOINT: ", "")
 
-            # Store in LanceDB with embeddings for enhanced observability
-            if self.lance_store and self.embedder:
-                try:
-                    # Generate interaction ID
-                    import uuid
-                    interaction_id = f"cycle_{str(uuid.uuid4())[:8]}"
+            # Store in LanceDB ONLY if advanced features are enabled
+            if self._should_use_lance_features():
+                self._initialize_lance_if_needed()
+                if self.lance_store and self.embedder:
+                    try:
+                        # Generate interaction ID
+                        import uuid
+                        interaction_id = f"cycle_{str(uuid.uuid4())[:8]}"
 
-                    # Capture the complete verbatim context
-                    full_context = self._capture_verbatim_context()
+                        # Capture the complete verbatim context
+                        full_context = self._capture_verbatim_context()
 
-                    # Create metadata for the interaction
-                    metadata = {
-                        'provider': provider_name,
-                        'model': model_name,
-                        'endpoint': endpoint,
-                        'step_id': step_id,
-                        'step_number': step_number,
-                        'reasoning_phase': reasoning_phase
-                    }
+                        # Create metadata for the interaction
+                        metadata = {
+                            'provider': provider_name,
+                            'model': model_name,
+                            'endpoint': endpoint,
+                            'step_id': step_id,
+                            'step_number': step_number,
+                            'reasoning_phase': reasoning_phase
+                        }
 
-                    # Store interaction data for reference (will be updated after response)
-                    self._pending_interaction_data = {
-                        'interaction_id': interaction_id,
-                        'session_id': self.id,
-                        'user_id': getattr(self, 'user_id', 'default_user'),
-                        'timestamp': datetime.now(),
-                        'query': prompt or "Unknown query",  # Use the actual prompt parameter
-                        'context_verbatim': full_context,
-                        'context_embedding': self.embedder.embed_text(full_context),
-                        'facts_extracted': [],
-                        'token_usage': {'provider': provider_name, 'model': model_name},
-                        'duration_ms': 0,  # Will be updated with actual duration
-                        'metadata': metadata
-                    }
-                    logger.debug(f"Stored interaction {interaction_id} in LanceDB")
-                except Exception as e:
-                    logger.debug(f"Failed to store interaction in LanceDB: {e}")
+                        # Store interaction data for reference (will be updated after response)
+                        self._pending_interaction_data = {
+                            'interaction_id': interaction_id,
+                            'session_id': self.id,
+                            'user_id': getattr(self, 'user_id', 'default_user'),
+                            'timestamp': datetime.now(),
+                            'query': prompt or "Unknown query",  # Use the actual prompt parameter
+                            'context_verbatim': full_context,
+                            'context_embedding': self.embedder.embed_text(full_context),
+                            'facts_extracted': [],
+                            'token_usage': {'provider': provider_name, 'model': model_name},
+                            'duration_ms': 0,  # Will be updated with actual duration
+                            'metadata': metadata
+                        }
+                        logger.debug(f"Stored interaction {interaction_id} in LanceDB")
+                    except Exception as e:
+                        logger.debug(f"Failed to store interaction in LanceDB: {e}")
 
             # Legacy capture for backward compatibility with existing tools
             context_id = capture_llm_context(
@@ -3433,6 +3425,62 @@ class Session:
         if self.memory:
             return self.memory.query_memory(query)
         return None
+
+    def _should_use_lance_features(self) -> bool:
+        """Check if LanceDB features should be used.
+
+        LanceDB features should ONLY be used when:
+        1. Advanced features like facts extraction are enabled
+        2. Memory is enabled with cross-session persistence
+        3. User explicitly opts into enhanced observability
+
+        Returns:
+            bool: True if LanceDB features should be used
+        """
+        # Only use LanceDB for advanced features
+        return (
+            self._lance_available and
+            (
+                (self.memory and hasattr(self.memory, 'enable_cross_session_persistence') and
+                 getattr(self.memory, 'enable_cross_session_persistence', False)) or
+                getattr(self, '_enable_lance_observability', False)
+            )
+        )
+
+    def _initialize_lance_if_needed(self) -> bool:
+        """Initialize LanceDB components lazily when first needed.
+
+        Returns:
+            bool: True if successfully initialized, False otherwise
+        """
+        if self._lance_initialized or not self._lance_available:
+            return self._lance_initialized
+
+        try:
+            # Force offline mode to prevent network calls
+            import os
+            os.environ['TRANSFORMERS_OFFLINE'] = '1'
+            os.environ['HF_HUB_OFFLINE'] = '1'
+
+            self.lance_store = ObservabilityStore()
+            self.embedder = EmbeddingManager()
+
+            # Add or get user for this session
+            self.user_id = self._get_or_create_user()
+
+            # Register this session in LanceDB
+            self._register_session()
+
+            self._lance_initialized = True
+            logger.debug("LanceDB observability store initialized lazily")
+            return True
+
+        except Exception as e:
+            logger.warning(f"Failed to initialize LanceDB store: {e}")
+            self.lance_store = None
+            self.embedder = None
+            self._lance_initialized = False
+            return False
 
     def _get_or_create_user(self) -> str:
         """Get or create a user for this session in LanceDB.

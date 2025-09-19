@@ -54,7 +54,8 @@ def detect_tool_calls(response: str, model_name: Optional[str] = None) -> bool:
     if tool_format == ToolFormat.TOOL_CODE:
         return "```tool_code" in response or "```tool_call" in response or "tool_call:" in response
     elif tool_format == ToolFormat.SPECIAL_TOKEN:
-        return "<|tool_call|>" in response  # Just check opening tag
+        return ("<|tool_call|>" in response or
+                ("|tool_call|" in response and "{" in response))  # Check both with/without angle brackets, but bare format needs JSON
     elif tool_format == ToolFormat.FUNCTION_CALL:
         return "<function_call" in response or _has_json_tool_pattern(response)
     elif tool_format == ToolFormat.XML_WRAPPED:
@@ -66,6 +67,7 @@ def detect_tool_calls(response: str, model_name: Optional[str] = None) -> bool:
             "```tool_call" in response,  # Add support for tool_call blocks
             "tool_call:" in response,  # Add support for Gemma 3 style
             "<|tool_call|>" in response,
+            ("|tool_call|" in response and "{" in response),  # Support bare |tool_call| but require JSON context
             "<function_call" in response,
             "<tool_call>" in response,
             _has_json_tool_pattern(response),
@@ -284,18 +286,23 @@ def _parse_tool_code(response: str) -> List[ToolCall]:
 
 
 def _parse_special_token(response: str) -> List[ToolCall]:
-    """Parse <|tool_call|> format with robust fallback."""
+    """Parse <|tool_call|> and |tool_call| formats with robust fallback."""
     tool_calls = []
-    
+
     # First, find all tool call positions to avoid duplicates from overlapping patterns
     all_matches = []
-    
-    # Strategy 1: Look for properly closed tags (more flexible with whitespace)
+
+    # Strategy 1a: Look for properly closed tags with angle brackets (more flexible with whitespace)
     pattern_with_close = r'<\|tool_call\|>\s*(.*?)\s*</\|tool_call\|>'
     for match in re.finditer(pattern_with_close, response, re.DOTALL | re.IGNORECASE):
         all_matches.append((match.start(), match.end(), match.group(1).strip()))
+
+    # Strategy 1b: Look for properly closed tags WITHOUT angle brackets
+    pattern_bare_close = r'\|tool_call\|\s*(.*?)\s*\|/tool_call\|'
+    for match in re.finditer(pattern_bare_close, response, re.DOTALL | re.IGNORECASE):
+        all_matches.append((match.start(), match.end(), match.group(1).strip()))
     
-    # Strategy 2: Look for opening tags followed by valid JSON (no closing tag) - more flexible
+    # Strategy 2a: Look for opening tags followed by valid JSON (no closing tag) - more flexible
     # This handles cases where the JSON might span multiple lines or have various whitespace
     pattern_no_close = r'<\|tool_call\|>\s*(\{(?:[^{}]|(?:\{[^{}]*\}))*\})\s*(?:</\|tool_call\|>|$|\n|<)'
     for match in re.finditer(pattern_no_close, response, re.DOTALL | re.IGNORECASE):
@@ -307,8 +314,20 @@ def _parse_special_token(response: str) -> List[ToolCall]:
                 break
         if not overlaps:
             all_matches.append((match.start(), match.end(), match.group(1).strip()))
+
+    # Strategy 2b: Look for bare opening tags followed by valid JSON (no closing tag)
+    pattern_bare_no_close = r'\|tool_call\|\s*(\{(?:[^{}]|(?:\{[^{}]*\}))*\})\s*(?:\|/tool_call\||$|\n|\|)'
+    for match in re.finditer(pattern_bare_no_close, response, re.DOTALL | re.IGNORECASE):
+        # Check if this match overlaps with any closed tag match
+        overlaps = False
+        for closed_start, closed_end, _ in all_matches:
+            if match.start() >= closed_start and match.start() < closed_end:
+                overlaps = True
+                break
+        if not overlaps:
+            all_matches.append((match.start(), match.end(), match.group(1).strip()))
     
-    # Strategy 3: Ultra-robust pattern - just find start tag + JSON, ignore ending completely
+    # Strategy 3a: Ultra-robust pattern - just find start tag + JSON, ignore ending completely
     # This is the most important pattern - prioritize start tag detection and valid JSON
     pattern_start_json = r'<\|tool_call\|>\s*(\{[^<]*?\})'
     for match in re.finditer(pattern_start_json, response, re.DOTALL | re.IGNORECASE):
@@ -321,14 +340,45 @@ def _parse_special_token(response: str) -> List[ToolCall]:
         if not overlaps:
             json_candidate = match.group(1).strip()
             # Basic validation that it looks like JSON and contains tool structure
-            if (json_candidate.startswith('{') and json_candidate.endswith('}') and 
+            if (json_candidate.startswith('{') and json_candidate.endswith('}') and
+                ('"name"' in json_candidate or '"function"' in json_candidate)):
+                all_matches.append((match.start(), match.end(), json_candidate))
+
+    # Strategy 3b: Ultra-robust pattern for bare format - just find start tag + JSON
+    pattern_bare_start_json = r'\|tool_call\|\s*(\{[^|]*?\})'
+    for match in re.finditer(pattern_bare_start_json, response, re.DOTALL | re.IGNORECASE):
+        # Check if this match overlaps with any previous matches
+        overlaps = False
+        for prev_start, prev_end, _ in all_matches:
+            if match.start() >= prev_start and match.start() < prev_end:
+                overlaps = True
+                break
+        if not overlaps:
+            json_candidate = match.group(1).strip()
+            # Basic validation that it looks like JSON and contains tool structure
+            if (json_candidate.startswith('{') and json_candidate.endswith('}') and
                 ('"name"' in json_candidate or '"function"' in json_candidate)):
                 all_matches.append((match.start(), match.end(), json_candidate))
     
-    # Strategy 4: Even more flexible pattern to catch edge cases
+    # Strategy 4a: Even more flexible pattern to catch edge cases
     # Look for the opening tag followed by anything that looks like JSON until we hit a logical end
     pattern_flexible = r'<\|tool_call\|>\s*(\{[^<]*?\})\s*(?:</\|tool_call\|>|\|>|\n\s*\n|\[context|\n\s*<|\Z)'
     for match in re.finditer(pattern_flexible, response, re.DOTALL | re.IGNORECASE):
+        # Check if this match overlaps with any previous matches
+        overlaps = False
+        for prev_start, prev_end, _ in all_matches:
+            if match.start() >= prev_start and match.start() < prev_end:
+                overlaps = True
+                break
+        if not overlaps:
+            json_candidate = match.group(1).strip()
+            # Basic validation that it looks like JSON
+            if json_candidate.startswith('{') and json_candidate.endswith('}'):
+                all_matches.append((match.start(), match.end(), json_candidate))
+
+    # Strategy 4b: Even more flexible pattern for bare format to catch edge cases
+    pattern_bare_flexible = r'\|tool_call\|\s*(\{[^|]*?\})\s*(?:\|/tool_call\||\|>|\n\s*\n|\[context|\n\s*\||\Z)'
+    for match in re.finditer(pattern_bare_flexible, response, re.DOTALL | re.IGNORECASE):
         # Check if this match overlaps with any previous matches
         overlaps = False
         for prev_start, prev_end, _ in all_matches:

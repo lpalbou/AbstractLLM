@@ -43,7 +43,13 @@
       "Read(//tmp/**)",
       "Bash(zcat:*)",
       "Bash(gzip:*)",
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "Read(//Users/albou/projects/promptons/promptons_registry/**)",
+      "Bash(PYTHONPATH=/Users/albou/projects/abstractllm python -c:*)",
+      "Bash(PYTHONPATH=/Users/albou/projects/abstractllm python -m abstractllm.providers.lmstudio_provider)",
+      "WebFetch(domain:lmstudio.ai)",
+      "WebFetch(domain:medium.com)",
+      "WebFetch(domain:github.com)"
     ],
     "deny": []
   },

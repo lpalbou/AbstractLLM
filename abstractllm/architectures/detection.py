@@ -54,7 +54,7 @@ def _normalize_model_name(model_name: str) -> str:
     """Normalize model name for matching."""
     # Remove common prefixes
     name = model_name.lower()
-    for prefix in ["mlx-community/", "huggingface/", "ollama/", "local/"]:
+    for prefix in ["mlx-community/", "huggingface/", "ollama/", "local/", "qwen/"]:
         if name.startswith(prefix):
             name = name[len(prefix):]
     
@@ -65,6 +65,11 @@ def _normalize_model_name(model_name: str) -> str:
         parts = name.split(":", 1)
         if len(parts) == 2:
             name = f"{parts[0]}-{parts[1]}"
+
+    # Special case for qwen3-next pattern
+    # Map "qwen3-next-80b" -> "qwen3-next-80b-a3b" to match capabilities JSON
+    if name.startswith("qwen3-next") and not name.endswith("-a3b"):
+        name = name + "-a3b"
     
     # Remove file extensions and quantization suffixes ONLY
     # Keep version numbers like 3.5

@@ -2,7 +2,6 @@
 Utility functions and classes for AbstractLLM.
 """
 
-from transformers import AutoTokenizer
 from typing import Optional, Dict, Any, List
 import logging
 from datetime import datetime
@@ -11,40 +10,65 @@ import platform
 logger = logging.getLogger(__name__)
 
 class TokenCounter:
-    """Simple token counter using transformers AutoTokenizer."""
-    
+    """Token counter with offline-first approach and lazy loading."""
+
     _tokenizers = {}  # Cache tokenizers by model name
-    
+
     @classmethod
     def count_tokens(cls, text: str, model_name: Optional[str] = None) -> int:
         """
         Count tokens in text using the appropriate tokenizer.
-        
+
         Args:
             text: Text to count tokens for
-            model_name: Model name to use for tokenizer. If None, uses a default.
-            
+            model_name: Model name to use for tokenizer. If None, uses estimation.
+
         Returns:
             Number of tokens
         """
         if not text:
             return 0
-        
+
         # Ensure text is a string
         if not isinstance(text, str):
             text = str(text)
-            
-        # Use default tokenizer if no model specified
+
+        # Fast estimation for offline use (no network calls)
         if model_name is None:
-            model_name = "Qwen/Qwen1.5-7B"
-        
-        # Get or create tokenizer
-        if model_name not in cls._tokenizers:
-            cls._tokenizers[model_name] = AutoTokenizer.from_pretrained(model_name)
-            logger.debug(f"Loaded tokenizer for {model_name}")
-        
-        tokenizer = cls._tokenizers[model_name]
-        return len(tokenizer.encode(text))
+            return cls._estimate_tokens(text)
+
+        # Try to use cached tokenizer first
+        if model_name in cls._tokenizers:
+            tokenizer = cls._tokenizers[model_name]
+            return len(tokenizer.encode(text))
+
+        # Try to load tokenizer from local cache only (no downloads)
+        try:
+            # Only import when needed and try local-only
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                local_files_only=True  # NEVER download from internet
+            )
+            cls._tokenizers[model_name] = tokenizer
+            logger.debug(f"Loaded local tokenizer for {model_name}")
+            return len(tokenizer.encode(text))
+        except Exception as e:
+            logger.debug(f"Local tokenizer not available for {model_name}, using estimation: {e}")
+            # Fall back to estimation if tokenizer not available locally
+            return cls._estimate_tokens(text)
+
+    @classmethod
+    def _estimate_tokens(cls, text: str) -> int:
+        """
+        Estimate token count without any network calls.
+
+        Uses a simple heuristic: ~4 characters per token for most languages.
+        This is conservative and works offline.
+        """
+        # Simple estimation: average of ~4 characters per token
+        # This is conservative and works for most languages
+        return max(1, len(text) // 4)
 
 
 def get_session_stats(session) -> Dict[str, Any]:

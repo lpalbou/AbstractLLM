@@ -13,7 +13,7 @@ Key Features:
 
 import re
 from enum import Enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
@@ -42,7 +42,7 @@ class FactCategory(Enum):
 
 @dataclass
 class SemanticFact:
-    """Enhanced fact with ontological grounding"""
+    """Enhanced fact with ontological grounding, aggregation support, and provenance tracking"""
     subject: str
     predicate: str
     object: str
@@ -52,10 +52,19 @@ class SemanticFact:
     context: str
     extraction_method: str = "llm_guided"
     timestamp: str = None
+    usage_count: int = 1  # Start at 1, not 0 - tracks how many times this fact was encountered
+    importance: float = None  # Derived from confidence and usage_count
+    provenance: List[str] = field(default_factory=list)  # List of interaction IDs where this fact was encountered
 
     def __post_init__(self):
         if self.timestamp is None:
             self.timestamp = datetime.now().isoformat()
+        if self.importance is None:
+            self.importance = self.confidence  # Initial importance equals confidence
+
+        # Normalize subject and object to canonical forms
+        self.subject = self._normalize_canonical_form(self.subject)
+        self.object = self._normalize_canonical_form(self.object)
 
     def to_rdf_triple(self) -> str:
         """Convert to RDF triple format"""
@@ -72,6 +81,89 @@ class SemanticFact:
         normalized = re.sub(r'[^\w\-]', '', normalized)
         return normalized
 
+    def _normalize_canonical_form(self, text: str) -> str:
+        """Normalize text to canonical form for consistency and deduplication"""
+        # Remove common articles and normalize case
+        normalized = re.sub(r'^(the|a|an)\s+', '', text.strip(), flags=re.IGNORECASE)
+
+        # Handle common technology name variations
+        tech_mappings = {
+            r'\bML\b': 'machine learning',
+            r'\bAI\b': 'artificial intelligence',
+            r'\bNLP\b': 'natural language processing',
+            r'\bLLM\b': 'large language model',
+            r'\bGPT\b': 'Generative Pre-trained Transformer',
+            r'\bAPI\b': 'Application Programming Interface',
+            r'\bUI\b': 'user interface',
+            r'\bUX\b': 'user experience'
+        }
+
+        for pattern, replacement in tech_mappings.items():
+            normalized = re.sub(pattern, replacement, normalized, flags=re.IGNORECASE)
+
+        # Normalize whitespace and case
+        normalized = ' '.join(normalized.split()).lower()
+
+        # Handle possessive forms
+        normalized = re.sub(r"'s\b", '', normalized)
+
+        return normalized.strip()
+
+    def create_fact_key(self) -> str:
+        """Create a unique key for this fact for deduplication purposes"""
+        # Use normalized subject, predicate, and object for key
+        return f"{self.subject}|{self.predicate}|{self.object}|{self.ontology.value}"
+
+    def merge_with(self, other_fact: 'SemanticFact') -> 'SemanticFact':
+        """Merge this fact with another duplicate fact, combining their properties and provenance"""
+        if self.create_fact_key() != other_fact.create_fact_key():
+            raise ValueError("Cannot merge facts with different keys")
+
+        # Combine usage counts
+        new_usage_count = self.usage_count + other_fact.usage_count
+
+        # Average confidences weighted by usage count
+        total_confidence = (self.confidence * self.usage_count +
+                          other_fact.confidence * other_fact.usage_count)
+        new_confidence = total_confidence / new_usage_count
+
+        # Calculate new importance (confidence * log(usage_count + 1))
+        import math
+        new_importance = new_confidence * math.log(new_usage_count + 1)
+
+        # Use the more recent context (longer is usually more informative)
+        new_context = other_fact.context if len(other_fact.context) > len(self.context) else self.context
+
+        # Keep the earlier timestamp
+        new_timestamp = min(self.timestamp, other_fact.timestamp)
+
+        # Combine provenance lists (remove duplicates while preserving order)
+        combined_provenance = list(self.provenance)
+        for prov_id in other_fact.provenance:
+            if prov_id not in combined_provenance:
+                combined_provenance.append(prov_id)
+
+        # Create merged fact
+        return SemanticFact(
+            subject=self.subject,
+            predicate=self.predicate,
+            object=self.object,
+            category=self.category,
+            ontology=self.ontology,
+            confidence=new_confidence,
+            context=new_context,
+            extraction_method=self.extraction_method,
+            timestamp=new_timestamp,
+            usage_count=new_usage_count,
+            importance=new_importance,
+            provenance=combined_provenance
+        )
+
+    def update_importance(self):
+        """Update importance based on current confidence and usage count"""
+        import math
+        self.importance = self.confidence * math.log(self.usage_count + 1)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for storage/serialization"""
         return {
@@ -84,7 +176,11 @@ class SemanticFact:
             "context": self.context,
             "extraction_method": self.extraction_method,
             "timestamp": self.timestamp,
-            "rdf_triple": self.to_rdf_triple()
+            "usage_count": self.usage_count,
+            "importance": self.importance,
+            "provenance": self.provenance,
+            "rdf_triple": self.to_rdf_triple(),
+            "fact_key": self.create_fact_key()
         }
 
     def __str__(self) -> str:
@@ -158,25 +254,51 @@ class FactsExtractor(BaseCognitive):
         self.ontology_predicates = self._load_ontology_predicates()
         self._load_prompt_templates()
 
+        # Fact registry for deduplication and aggregation
+        self.fact_registry: Dict[str, SemanticFact] = {}  # key -> fact mapping
+
     def _load_ontology_predicates(self) -> Dict[OntologyType, List[str]]:
         """Load predicate patterns from semantic models framework"""
         return {
             OntologyType.DCTERMS: [
+                # Core Dublin Core predicates
                 "creator", "title", "description", "created", "modified", "publisher",
                 "isPartOf", "hasPart", "references", "isReferencedBy",
                 "requires", "isRequiredBy", "replaces", "isReplacedBy",
-                "subject", "language", "format", "rights", "license"
+                "subject", "language", "format", "rights", "license",
+
+                # Extended predicates for knowledge relationships
+                "enables", "allows", "causes", "leads", "results",
+                "temporal", "precedes", "follows", "during",
+                "influences", "affects", "impacts", "determines",
+                "originates", "derives", "evolved", "developed"
             ],
             OntologyType.SCHEMA: [
+                # Core Schema.org predicates
                 "name", "description", "author", "about", "mentions",
                 "sameAs", "oppositeOf", "member", "memberOf",
                 "teaches", "learns", "knows", "worksFor",
-                "startDate", "endDate", "location", "organizer"
+                "startDate", "endDate", "location", "organizer",
+
+                # Extended predicates for knowledge representation
+                "enables", "allows", "uses", "implements", "supports",
+                "requires", "provides", "contains", "includes",
+                "specializedFor", "optimizedFor", "designedFor",
+                "foundationalTo", "basedOn", "derivedFrom",
+                "exhibits", "demonstrates", "achieves", "performs",
+                "processes", "transforms", "generates", "produces",
+                "facilitates", "improves", "enhances", "extends"
             ],
             OntologyType.SKOS: [
+                # Core SKOS predicates for concept relationships
                 "broader", "narrower", "related", "exactMatch", "closeMatch",
                 "prefLabel", "altLabel", "definition", "note",
-                "inScheme", "topConceptOf", "hasTopConcept"
+                "inScheme", "topConceptOf", "hasTopConcept",
+
+                # Extended predicates for conceptual knowledge
+                "similarTo", "differFrom", "contrastsWith", "complementTo",
+                "subsumes", "encompassed", "instanceOf", "typeOf",
+                "categoryOf", "classifiedAs", "exemplifiedBy", "represents"
             ],
             OntologyType.CITO: [
                 "supports", "isSupportedBy", "disagreesWith", "isDisagreedWithBy",
@@ -204,7 +326,7 @@ class FactsExtractor(BaseCognitive):
         }
 
     def _process(self, content: str, context_type: str = "general",
-                max_facts: int = 10) -> CategorizedFacts:
+                max_facts: int = 10, interaction_id: str = None) -> CategorizedFacts:
         """
         Core fact extraction processing
 
@@ -230,25 +352,28 @@ class FactsExtractor(BaseCognitive):
         # Generate extraction
         response = self.session.generate(prompt_text)
 
-        # Parse response into facts
-        facts = self._parse_extracted_facts(response.content, content)
+        # Parse response into facts with provenance
+        facts = self._parse_extracted_facts(response.content, content, interaction_id)
+
+        # Aggregate facts (handle duplicates and merge)
+        aggregated_facts = self._aggregate_facts(facts)
 
         # Categorize facts
-        categorized = self._categorize_facts(facts)
+        categorized = self._categorize_facts(aggregated_facts)
 
         extraction_time = time.time() - start_time
 
         return CategorizedFacts(
-            working=[f for f in facts if f.category == FactCategory.WORKING],
-            episodic=[f for f in facts if f.category == FactCategory.EPISODIC],
-            semantic=[f for f in facts if f.category == FactCategory.SEMANTIC],
-            total_extracted=len(facts),
+            working=[f for f in categorized if f.category == FactCategory.WORKING],
+            episodic=[f for f in categorized if f.category == FactCategory.EPISODIC],
+            semantic=[f for f in categorized if f.category == FactCategory.SEMANTIC],
+            total_extracted=len(categorized),
             extraction_time=extraction_time,
             source_context=content[:200] + "..." if len(content) > 200 else content
         )
 
     def extract_facts(self, content: str, context_type: str = "general",
-                     max_facts: int = 10) -> CategorizedFacts:
+                     max_facts: int = 10, interaction_id: str = None) -> CategorizedFacts:
         """
         Extract semantic triplets from content
 
@@ -263,9 +388,9 @@ class FactsExtractor(BaseCognitive):
         Raises:
             CognitiveError: If extraction fails
         """
-        return self.process(content, context_type, max_facts)
+        return self.process(content, context_type, max_facts, interaction_id)
 
-    def _parse_extracted_facts(self, response: str, original_content: str) -> List[SemanticFact]:
+    def _parse_extracted_facts(self, response: str, original_content: str, interaction_id: str = None) -> List[SemanticFact]:
         """Parse LLM response into structured facts"""
         facts = []
 
@@ -300,6 +425,9 @@ class FactsExtractor(BaseCognitive):
                     except ValueError:
                         continue
 
+                    # Create provenance list with interaction ID if provided
+                    provenance = [interaction_id] if interaction_id else []
+
                     fact = SemanticFact(
                         subject=subject,
                         predicate=predicate,
@@ -307,7 +435,8 @@ class FactsExtractor(BaseCognitive):
                         category=cat_type,
                         ontology=ont_type,
                         confidence=conf_value,
-                        context=original_content[:200] + "..."
+                        context=original_content[:200] + "...",
+                        provenance=provenance
                     )
                     facts.append(fact)
 
@@ -322,6 +451,34 @@ class FactsExtractor(BaseCognitive):
         # Remove namespace prefix if present
         clean_predicate = predicate.split(':')[-1]
         return clean_predicate in valid_predicates
+
+    def _aggregate_facts(self, new_facts: List[SemanticFact]) -> List[SemanticFact]:
+        """
+        Aggregate facts by checking for duplicates and merging with existing facts
+
+        Args:
+            new_facts: List of newly extracted facts
+
+        Returns:
+            List of aggregated facts (new + updated existing facts)
+        """
+        aggregated_facts = []
+
+        for fact in new_facts:
+            fact_key = fact.create_fact_key()
+
+            if fact_key in self.fact_registry:
+                # Duplicate found - merge with existing fact
+                existing_fact = self.fact_registry[fact_key]
+                merged_fact = existing_fact.merge_with(fact)
+                self.fact_registry[fact_key] = merged_fact
+                aggregated_facts.append(merged_fact)
+            else:
+                # New fact - add to registry
+                self.fact_registry[fact_key] = fact
+                aggregated_facts.append(fact)
+
+        return aggregated_facts
 
     def _categorize_facts(self, facts: List[SemanticFact]) -> List[SemanticFact]:
         """Apply additional categorization logic and validation"""
@@ -399,12 +556,13 @@ class FactsExtractor(BaseCognitive):
             for i, fact in enumerate(categorized_facts.all_facts())
         ]
 
-    def extract_interaction_facts(self, interaction_context: Dict[str, Any]) -> CategorizedFacts:
+    def extract_interaction_facts(self, interaction_context: Dict[str, Any], interaction_id: str = None) -> CategorizedFacts:
         """
         Extract facts specifically from AbstractLLM interaction context
 
         Args:
             interaction_context: Full interaction context dictionary
+            interaction_id: Unique identifier for this interaction (for provenance tracking)
 
         Returns:
             CategorizedFacts specialized for interaction analysis
@@ -426,7 +584,28 @@ class FactsExtractor(BaseCognitive):
 
         content = "\n\n".join(content_parts)
 
-        return self.extract_facts(content, context_type="interaction", max_facts=12)
+        # Extract facts with provenance tracking
+        try:
+            result = self.extract_facts(content, context_type="interaction", max_facts=12, interaction_id=interaction_id)
+            # Ensure we always return a valid CategorizedFacts object
+            if result is None:
+                # Create empty result if extraction failed
+                return CategorizedFacts(
+                    working=[], episodic=[], semantic=[],
+                    total_extracted=0, extraction_time=0.0,
+                    source_context=content[:200] + "..." if len(content) > 200 else content
+                )
+            return result
+        except Exception as e:
+            # Log error and return empty result instead of None
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Fact extraction failed: {e}")
+            return CategorizedFacts(
+                working=[], episodic=[], semantic=[],
+                total_extracted=0, extraction_time=0.0,
+                source_context=content[:200] + "..." if len(content) > 200 else content
+            )
 
     def get_extraction_stats(self) -> Dict[str, Any]:
         """Get statistics about fact extraction performance"""
