@@ -3723,109 +3723,115 @@ class Session:
 
                 break  # Exit ReAct loop
 
-            # Execute tool calls (Observe phase)
-            logger.info(f"ReAct Cycle {cycle_count}: Executing {len(tool_calls)} tool calls")
+            # Execute tool calls one-by-one (proper ReAct: Act → Observe → Think pattern)
+            # Only execute the FIRST tool call, then return to LLM for observation/thinking
+            if len(tool_calls) > 1:
+                logger.info(f"ReAct Cycle {cycle_count}: Multiple tools detected ({len(tool_calls)}), executing first one only for proper ReAct pattern")
+            else:
+                logger.info(f"ReAct Cycle {cycle_count}: Executing single tool call")
 
-            for tool_call in tool_calls:
-                # Display tool execution (single line format without initial execution message)
-                args_str = ""
-                if hasattr(tool_call, 'arguments') and tool_call.arguments:
-                    args_parts = []
-                    for key, value in tool_call.arguments.items():
-                        if isinstance(value, str):
-                            args_parts.append(f"{key}={repr(value)}")
-                        else:
-                            args_parts.append(f"{key}={value}")
-                    args_str = ", ".join(args_parts)
+            # Take only the first tool call for proper Think-Act-Observe pattern
+            tool_call = tool_calls[0]
 
-                # Display tool call start (without success indicator yet)
-                tool_start_message = f"\n🔧 Tool Call : {tool_call.name}({args_str})" if args_str else f"\n🔧 Tool Call : {tool_call.name}()"
+            # Display tool execution (single line format without initial execution message)
+            args_str = ""
+            if hasattr(tool_call, 'arguments') and tool_call.arguments:
+                args_parts = []
+                for key, value in tool_call.arguments.items():
+                    if isinstance(value, str):
+                        args_parts.append(f"{key}={repr(value)}")
+                    else:
+                        args_parts.append(f"{key}={value}")
+                args_str = ", ".join(args_parts)
 
-                yield GenerateResponse(
-                    content=tool_start_message,
-                    raw_response={"type": "tool_execution_start", "tool": tool_call.name, "cycle": cycle_count},
-                    model=None,
-                    usage=None
+            # Display tool call start (without success indicator yet)
+            tool_start_message = f"\n🔧 Tool Call : {tool_call.name}({args_str})" if args_str else f"\n🔧 Tool Call : {tool_call.name}()"
+
+            yield GenerateResponse(
+                content=tool_start_message,
+                raw_response={"type": "tool_execution_start", "tool": tool_call.name, "cycle": cycle_count},
+                model=None,
+                usage=None
+            )
+
+            # Record action in scratchpad (ACT phase)
+            scratchpad_action_id = None
+            if hasattr(self, 'scratchpad') and self.scratchpad:
+                scratchpad_action_id = self.scratchpad.add_action(
+                    tool_name=tool_call.name,
+                    tool_args=getattr(tool_call, 'arguments', {}),
+                    reasoning=f"Executing {tool_call.name} to gather information",
+                    metadata={"cycle": cycle_count}
                 )
 
-                # Record action in scratchpad (ACT phase)
-                scratchpad_action_id = None
-                if hasattr(self, 'scratchpad') and self.scratchpad:
-                    scratchpad_action_id = self.scratchpad.add_action(
-                        tool_name=tool_call.name,
-                        tool_args=getattr(tool_call, 'arguments', {}),
-                        reasoning=f"Executing {tool_call.name} to gather information",
-                        metadata={"cycle": cycle_count}
+            # Execute the tool
+            try:
+                tool_result = self.execute_tool_call(tool_call, tool_functions)
+
+                # Update ReAct cycle with observation
+                if hasattr(self, 'current_cycle') and self.current_cycle:
+                    observation_content = tool_result.get('output', tool_result.get('error', str(tool_result)))
+                    self.current_cycle.add_observation(
+                        action_id=getattr(tool_call, 'id', f"action_{cycle_count}"),
+                        content=observation_content,
+                        success=tool_result.get('success', True)
                     )
 
-                # Execute the tool
-                try:
-                    tool_result = self.execute_tool_call(tool_call, tool_functions)
-
-                    # Update ReAct cycle with observation
-                    if hasattr(self, 'current_cycle') and self.current_cycle:
-                        observation_content = tool_result.get('output', tool_result.get('error', str(tool_result)))
-                        self.current_cycle.add_observation(
-                            action_id=getattr(tool_call, 'id', f"action_{cycle_count}"),
-                            content=observation_content,
-                            success=tool_result.get('success', True)
-                        )
-
-                    # Store tool results in scratchpad (complete verbatim)
-                    tool_output = tool_result.get('output', '')
-                    if tool_output:
-                        # Add complete tool result to scratchpad (OBSERVE phase - verbatim)
-                        if hasattr(self, 'scratchpad') and self.scratchpad and scratchpad_action_id:
-                            self.scratchpad.add_observation(
-                                action_id=scratchpad_action_id,
-                                result=tool_output,  # Complete verbatim result
-                                success=tool_result.get('success', True),
-                                execution_time=tool_result.get('execution_time', 0.0)
-                            )
-
-                        # Add tool result to conversation for LLM context (but not yielded to user)
-                        self.add_message(
-                            MessageRole.TOOL,
-                            content=str(tool_output),
-                            name=tool_call.name,
-                            metadata={
-                                "tool_call_id": getattr(tool_call, 'id', ''),
-                                "tool_name": tool_call.name,
-                                "success": tool_result.get('success', True),
-                                "cycle": cycle_count
-                            }
-                        )
-
-                        # Yield success indicator to complete the tool call line
-                        yield GenerateResponse(
-                            content=" ✓\n",
-                            raw_response={"type": "tool_completed", "tool": tool_call.name, "cycle": cycle_count, "success": True},
-                            model=None,
-                            usage=None,
-                            react_cycle_id=interaction_id  # Store interaction_id for backward compatibility
-                        )
-
-                except Exception as e:
-                    logger.warning(f"Tool execution failed: {e}")
-                    error_msg = f"Tool execution failed: {str(e)}"
-
-                    # Store complete error in scratchpad (verbatim)
+                # Store tool results in scratchpad (complete verbatim)
+                tool_output = tool_result.get('output', '')
+                if tool_output:
+                    # Add complete tool result to scratchpad (OBSERVE phase - verbatim)
                     if hasattr(self, 'scratchpad') and self.scratchpad and scratchpad_action_id:
                         self.scratchpad.add_observation(
                             action_id=scratchpad_action_id,
-                            result=error_msg,  # Complete error details
-                            success=False,
-                            execution_time=0.0
+                            result=tool_output,  # Complete verbatim result
+                            success=tool_result.get('success', True),
+                            execution_time=tool_result.get('execution_time', 0.0)
                         )
 
-                    # Yield error indicator to complete the tool call line
+                    # Add tool result to conversation for LLM context (but not yielded to user)
+                    self.add_message(
+                        MessageRole.TOOL,
+                        content=str(tool_output),
+                        name=tool_call.name,
+                        metadata={
+                            "tool_call_id": getattr(tool_call, 'id', ''),
+                            "tool_name": tool_call.name,
+                            "success": tool_result.get('success', True),
+                            "cycle": cycle_count
+                        }
+                    )
+
+                    # Yield success indicator to complete the tool call line
                     yield GenerateResponse(
-                        content=" ❌\n",
-                        raw_response={"type": "tool_error", "tool": tool_call.name, "cycle": cycle_count, "success": False},
+                        content=" ✓\n",
+                        raw_response={"type": "tool_completed", "tool": tool_call.name, "cycle": cycle_count, "success": True},
                         model=None,
                         usage=None,
-                        react_cycle_id=cycle_id  # Use unified interaction ID
+                        react_cycle_id=interaction_id  # Store interaction_id for backward compatibility
                     )
+
+            except Exception as e:
+                logger.warning(f"Tool execution failed: {e}")
+                error_msg = f"Tool execution failed: {str(e)}"
+
+                # Store complete error in scratchpad (verbatim)
+                if hasattr(self, 'scratchpad') and self.scratchpad and scratchpad_action_id:
+                    self.scratchpad.add_observation(
+                        action_id=scratchpad_action_id,
+                        result=error_msg,  # Complete error details
+                        success=False,
+                        execution_time=0.0
+                    )
+
+                # Yield error indicator to complete the tool call line
+                yield GenerateResponse(
+                    content=" ❌\n",
+                    raw_response={"type": "tool_error", "tool": tool_call.name, "cycle": cycle_count, "success": False},
+                    model=None,
+                    usage=None,
+                    react_cycle_id=interaction_id  # Use unified interaction ID
+                )
 
             # Prepare for next cycle (if any)
             if cycle_count < max_tool_calls:

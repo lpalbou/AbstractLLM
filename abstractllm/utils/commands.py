@@ -1170,72 +1170,81 @@ class CommandProcessor:
         print(f"• Use {colorize('/facts', Colors.BRIGHT_BLUE)} to see the knowledge these links connect")
 
     def _show_interaction_scratchpad(self, interaction_id: str) -> None:
-        """Show VERBATIM Think → Act → Observe cycles - COMPLETELY REWRITTEN."""
+        """Show Think → Act → Observe cycles - MINIMALIST IMPLEMENTATION."""
         from pathlib import Path
         import json
         from abstractllm.utils.display import display_error, Colors
 
-        # Convert interaction_id to cycle_id format for scratchpad search
+        # Convert ID to standard format
         if interaction_id.startswith('cycle_'):
             cycle_id = interaction_id
         else:
             cycle_id = f"cycle_{interaction_id}"
 
-        # Find the scratchpad file containing this cycle_id
+        short_id = cycle_id.replace('cycle_', '')
+
+        # Find scratchpad entries
         base_dir = Path.home() / ".abstractllm" / "sessions"
         scratchpad_entries = []
+        cycle_data = None
 
         if base_dir.exists():
             for session_dir in base_dir.iterdir():
                 if session_dir.is_dir():
+                    # Get scratchpad entries
                     scratchpad_dir = session_dir / "scratchpads"
                     if scratchpad_dir.exists():
                         for scratchpad_file in scratchpad_dir.glob("scratchpad_*.json"):
                             try:
                                 with open(scratchpad_file, 'r') as f:
-                                    scratchpad_data = json.load(f)
-
-                                # Extract entries for this cycle_id
-                                entries = scratchpad_data.get('entries', [])
-                                cycle_entries = [e for e in entries if e.get('cycle_id') == cycle_id]
-
-                                if cycle_entries:
-                                    scratchpad_entries = cycle_entries
+                                    data = json.load(f)
+                                entries = [e for e in data.get('entries', []) if e.get('cycle_id') == cycle_id]
+                                if entries:
+                                    scratchpad_entries = entries
                                     break
                             except Exception:
                                 continue
+
+                    # Get cycle data
+                    interactions_dir = session_dir / "interactions"
+                    if interactions_dir.exists():
+                        for interaction_dir in interactions_dir.iterdir():
+                            if interaction_dir.is_dir() and cycle_id in interaction_dir.name:
+                                cycle_files = list(interaction_dir.glob("cycle_*.json"))
+                                if cycle_files:
+                                    try:
+                                        with open(cycle_files[0], 'r') as f:
+                                            cycle_data = json.load(f)
+                                            break
+                                    except Exception:
+                                        continue
+
                     if scratchpad_entries:
                         break
 
         if not scratchpad_entries:
-            display_error(f"No ReAct scratchpad found for: {interaction_id}")
+            display_error(f"No scratchpad found for: {short_id}")
             return
 
-        # Display the VERBATIM Think → Act → Observe cycles
-        short_id = cycle_id.replace('cycle_', '')
+        # Get query
         query = scratchpad_entries[0].get('metadata', {}).get('query', 'Unknown query') if scratchpad_entries else 'Unknown'
 
-        print(f"\n{Colors.BRIGHT_CYAN}🧠 VERBATIM ReAct Scratchpad - {short_id}{Colors.RESET}")
+        # Display header
+        print(f"\n{Colors.BRIGHT_CYAN}🧠 ReAct Scratchpad - {short_id}{Colors.RESET}")
         print(f"{Colors.CYAN}{'═' * 60}{Colors.RESET}")
         print(f"\n{Colors.BRIGHT_BLUE}📋 Query: {Colors.WHITE}{query}{Colors.RESET}")
 
-        # Group and display by phase
-        current_iteration = None
+        # Show warning about verbatim content
+        has_tools = cycle_data and 'tools_executed' in cycle_data
+        print(f"{Colors.DIM}Note: This shows available reasoning data. True LLM verbatim output is not stored.{Colors.RESET}")
 
+        # Display phases
         for entry in scratchpad_entries:
             phase = entry.get('phase', 'unknown')
             content = entry.get('content', '')
-            iteration = entry.get('iteration', 0)
 
-            # Show iteration header if it changes
-            if current_iteration != iteration:
-                current_iteration = iteration
-                if iteration > 0:
-                    print(f"\n{Colors.BRIGHT_WHITE}═══ Iteration {iteration + 1} ═══{Colors.RESET}")
-
-            # Display based on phase
             if phase == 'cycle_start':
-                print(f"\n{Colors.BRIGHT_GREEN}🚀 CYCLE START{Colors.RESET}")
+                print(f"\n{Colors.BRIGHT_GREEN}🚀 START{Colors.RESET}")
                 print(f"{Colors.GREEN}{content}{Colors.RESET}")
 
             elif phase == 'thinking':
@@ -1244,46 +1253,60 @@ class CommandProcessor:
 
             elif phase == 'acting':
                 print(f"\n{Colors.BRIGHT_MAGENTA}⚡ ACT{Colors.RESET}")
-                print(f"{Colors.MAGENTA}{content}{Colors.RESET}")
+                if has_tools:
+                    # Show reconstructed tool calls (not true verbatim)
+                    for tool in cycle_data['tools_executed']:
+                        tool_name = tool.get('name', 'unknown')
+                        tool_args = tool.get('arguments', {})
+                        print(f"{Colors.MAGENTA}Tool: {tool_name}{Colors.RESET}")
+                        if tool_args:
+                            args_str = json.dumps(tool_args, indent=2)
+                            print(f"{Colors.DIM}{args_str}{Colors.RESET}")
+                else:
+                    print(f"{Colors.MAGENTA}{content}{Colors.RESET}")
 
             elif phase == 'observing':
                 print(f"\n{Colors.BRIGHT_BLUE}👁️ OBSERVE{Colors.RESET}")
-                print(f"{Colors.BLUE}{content}{Colors.RESET}")
+                if has_tools:
+                    # Show actual tool results
+                    for tool in cycle_data['tools_executed']:
+                        result = tool.get('result', 'No result')
+                        print(f"{Colors.BLUE}{result}{Colors.RESET}")
+                        exec_time = tool.get('execution_time')
+                        if exec_time:
+                            print(f"{Colors.DIM}⏱️ {exec_time:.3f}s{Colors.RESET}")
+                else:
+                    print(f"{Colors.BLUE}{content}{Colors.RESET}")
+
+            elif phase == 'final_answer':
+                print(f"\n{Colors.BRIGHT_GREEN}📝 FINAL ANSWER{Colors.RESET}")
+                final_content = cycle_data.get('response_content', content) if cycle_data else content
+                print(f"{Colors.GREEN}{final_content}{Colors.RESET}")
 
             elif phase == 'cycle_complete':
-                print(f"\n{Colors.BRIGHT_GREEN}✅ CYCLE COMPLETE{Colors.RESET}")
+                print(f"\n{Colors.BRIGHT_GREEN}✅ COMPLETE{Colors.RESET}")
                 print(f"{Colors.GREEN}{content}{Colors.RESET}")
 
-            else:
-                print(f"\n{Colors.DIM}📝 {phase.upper()}{Colors.RESET}")
-                print(f"{Colors.DIM}{content}{Colors.RESET}")
-
         print(f"\n{Colors.CYAN}{'═' * 60}{Colors.RESET}")
-        print(f"{Colors.DIM}Total entries: {len(scratchpad_entries)}{Colors.RESET}")
         print()
 
     def _cmd_scratchpad(self, args: List[str]) -> None:
-        """Show reasoning traces for a specific interaction - COMPLETELY REWRITTEN."""
-
-        # If a response ID is provided, show specific interaction scratchpad
+        """Show Think → Act → Observe reasoning cycles - MINIMALIST IMPLEMENTATION."""
         if args:
             interaction_id = args[0]
             self._show_interaction_scratchpad(interaction_id)
-            return
-
-        # Otherwise, show list of recent interactions from file system
-        self._list_recent_interactions()
+        else:
+            self._list_recent_interactions()
 
     def _list_recent_interactions(self) -> None:
-        """List recent interactions from file system - REWRITTEN FROM SCRATCH."""
+        """List recent interactions - MINIMALIST IMPLEMENTATION."""
         from pathlib import Path
         import json
         from abstractllm.utils.display import Colors, colorize
 
-        print(f"\n{colorize('🧠 Recent Interactions', Colors.BRIGHT_CYAN, bold=True)}")
-        print(f"{colorize('─' * 50, Colors.CYAN)}")
+        print(f"\n{colorize('🧠 Recent Scratchpads', Colors.BRIGHT_CYAN)}")
+        print(f"{colorize('─' * 40, Colors.CYAN)}")
 
-        # Find recent interaction files
         base_dir = Path.home() / ".abstractllm" / "sessions"
         interactions = []
 
@@ -1300,32 +1323,24 @@ class CommandProcessor:
                                         with open(context_file, 'r') as f:
                                             context = json.load(f)
                                         interaction_id = context.get('interaction_id', interaction_dir.name)
-                                        short_id = interaction_id.replace('interaction_', '')
+                                        short_id = interaction_id.replace('interaction_', '').replace('cycle_', '')
                                         query = context.get('query', 'Unknown query')
                                         timestamp = context.get('timestamp', '')
-
-                                        interactions.append({
-                                            'id': short_id,
-                                            'query': query,
-                                            'timestamp': timestamp
-                                        })
+                                        interactions.append({'id': short_id, 'query': query, 'timestamp': timestamp})
                                     except Exception:
                                         continue
 
         if not interactions:
-            print(f"{colorize('No interactions found', Colors.DIM)}")
+            print(f"{colorize('No scratchpads found', Colors.DIM)}")
             return
 
-        # Sort by timestamp (most recent first)
+        # Sort and show recent interactions
         interactions.sort(key=lambda x: x['timestamp'], reverse=True)
-
-        # Show recent interactions
-        print(f"{colorize('Recent interactions:', Colors.WHITE)}")
         for i, interaction in enumerate(interactions[:5], 1):
-            query_preview = interaction['query'][:50] + "..." if len(interaction['query']) > 50 else interaction['query']
+            query_preview = interaction['query'][:40] + "..." if len(interaction['query']) > 40 else interaction['query']
             print(f"  {i}. {colorize(interaction['id'], Colors.BRIGHT_BLUE)} - {query_preview}")
 
-        print(f"\n{colorize('Usage:', Colors.DIM)} /scratch <ID> to view details")
+        print(f"\n{colorize('Usage:', Colors.DIM)} /scratch <ID> to view reasoning")
     
     def _cmd_history(self, args: List[str]) -> None:
         """Show command history."""
@@ -2014,248 +2029,6 @@ class CommandProcessor:
                 logger.debug(f"LanceDB facts lookup failed: {e}")
 
         display_info(f"No facts found for interaction {interaction_id}")
-
-    def _cmd_scratchpad_unified(self, args: List[str]) -> None:
-        """Show scratchpad for a specific ReAct cycle."""
-        if not args:
-            # Show list of available scratchpads (existing behavior)
-            self._cmd_scratchpad([])
-            return
-
-        react_id = args[0]
-
-        # Strategy 1: Try ScratchpadManager files in cache first
-        if hasattr(self.session, 'scratchpad') and self.session.scratchpad:
-            try:
-                # Check if this cycle exists in the scratchpad entries
-                for entry in self.session.scratchpad.entries:
-                    if entry.cycle_id == react_id or entry.cycle_id == f"cycle_{react_id}":
-                        # Found matching cycle, display from ScratchpadManager
-                        self._display_scratchpad_from_manager(react_id)
-                        return
-            except Exception as e:
-                logger.debug(f"ScratchpadManager lookup failed: {e}")
-
-        # Strategy 2: Search all scratchpad files in cache directories
-        try:
-            cache_base = Path.home() / ".abstractllm" / "sessions"
-            if cache_base.exists():
-                for session_dir in cache_base.iterdir():
-                    if session_dir.is_dir():
-                        scratchpad_dir = session_dir / "scratchpads"
-                        if scratchpad_dir.exists():
-                            for scratchpad_file in scratchpad_dir.glob("scratchpad_*.json"):
-                                try:
-                                    with open(scratchpad_file, 'r') as f:
-                                        data = json.load(f)
-                                    # Check if this file contains our cycle
-                                    for entry in data.get('entries', []):
-                                        entry_cycle_id = entry.get('cycle_id', '')
-                                        # Try multiple forms: react_id, cycle_react_id, and stripped versions
-                                        if (entry_cycle_id == react_id or 
-                                            entry_cycle_id == f"cycle_{react_id}" or
-                                            entry_cycle_id.replace('cycle_', '') == react_id or
-                                            entry_cycle_id.replace('cycle_', '') == react_id.replace('cycle_', '')):
-                                            self._display_scratchpad_from_file(scratchpad_file, entry_cycle_id)
-                                            return
-                                except Exception as e:
-                                    logger.debug(f"Failed to check scratchpad file {scratchpad_file}: {e}")
-        except Exception as e:
-            logger.debug(f"Cache directory search failed: {e}")
-
-        # Strategy 3: Try LanceDB
-        if hasattr(self.session, 'lance_store') and self.session.lance_store:
-            try:
-                # First try react_cycles table
-                if "react_cycles" in self.session.lance_store.db.table_names():
-                    results = self.session.lance_store.search_react_cycles(react_id, limit=1)
-                    if results:
-                        cycle_data = results[0]
-                        scratchpad_json = cycle_data.get('scratchpad', '{}')
-                    else:
-                        cycle_data = None
-                        scratchpad_json = None
-                else:
-                    # No react_cycles table, look in interactions table
-                    interaction_data = self.session.lance_store.get_interaction_by_id(react_id)
-                    if interaction_data:
-                        context = interaction_data.get('context_verbatim', '')
-                        # Extract and display ReAct reasoning from context
-                        react_reasoning = self._extract_react_reasoning(context)
-                        if react_reasoning:
-                            print(f"\n{colorize(f'{Symbols.BRAIN} ReAct Reasoning Trace', Colors.BRIGHT_CYAN, bold=True)} - {colorize(react_id[:8], Colors.WHITE)}")
-                            print(create_divider(60, "─", Colors.CYAN))
-
-                            for step_num, step in enumerate(react_reasoning, 1):
-                                print(f"\n{colorize(f'Step {step_num}:', Colors.BRIGHT_CYAN)}")
-                                if step.get('thought'):
-                                    print(f"  {colorize('💭 Thought:', Colors.YELLOW)} {step['thought']}")
-                                if step.get('action'):
-                                    print(f"  {colorize('⚡ Action:', Colors.GREEN)} {step['action']}")
-                                if step.get('observation'):
-                                    print(f"  {colorize('👁️ Observation:', Colors.BLUE)} {step['observation']}")
-                                if step.get('knowledge'):
-                                    print(f"  {colorize('🔗 Relevant Knowledge:', Colors.PURPLE)}")
-                                    for fact in step['knowledge'][:3]:  # Show top 3 facts
-                                        print(f"    - {fact}")
-
-                            print(f"\n{create_divider(60, '─', Colors.CYAN)}")
-                            return
-                        else:
-                            display_error(f"No detailed ReAct reasoning found for interaction: {react_id}")
-                            display_info("This interaction has basic reasoning metadata. Use /context command to view full interaction context.")
-                            return
-                    else:
-                        display_error(f"Interaction not found: {react_id}")
-                        return
-
-                if scratchpad_json:
-                    try:
-                        scratchpad = json.loads(scratchpad_json) if scratchpad_json else {}
-                    except json.JSONDecodeError:
-                        scratchpad = {'raw_data': scratchpad_json}
-
-                    if not scratchpad:
-                        display_error(f"Scratchpad not found for ReAct cycle: {react_id}")
-                        return
-
-                    print(f"\n{colorize(f'{Symbols.BRAIN} ReAct Scratchpad', Colors.BRIGHT_CYAN, bold=True)} - {colorize(react_id[:8], Colors.WHITE)}")
-                    print(create_divider(60, "─", Colors.CYAN))
-
-                    # Display scratchpad content
-                    if isinstance(scratchpad, dict):
-                        for key, value in scratchpad.items():
-                            print(f"\n{colorize(f'{key.title()}:', Colors.BRIGHT_BLUE)}")
-                            if isinstance(value, (list, dict)):
-                                print(json.dumps(value, indent=2))
-                            else:
-                                print(str(value))
-                    else:
-                        print(str(scratchpad))
-                    return
-
-            except Exception as e:
-                logger.debug(f"LanceDB scratchpad lookup failed: {e}")
-
-        display_error(f"Scratchpad not found for ReAct cycle: {react_id}")
-
-    def _display_scratchpad_from_manager(self, react_id: str) -> None:
-        """Display scratchpad from ScratchpadManager entries."""
-        try:
-            # Get complete trace for the cycle
-            trace = self.session.scratchpad.get_complete_trace(react_id)
-            if trace:
-                print(f"\n{colorize(f'{Symbols.BRAIN} ReAct Scratchpad', Colors.BRIGHT_CYAN, bold=True)} - {colorize(react_id[:8], Colors.WHITE)}")
-                print(create_divider(60, "─", Colors.CYAN))
-                print(trace)
-            else:
-                display_error(f"No trace found for ReAct cycle: {react_id}")
-        except Exception as e:
-            logger.debug(f"Failed to display scratchpad from manager: {e}")
-            display_error(f"Error displaying scratchpad for cycle: {react_id}")
-
-    def _display_scratchpad_from_file(self, scratchpad_file: Path, react_id: str) -> None:
-        """Display scratchpad from cached file."""
-        try:
-            with open(scratchpad_file, 'r') as f:
-                data = json.load(f)
-            
-            print(f"\n{colorize(f'{Symbols.BRAIN} ReAct Scratchpad', Colors.BRIGHT_CYAN, bold=True)} - {colorize(react_id[:8], Colors.WHITE)}")
-            print(create_divider(60, "─", Colors.CYAN))
-            
-            # Filter entries for this cycle (flexible matching)
-            cycle_entries = []
-            for entry in data.get('entries', []):
-                entry_cycle_id = entry.get('cycle_id', '')
-                if (entry_cycle_id == react_id or 
-                    entry_cycle_id == f"cycle_{react_id}" or
-                    entry_cycle_id.replace('cycle_', '') == react_id or
-                    entry_cycle_id.replace('cycle_', '') == react_id.replace('cycle_', '')):
-                    cycle_entries.append(entry)
-            
-            if not cycle_entries:
-                display_error(f"No entries found for cycle {react_id} in scratchpad file")
-                return
-                
-            # Display entries in chronological order
-            for entry in sorted(cycle_entries, key=lambda x: x.get('timestamp', '')):
-                phase = entry.get('phase', 'unknown')
-                content = entry.get('content', '')
-                timestamp = entry.get('timestamp', '')
-                iteration = entry.get('iteration', 0)
-                
-                # Format phase display
-                phase_icon = {
-                    'cycle_start': '🚀',
-                    'thinking': '💭', 
-                    'acting': '🔧',
-                    'observing': '👁️',
-                    'final_answer': '✅',
-                    'cycle_complete': '🏁',
-                    'error': '❌'
-                }.get(phase, '📝')
-                
-                print(f"\n{colorize(f'{phase_icon} {phase.upper()}', Colors.BRIGHT_BLUE)} (Iteration {iteration})")
-                print(f"{colorize(timestamp, Colors.DIM)}")
-                print(f"{Colors.WHITE}{content}{Colors.RESET}")
-                
-        except Exception as e:
-            logger.debug(f"Failed to display scratchpad from file: {e}")
-            display_error(f"Error reading scratchpad file for cycle: {react_id}")
-
-    def _extract_react_reasoning(self, context: str) -> List[Dict[str, Any]]:
-        """Extract ReAct reasoning steps from context verbatim."""
-        if not context:
-            return []
-
-        reasoning_steps = []
-        lines = context.split('\n')
-        current_step = {}
-
-        for line in lines:
-            line = line.strip()
-
-            # Look for reasoning cycle start
-            if '--- Current Reasoning (Cycle' in line:
-                # Save previous step if exists
-                if current_step:
-                    reasoning_steps.append(current_step)
-                current_step = {}
-
-            # Extract thought
-            elif line.startswith('Thought:'):
-                current_step['thought'] = line.replace('Thought:', '').strip()
-
-            # Extract action (look for tool calls or explicit actions)
-            elif line.startswith('Action:'):
-                current_step['action'] = line.replace('Action:', '').strip()
-
-            # Extract observation
-            elif line.startswith('Observation:'):
-                current_step['observation'] = line.replace('Observation:', '').strip()
-
-            # Extract relevant knowledge
-            elif '--- Relevant Knowledge ---' in line:
-                current_step['knowledge'] = []
-                # Look for following lines with facts
-                continue
-            elif current_step.get('knowledge') is not None and line.startswith('-'):
-                # This is a knowledge fact
-                fact = line.replace('- ', '').strip()
-                if fact and '(confidence:' in fact:
-                    current_step['knowledge'].append(fact)
-
-        # Add final step
-        if current_step:
-            reasoning_steps.append(current_step)
-
-        # Filter out empty steps
-        valid_steps = []
-        for step in reasoning_steps:
-            if step.get('thought') or step.get('action') or step.get('observation'):
-                valid_steps.append(step)
-
-        return valid_steps
 
     def _cmd_seed(self, args: List[str]) -> None:
         """Show or set random seed for deterministic generation."""
