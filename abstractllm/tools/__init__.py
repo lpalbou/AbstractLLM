@@ -90,6 +90,36 @@ except ImportError:
     tool = register  # Use basic register as fallback
     ENHANCED_TOOLS_AVAILABLE = False
 
+# Advanced tools (conditionally imported)
+try:
+    from abstractllm.tools.advanced_tools import (
+        code_intelligence,
+        test_suite_manager,
+        version_control_manager,
+        system_executor,
+        file_operations_manager,
+        network_intelligence,
+        data_processor,
+        dependency_resolver,
+        get_advanced_tools_catalog
+    )
+    ADVANCED_TOOLS_AVAILABLE = True
+except ImportError:
+    ADVANCED_TOOLS_AVAILABLE = False
+
+# Tool catalog and discovery system
+try:
+    from abstractllm.tools.tool_catalog import (
+        ToolCatalog,
+        ToolInfo,
+        get_tool_catalog,
+        discover_tools,
+        recommend_tools_for_task
+    )
+    TOOL_CATALOG_AVAILABLE = True
+except ImportError:
+    TOOL_CATALOG_AVAILABLE = False
+
 __all__ = [
     # Core types
     "ToolDefinition",
@@ -118,6 +148,10 @@ __all__ = [
     # Enhanced features
     "tool",  # Enhanced decorator
     "ENHANCED_TOOLS_AVAILABLE",  # Feature flag
+
+    # Tool discovery
+    "discover_tools",
+    "recommend_tools_for_task",
 ]
 
 # Conditionally add enhanced exports if available
@@ -125,8 +159,32 @@ if ENHANCED_TOOLS_AVAILABLE:
     __all__.extend([
         "EnhancedToolDefinition",
         "ToolChoice",
-        "ToolContext", 
+        "ToolContext",
         "ToolValidationError",
         "inject_context",
         "create_tool_from_function",
+    ])
+
+# Conditionally add advanced tools if available
+if ADVANCED_TOOLS_AVAILABLE:
+    __all__.extend([
+        "code_intelligence",
+        "test_suite_manager",
+        "version_control_manager",
+        "system_executor",
+        "file_operations_manager",
+        "network_intelligence",
+        "data_processor",
+        "dependency_resolver",
+        "get_advanced_tools_catalog",
+        "ADVANCED_TOOLS_AVAILABLE",
+    ])
+
+# Conditionally add catalog system if available
+if TOOL_CATALOG_AVAILABLE:
+    __all__.extend([
+        "ToolCatalog",
+        "ToolInfo",
+        "get_tool_catalog",
+        "TOOL_CATALOG_AVAILABLE",
     ])
