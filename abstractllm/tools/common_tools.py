@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 # File Operations
 @tool(
-    description="Find and list files and directories by their names/paths using glob patterns",
+    description="Find and list files and directories by their names/paths using glob patterns (case-insensitive, supports multiple patterns)",
     tags=["file", "directory", "listing", "filesystem"],
     when_to_use="When you need to find files by their names, paths, or file extensions (NOT for searching file contents)",
     examples=[
@@ -66,10 +66,26 @@ logger = logging.getLogger(__name__)
             }
         },
         {
-            "description": "Find all files with 'test' in filename",
+            "description": "Find all files with 'test' in filename (case-insensitive)",
             "arguments": {
                 "directory_path": ".",
                 "pattern": "*test*",
+                "recursive": True
+            }
+        },
+        {
+            "description": "Find multiple file types using | separator",
+            "arguments": {
+                "directory_path": ".",
+                "pattern": "*.py|*.js|*.md",
+                "recursive": True
+            }
+        },
+        {
+            "description": "Complex multiple patterns - documentation, tests, and config files",
+            "arguments": {
+                "directory_path": ".",
+                "pattern": "README*|*test*|config.*|*.yml",
                 "recursive": True
             }
         },
@@ -80,35 +96,18 @@ logger = logging.getLogger(__name__)
                 "pattern": "*",
                 "include_hidden": True
             }
-        },
-        {
-            "description": "List first 10 Python files (limit output)",
-            "arguments": {
-                "directory_path": ".",
-                "pattern": "*.py",
-                "recursive": True,
-                "head_limit": 10
-            }
-        },
-        {
-            "description": "List all files without limit",
-            "arguments": {
-                "directory_path": ".",
-                "pattern": "*",
-                "head_limit": None
-            }
         }
     ]
 )
 def list_files(directory_path: str = ".", pattern: str = "*", recursive: bool = False, include_hidden: bool = False, head_limit: Optional[int] = 50) -> str:
     """
-    List files and directories in a specified directory with optional pattern matching.
+    List files and directories in a specified directory with pattern matching (case-insensitive).
     
     IMPORTANT: Use 'directory_path' parameter (not 'file_path') to specify the directory to list.
     
     Args:
         directory_path: Path to the directory to list files from (default: "." for current directory)
-        pattern: Glob pattern to match files (default: "*" for all files and directories)
+        pattern: Glob pattern(s) to match files. Use "|" to separate multiple patterns (default: "*")
         recursive: Whether to search recursively in subdirectories (default: False)
         include_hidden: Whether to include hidden files/directories starting with '.' (default: False)
         head_limit: Maximum number of files to return (default: 50, None for unlimited)
@@ -117,10 +116,12 @@ def list_files(directory_path: str = ".", pattern: str = "*", recursive: bool = 
         Formatted string with file and directory listings or error message.
         When head_limit is applied, shows "showing X of Y files" in the header.
         
-    Example:
+    Examples:
         list_files(directory_path="docs") - Lists files in the docs directory
-        list_files(directory_path=".", pattern="*.py") - Lists Python files in current directory
-        list_files(directory_path=".", include_hidden=True) - Lists all files including hidden ones
+        list_files(pattern="*.py") - Lists Python files (case-insensitive)
+        list_files(pattern="*.py|*.js|*.md") - Lists Python, JavaScript, and Markdown files
+        list_files(pattern="README*|*test*|config.*") - Lists README files, test files, and config files
+        list_files(pattern="*TEST*", recursive=True) - Finds test files recursively (case-insensitive)
     """
     try:
         directory = Path(directory_path)
@@ -131,28 +132,44 @@ def list_files(directory_path: str = ".", pattern: str = "*", recursive: bool = 
         if not directory.is_dir():
             return f"Error: '{directory_path}' is not a directory"
         
-        if recursive:
-            # Use ** for recursive pattern matching
-            search_pattern = str(directory / "**" / pattern)
-            files = glob.glob(search_pattern, recursive=True)
-        else:
-            search_pattern = str(directory / pattern)
-            files = glob.glob(search_pattern)
+        # Split pattern by | to support multiple patterns
+        patterns = [p.strip() for p in pattern.split('|')]
         
-        # If include_hidden is True, also add hidden files matching the pattern
-        if include_hidden and pattern == '*':
-            # Add hidden files explicitly since glob doesn't match them by default
-            hidden_pattern = str(directory / '.*')
-            hidden_files = glob.glob(hidden_pattern)
-            files.extend(hidden_files)
-            if recursive:
-                hidden_recursive = str(directory / '**/.*')
-                files.extend(glob.glob(hidden_recursive, recursive=True))
+        # Get all files first, then apply case-insensitive pattern matching
+        import fnmatch
+        all_files = []
+        
+        if recursive:
+            for root, dirs, dir_files in os.walk(directory):
+                for f in dir_files:
+                    all_files.append(Path(root) / f)
+        else:
+            try:
+                all_files = [f for f in directory.iterdir() if f.is_file()]
+                if include_hidden:
+                    # Add hidden files
+                    hidden_files = [f for f in directory.iterdir() if f.name.startswith('.') and f.is_file()]
+                    all_files.extend(hidden_files)
+            except PermissionError:
+                pass
+        
+        # Apply case-insensitive pattern matching
+        matched_files = []
+        for file_path in all_files:
+            filename = file_path.name
+            
+            # Check if file matches any pattern (case-insensitive)
+            for single_pattern in patterns:
+                if fnmatch.fnmatch(filename.lower(), single_pattern.lower()):
+                    matched_files.append(str(file_path))
+                    break
+        
+        files = matched_files
         
         if not files:
             return f"No files found matching pattern '{pattern}' in '{directory_path}'"
         
-        # Filter out hidden files if include_hidden is False
+        # Filter out hidden files if include_hidden is False (already handled in file collection above)
         if not include_hidden:
             filtered_files = []
             for file_path in files:
@@ -256,7 +273,7 @@ def search_files(pattern: str, path: str = ".", output_mode: str = "files_with_m
         path: File or directory path to search in (default: current directory)
         output_mode: Output format - "files_with_matches" (show file paths with line numbers), "content" (show matching lines), "count" (show match counts) (default: "files_with_matches")
         head_limit: Limit output to first N entries (default: 20)
-        file_pattern: Glob pattern for files to search (default: "*" for all files)
+        file_pattern: Glob pattern(s) for files to search. Use "|" to separate multiple patterns (default: "*" for all files)
         case_sensitive: Whether search should be case sensitive (default: False)
         multiline: Enable multiline matching where pattern can span lines (default: False)
         
@@ -266,6 +283,8 @@ def search_files(pattern: str, path: str = ".", output_mode: str = "files_with_m
     Examples:
         search_files("generate.*react|create_react_cycle", "abstractllm/session.py")  # Returns file paths with line numbers (default)
         search_files("def.*search", ".", file_pattern="*.py")  # Search Python files only  
+        search_files("import.*re", ".", file_pattern="*.py|*.js")  # Search Python and JavaScript files
+        search_files("TODO|FIXME", ".", file_pattern="*.py|*.md|*.txt")  # Find TODO/FIXME in multiple file types
         search_files("import.*re", ".", "content", 10)  # Show content with 10 match limit
         search_files("pattern", ".", "count")  # Count matches per file
     """
@@ -301,9 +320,31 @@ def search_files(pattern: str, path: str = ".", output_mode: str = "files_with_m
                         except (UnicodeDecodeError, PermissionError):
                             continue  # Skip binary/inaccessible files
             else:
-                # Use glob pattern
-                search_pattern = str(search_path / "**" / file_pattern)
-                files_to_search = [Path(f) for f in glob.glob(search_pattern, recursive=True) if Path(f).is_file()]
+                # Support multiple patterns separated by |
+                import fnmatch
+                file_patterns = [p.strip() for p in file_pattern.split('|')]
+                files_to_search = []
+                
+                for root, dirs, files in os.walk(search_path):
+                    for file in files:
+                        file_path = Path(root) / file
+                        filename = file_path.name
+                        
+                        # Check if file matches any pattern (case-insensitive)
+                        matches_pattern = False
+                        for single_pattern in file_patterns:
+                            if fnmatch.fnmatch(filename.lower(), single_pattern.lower()):
+                                matches_pattern = True
+                                break
+                        
+                        if matches_pattern:
+                            # Skip binary files by checking if they're text files
+                            try:
+                                with open(file_path, 'r', encoding='utf-8') as f:
+                                    f.read(1024)  # Try to read first 1KB
+                                files_to_search.append(file_path)
+                            except (UnicodeDecodeError, PermissionError):
+                                continue  # Skip binary/inaccessible files
         else:
             return f"Error: Path '{path}' does not exist"
         
