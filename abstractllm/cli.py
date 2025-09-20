@@ -216,6 +216,7 @@ def run_query(session, prompt, structured_output=None, quiet=False):
             accumulated_content = ""
             tool_results = []
             provider_usage = None  # Capture actual provider usage data
+            last_react_cycle_id = None  # Capture the unified interaction ID
 
             try:
                 thinking_mode = False  # Track if we're in a thinking section
@@ -225,6 +226,10 @@ def run_query(session, prompt, structured_output=None, quiet=False):
                     # Handle GenerateResponse objects with content
                     if hasattr(chunk, 'content') and chunk.content is not None:
                         chunk_text = chunk.content
+                        
+                        # Capture the unified react_cycle_id from chunks
+                        if hasattr(chunk, 'react_cycle_id') and chunk.react_cycle_id:
+                            last_react_cycle_id = chunk.react_cycle_id
 
                         # Check for special tool execution chunk types
                         chunk_type = getattr(chunk, 'raw_response', {}).get('type', 'content')
@@ -384,11 +389,13 @@ def run_query(session, prompt, structured_output=None, quiet=False):
                     model=getattr(session._provider, 'config_manager', {}).get_param('model') if hasattr(session, '_provider') else 'unknown',
                     usage=usage_data,
                     tools_executed=tool_results,
-                    reasoning_time=reasoning_time  # Include timing for speed calculation
+                    reasoning_time=reasoning_time,  # Include timing for speed calculation
+                    react_cycle_id=last_react_cycle_id  # Use the unified interaction ID
                 )
 
-                # Save interaction context
-                save_interaction_context(response, prompt)
+                # Save interaction context with proper session_id
+                session_id = getattr(session.memory, 'session_id', None) if hasattr(session, 'memory') else f"session_{session.id[:8]}"
+                save_interaction_context(response, prompt, session_id)
 
                 # Display metrics line (same as non-streaming mode) unless in quiet mode
                 if not quiet:
@@ -413,9 +420,10 @@ def run_query(session, prompt, structured_output=None, quiet=False):
         if spinner:
             spinner.stop()
 
-        # Save interaction context for facts/scratchpad commands
+        # Save interaction context for facts/scratchpad commands with proper session_id
         if isinstance(response, GenerateResponse):
-            save_interaction_context(response, prompt)
+            session_id = getattr(session.memory, 'session_id', None) if hasattr(session, 'memory') else f"session_{session.id[:8]}"
+            save_interaction_context(response, prompt, session_id)
             if quiet:
                 # In quiet mode, only show the content
                 print(response.content or "")

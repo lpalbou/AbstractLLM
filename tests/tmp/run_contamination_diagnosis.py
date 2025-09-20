@@ -26,7 +26,7 @@ logging.basicConfig(
     format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler('/tmp/contamination_diagnosis.log')
+        logging.FileHandler('./contamination_diagnosis.log')
     ]
 )
 
@@ -94,7 +94,7 @@ async def run_comprehensive_diagnosis():
     print("  🕐 TIMING ISSUE - Observation delivery problems")
     print("  🧠 MEMORY CONTAMINATION - Cached content interference")
     print("")
-    print("Detailed logs saved to: /tmp/contamination_diagnosis.log")
+    print("Detailed logs saved to: ./contamination_diagnosis.log")
     print("=" * 80)
 
 

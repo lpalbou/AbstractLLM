@@ -1168,151 +1168,164 @@ class CommandProcessor:
         print(f"• Stronger links (more ●) indicate more important relationships")
         print(f"• Links are created automatically based on conversation patterns")
         print(f"• Use {colorize('/facts', Colors.BRIGHT_BLUE)} to see the knowledge these links connect")
-    
+
+    def _show_interaction_scratchpad(self, interaction_id: str) -> None:
+        """Show VERBATIM Think → Act → Observe cycles - COMPLETELY REWRITTEN."""
+        from pathlib import Path
+        import json
+        from abstractllm.utils.display import display_error, Colors
+
+        # Convert interaction_id to cycle_id format for scratchpad search
+        if interaction_id.startswith('cycle_'):
+            cycle_id = interaction_id
+        else:
+            cycle_id = f"cycle_{interaction_id}"
+
+        # Find the scratchpad file containing this cycle_id
+        base_dir = Path.home() / ".abstractllm" / "sessions"
+        scratchpad_entries = []
+
+        if base_dir.exists():
+            for session_dir in base_dir.iterdir():
+                if session_dir.is_dir():
+                    scratchpad_dir = session_dir / "scratchpads"
+                    if scratchpad_dir.exists():
+                        for scratchpad_file in scratchpad_dir.glob("scratchpad_*.json"):
+                            try:
+                                with open(scratchpad_file, 'r') as f:
+                                    scratchpad_data = json.load(f)
+
+                                # Extract entries for this cycle_id
+                                entries = scratchpad_data.get('entries', [])
+                                cycle_entries = [e for e in entries if e.get('cycle_id') == cycle_id]
+
+                                if cycle_entries:
+                                    scratchpad_entries = cycle_entries
+                                    break
+                            except Exception:
+                                continue
+                    if scratchpad_entries:
+                        break
+
+        if not scratchpad_entries:
+            display_error(f"No ReAct scratchpad found for: {interaction_id}")
+            return
+
+        # Display the VERBATIM Think → Act → Observe cycles
+        short_id = cycle_id.replace('cycle_', '')
+        query = scratchpad_entries[0].get('metadata', {}).get('query', 'Unknown query') if scratchpad_entries else 'Unknown'
+
+        print(f"\n{Colors.BRIGHT_CYAN}🧠 VERBATIM ReAct Scratchpad - {short_id}{Colors.RESET}")
+        print(f"{Colors.CYAN}{'═' * 60}{Colors.RESET}")
+        print(f"\n{Colors.BRIGHT_BLUE}📋 Query: {Colors.WHITE}{query}{Colors.RESET}")
+
+        # Group and display by phase
+        current_iteration = None
+
+        for entry in scratchpad_entries:
+            phase = entry.get('phase', 'unknown')
+            content = entry.get('content', '')
+            iteration = entry.get('iteration', 0)
+
+            # Show iteration header if it changes
+            if current_iteration != iteration:
+                current_iteration = iteration
+                if iteration > 0:
+                    print(f"\n{Colors.BRIGHT_WHITE}═══ Iteration {iteration + 1} ═══{Colors.RESET}")
+
+            # Display based on phase
+            if phase == 'cycle_start':
+                print(f"\n{Colors.BRIGHT_GREEN}🚀 CYCLE START{Colors.RESET}")
+                print(f"{Colors.GREEN}{content}{Colors.RESET}")
+
+            elif phase == 'thinking':
+                print(f"\n{Colors.BRIGHT_YELLOW}🤔 THINK{Colors.RESET}")
+                print(f"{Colors.YELLOW}{content}{Colors.RESET}")
+
+            elif phase == 'acting':
+                print(f"\n{Colors.BRIGHT_MAGENTA}⚡ ACT{Colors.RESET}")
+                print(f"{Colors.MAGENTA}{content}{Colors.RESET}")
+
+            elif phase == 'observing':
+                print(f"\n{Colors.BRIGHT_BLUE}👁️ OBSERVE{Colors.RESET}")
+                print(f"{Colors.BLUE}{content}{Colors.RESET}")
+
+            elif phase == 'cycle_complete':
+                print(f"\n{Colors.BRIGHT_GREEN}✅ CYCLE COMPLETE{Colors.RESET}")
+                print(f"{Colors.GREEN}{content}{Colors.RESET}")
+
+            else:
+                print(f"\n{Colors.DIM}📝 {phase.upper()}{Colors.RESET}")
+                print(f"{Colors.DIM}{content}{Colors.RESET}")
+
+        print(f"\n{Colors.CYAN}{'═' * 60}{Colors.RESET}")
+        print(f"{Colors.DIM}Total entries: {len(scratchpad_entries)}{Colors.RESET}")
+        print()
+
     def _cmd_scratchpad(self, args: List[str]) -> None:
-        """Show reasoning traces for a specific interaction or list all available scratchpads."""
+        """Show reasoning traces for a specific interaction - COMPLETELY REWRITTEN."""
 
         # If a response ID is provided, show specific interaction scratchpad
         if args:
-            response_id = args[0]
-
-            # Check if this looks like a ReAct ID (for unified store) vs legacy interaction ID
-            if len(response_id) >= 8 and not response_id.startswith('cycle_'):
-                # Try unified store first
-                try:
-                    self._cmd_scratchpad_unified([response_id])
-                    return
-                except:
-                    pass  # Fall back to legacy system
-
-            # Handle legacy format: "4258e5b8" and "cycle_4258e5b8"
-            if not response_id.startswith('cycle_'):
-                response_id = f"cycle_{response_id}"
-            from abstractllm.utils.response_helpers import scratchpad_command
-            scratchpad_command(response_id)
+            interaction_id = args[0]
+            self._show_interaction_scratchpad(interaction_id)
             return
 
-        # Otherwise, show list of all available scratchpads
-        if not hasattr(self.session, 'memory') or not self.session.memory:
-            display_error("Memory system not available")
+        # Otherwise, show list of recent interactions from file system
+        self._list_recent_interactions()
+
+    def _list_recent_interactions(self) -> None:
+        """List recent interactions from file system - REWRITTEN FROM SCRATCH."""
+        from pathlib import Path
+        import json
+        from abstractllm.utils.display import Colors, colorize
+
+        print(f"\n{colorize('🧠 Recent Interactions', Colors.BRIGHT_CYAN, bold=True)}")
+        print(f"{colorize('─' * 50, Colors.CYAN)}")
+
+        # Find recent interaction files
+        base_dir = Path.home() / ".abstractllm" / "sessions"
+        interactions = []
+
+        if base_dir.exists():
+            for session_dir in base_dir.iterdir():
+                if session_dir.is_dir():
+                    interactions_dir = session_dir / "interactions"
+                    if interactions_dir.exists():
+                        for interaction_dir in interactions_dir.iterdir():
+                            if interaction_dir.is_dir():
+                                context_file = interaction_dir / "context.json"
+                                if context_file.exists():
+                                    try:
+                                        with open(context_file, 'r') as f:
+                                            context = json.load(f)
+                                        interaction_id = context.get('interaction_id', interaction_dir.name)
+                                        short_id = interaction_id.replace('interaction_', '')
+                                        query = context.get('query', 'Unknown query')
+                                        timestamp = context.get('timestamp', '')
+
+                                        interactions.append({
+                                            'id': short_id,
+                                            'query': query,
+                                            'timestamp': timestamp
+                                        })
+                                    except Exception:
+                                        continue
+
+        if not interactions:
+            print(f"{colorize('No interactions found', Colors.DIM)}")
             return
 
-        memory = self.session.memory
+        # Sort by timestamp (most recent first)
+        interactions.sort(key=lambda x: x['timestamp'], reverse=True)
 
-        print(f"\n{colorize(f'{Symbols.BRAIN} Available Scratchpads', Colors.BRIGHT_CYAN, bold=True)}")
-        print(create_divider(70, "─", Colors.CYAN))
+        # Show recent interactions
+        print(f"{colorize('Recent interactions:', Colors.WHITE)}")
+        for i, interaction in enumerate(interactions[:5], 1):
+            query_preview = interaction['query'][:50] + "..." if len(interaction['query']) > 50 else interaction['query']
+            print(f"  {i}. {colorize(interaction['id'], Colors.BRIGHT_BLUE)} - {query_preview}")
 
-        # Get all react cycles
-        react_cycles = memory.react_cycles if hasattr(memory, 'react_cycles') else {}
-
-        if not react_cycles:
-            print(f"{colorize('📝 No scratchpads available yet', Colors.BRIGHT_YELLOW)}")
-            print(f"{colorize('Scratchpads are created automatically during reasoning sessions', Colors.DIM)}")
-            print(f"\n{colorize('💡 How to create scratchpads:', Colors.BRIGHT_YELLOW)}")
-            print(f"• Ask complex questions that require reasoning")
-            print(f"• Use tools or request multi-step analysis")
-            print(f"• Enable memory with enable_memory=True")
-            return
-
-        # Sort cycles by creation time (most recent first)
-        sorted_cycles = sorted(
-            react_cycles.items(),
-            key=lambda x: x[1].start_time if hasattr(x[1], 'start_time') else datetime.min,
-            reverse=True
-        )
-
-        print(f"{colorize('Total Scratchpads:', Colors.BRIGHT_GREEN)} {len(react_cycles)}")
-        print(f"{colorize('Click on any ID below to view detailed reasoning traces', Colors.DIM)}")
-        print()
-
-        # Display each scratchpad with rich information
-        for i, (cycle_id, cycle) in enumerate(sorted_cycles):
-            # Format the cycle ID for easy copying
-            short_id = cycle_id.replace('cycle_', '') if cycle_id.startswith('cycle_') else cycle_id
-
-            # Get timestamp
-            if hasattr(cycle, 'start_time') and cycle.start_time:
-                try:
-                    if isinstance(cycle.start_time, str):
-                        timestamp = datetime.fromisoformat(cycle.start_time)
-                    else:
-                        timestamp = cycle.start_time
-                    time_str = timestamp.strftime('%H:%M:%S')
-                    date_str = timestamp.strftime('%Y-%m-%d')
-
-                    # Color code by age
-                    now = datetime.now()
-                    age_hours = (now - timestamp).total_seconds() / 3600
-                    if age_hours < 1:
-                        time_color = Colors.BRIGHT_GREEN  # Recent
-                    elif age_hours < 24:
-                        time_color = Colors.BRIGHT_YELLOW  # Today
-                    else:
-                        time_color = Colors.DIM  # Older
-                except:
-                    time_str = "Unknown"
-                    date_str = ""
-                    time_color = Colors.DIM
-            else:
-                time_str = "Unknown"
-                date_str = ""
-                time_color = Colors.DIM
-
-            # Get query preview
-            query = getattr(cycle, 'query', 'No query available')
-            if len(query) > 60:
-                query_preview = query[:57] + "..."
-            else:
-                query_preview = query
-
-            # Get cycle statistics
-            thoughts_count = len(getattr(cycle, 'thoughts', []))
-            actions_count = len(getattr(cycle, 'actions', []))
-            observations_count = len(getattr(cycle, 'observations', []))
-
-            # Status indicator
-            if hasattr(cycle, 'success') and cycle.success is not None:
-                status_icon = "✅" if cycle.success else "❌"
-                status_color = Colors.BRIGHT_GREEN if cycle.success else Colors.BRIGHT_RED
-            else:
-                status_icon = "🔄"
-                status_color = Colors.BRIGHT_YELLOW
-
-            # Display the scratchpad entry
-            print(f"  {i+1:2d}. {colorize(status_icon, status_color)} {colorize(f'ID: {short_id}', Colors.BRIGHT_BLUE)}")
-            print(f"      {colorize('Time:', Colors.DIM)} {colorize(time_str, time_color)} {colorize(date_str, time_color)}")
-            print(f"      {colorize('Query:', Colors.DIM)} {colorize(query_preview, Colors.WHITE)}")
-
-            # Activity summary with icons
-            activity_parts = []
-            if thoughts_count > 0:
-                activity_parts.append(f"{colorize('💭', Colors.BLUE)} {thoughts_count} thoughts")
-            if actions_count > 0:
-                activity_parts.append(f"{colorize('⚡', Colors.YELLOW)} {actions_count} actions")
-            if observations_count > 0:
-                activity_parts.append(f"{colorize('👁️', Colors.CYAN)} {observations_count} observations")
-
-            if activity_parts:
-                activity_str = " • ".join(activity_parts)
-                print(f"      {colorize('Activity:', Colors.DIM)} {activity_str}")
-            else:
-                print(f"      {colorize('Activity:', Colors.DIM)} {colorize('No reasoning steps recorded', Colors.DIM)}")
-
-            print()  # Spacing between entries
-
-        # Usage instructions
-        print(create_divider(70, "─", Colors.CYAN))
-        print(f"{colorize('💡 Usage Instructions:', Colors.BRIGHT_YELLOW)}")
-        print(f"  {colorize('/scratch <ID>', Colors.BRIGHT_BLUE)} - View detailed reasoning for specific scratchpad")
-        print(f"  {colorize('Example:', Colors.DIM)} /scratch {sorted_cycles[0][1].cycle_id.replace('cycle_', '') if sorted_cycles else 'abc123'}")
-        print(f"  {colorize('Tip:', Colors.DIM)} Copy the ID from the list above and paste it after /scratch")
-
-        # Current cycle information
-        if hasattr(memory, 'current_cycle') and memory.current_cycle:
-            current_cycle = memory.current_cycle
-            current_id = current_cycle.cycle_id.replace('cycle_', '')
-            print(f"\n{colorize('🔄 Current Active Cycle:', Colors.BRIGHT_YELLOW)} {colorize(current_id, Colors.BRIGHT_BLUE)}")
-            print(f"   {colorize('Use /scratch ' + current_id + ' to view current reasoning', Colors.DIM)}")
+        print(f"\n{colorize('Usage:', Colors.DIM)} /scratch <ID> to view details")
     
     def _cmd_history(self, args: List[str]) -> None:
         """Show command history."""
@@ -1712,67 +1725,49 @@ class CommandProcessor:
         import json
         import gzip
 
-        # Try different storage locations and formats
+        # Use unified storage location
         storage_locations = [
-            # New enhanced context storage (.abstractllm directory)
+            # Unified context storage (.abstractllm directory)
             Path.home() / ".abstractllm" / "sessions"
         ]
 
         context_data = None
         source_location = None
 
-        # Try to find the context file
-        for base_path in storage_locations:
-            # Try enhanced context storage
-            for session_dir in base_path.iterdir():
-                    if session_dir.is_dir():
-                        contexts_dir = session_dir / "contexts"
-                        if contexts_dir.exists():
-                            # Try different context file patterns
-                            patterns = [
-                                f"{context_id}_main.json.gz",
-                                f"{context_id}_main.json",
-                                f"{context_id}.json.gz",
-                                f"{context_id}.json"
-                            ]
+        # Find the interaction context file (handle bare ID or full interaction_id)
+        search_id = context_id if context_id.startswith('interaction_') else f"interaction_{context_id}"
 
-                            for pattern in patterns:
-                                context_file = contexts_dir / pattern
-                                if context_file.exists():
-                                    try:
-                                        if pattern.endswith('.gz'):
-                                            with gzip.open(context_file, 'rt') as f:
-                                                context_data = json.load(f)
-                                        else:
-                                            with open(context_file, 'r') as f:
-                                                context_data = json.load(f)
-                                        source_location = str(context_file)
-                                        break
-                                    except Exception:
-                                        continue
-                            if context_data:
-                                break
-                    if context_data:
-                        break
+        for base_path in storage_locations:
+            for session_dir in base_path.iterdir():
+                if session_dir.is_dir():
+                    interaction_file = session_dir / "interactions" / search_id / "context.json"
+                    if interaction_file.exists():
+                        try:
+                            with open(interaction_file, 'r') as f:
+                                context_data = json.load(f)
+                            source_location = str(interaction_file)
+                            break
+                        except Exception:
+                            continue
+                if context_data:
+                    break
 
         if not context_data:
-            display_error(f"Context not found for ID: {context_id}")
-            print(f"\n{colorize('Available contexts:', Colors.DIM)}")
-            print(f"  {colorize('• Use /scratch to see available interaction IDs', Colors.DIM)}")
-            print(f"  {colorize('• Try: /context <interaction_id>', Colors.DIM)}")
-            print(f"  {colorize('• Example: /context abc123 or /context step_abc123_001', Colors.DIM)}")
+            display_error(f"Interaction not found: {context_id}")
+            print(f"\n{colorize('Usage: /context <interaction_id>', Colors.DIM)}")
             return
 
         # Display the context
-        short_id = context_id.replace('cycle_', '').replace('step_', '')
+        short_id = context_id.replace('interaction_', '')
 
-        # Check context data type
+        # Display context data (all contexts are created equal - no legacy distinction)
         if 'verbatim_context' in context_data:
             self._display_verbatim_context(context_data, short_id, source_location)
         elif 'system_prompt' in context_data or 'messages' in context_data:
             self._display_enhanced_context(context_data, short_id, source_location)
         else:
-            self._display_legacy_context(context_data, short_id, source_location)
+            # Display interaction data in standard format
+            self._display_interaction_context(context_data, short_id, source_location)
 
     def _display_enhanced_context(self, context_data: dict, short_id: str, source: str) -> None:
         """Display enhanced context data with full LLM context."""
@@ -1843,17 +1838,15 @@ class CommandProcessor:
 
         print(f"\n{colorize(f'📁 Source: {source}', Colors.DIM)}")
 
-    def _display_legacy_context(self, context_data: dict, short_id: str, source: str) -> None:
-        """Display legacy interaction context (no LLM context available)."""
+    def _display_interaction_context(self, context_data: dict, short_id: str, source: str) -> None:
+        """Display interaction context data."""
         from abstractllm.utils.display import Colors, colorize
 
-        print(f"\n{colorize('⚠️  Legacy Context Data', Colors.BRIGHT_YELLOW, bold=True)} - {colorize(short_id, Colors.WHITE)}")
-        print(f"{colorize('─' * 60, Colors.YELLOW)}")
-        print(f"{colorize('This context was saved before enhanced context tracking was enabled.', Colors.DIM)}")
-        print(f"{colorize('Only interaction results are available, not the full LLM context.', Colors.DIM)}")
+        print(f"\n{colorize('🔍 Interaction Context', Colors.BRIGHT_CYAN, bold=True)} - {colorize(short_id, Colors.WHITE)}")
+        print(f"{colorize('─' * 60, Colors.CYAN)}")
 
         # Show available data
-        print(f"\n{colorize('📋 Available Information', Colors.BRIGHT_BLUE)}")
+        print(f"\n{colorize('📋 Interaction Information', Colors.BRIGHT_BLUE)}")
         print(f"  {colorize('Query:', Colors.CYAN)} {context_data.get('query', 'N/A')}")
         print(f"  {colorize('Model:', Colors.CYAN)} {context_data.get('model', 'N/A')}")
         print(f"  {colorize('Timestamp:', Colors.CYAN)} {context_data.get('timestamp', 'N/A')}")
@@ -1864,6 +1857,34 @@ class CommandProcessor:
             for i, tool in enumerate(context_data['tools_executed']):
                 tool_name = tool.get('name', 'unknown')
                 print(f"  {i+1}. {colorize(tool_name, Colors.YELLOW)}")
+
+        # Try to get and display the actual response content (verbatim)
+        try:
+            from pathlib import Path
+            import json
+
+            # Extract session and interaction from source path
+            source_path = Path(source)
+            interaction_dir = source_path.parent
+
+            # Look for cycle files in the same directory
+            cycle_files = list(interaction_dir.glob("cycle_*.json"))
+            if cycle_files:
+                with open(cycle_files[0], 'r') as f:
+                    cycle_data = json.load(f)
+                response_content = cycle_data.get('response_content', '')
+
+                if response_content:
+                    print(f"\n{colorize('🎯 VERBATIM RESPONSE CONTENT', Colors.BRIGHT_RED, bold=True)}")
+                    print(f"{colorize('─' * 60, Colors.RED)}")
+                    print(f"{colorize('This is the exact content generated by the LLM:', Colors.YELLOW)}")
+                    print(f"{colorize('─' * 60, Colors.RED)}")
+                    print()
+                    print(response_content)
+                    print()
+                    print(f"{colorize('─' * 60, Colors.RED)}")
+        except Exception as e:
+            pass  # Don't break if verbatim content unavailable
 
         print(f"\n{colorize('💡 Tip:', Colors.BRIGHT_CYAN)} Use /scratch {short_id} to see the ReAct reasoning trace.")
         print(f"{colorize(f'📁 Source: {source}', Colors.DIM)}")
@@ -1945,65 +1966,15 @@ class CommandProcessor:
             except Exception as e:
                 logger.debug(f"LanceDB context lookup failed: {e}")
 
-        # Fallback to legacy system
+        # Fallback to unified storage system
         try:
-            context_id = f"cycle_{interaction_id}"
-            self._show_specific_context(context_id)
+            self._show_specific_context(interaction_id)
             return
         except Exception:
             pass
 
-            if not context:
-                display_error(f"Context not found for interaction ID: {interaction_id}")
-                print(f"\n{colorize('💡 Tip: Use /stats to see available interactions', Colors.DIM)}")
-                return
-
-            # Display unified context
-            print(f"\n{colorize('🔍 EXACT VERBATIM LLM CONTEXT', Colors.BRIGHT_CYAN, bold=True)} - {colorize(interaction_id[:8], Colors.WHITE)}")
-            print(f"{colorize('─' * 60, Colors.CYAN)}")
-
-            # Context metadata
-            print(f"\n{colorize('📋 Context Metadata', Colors.BRIGHT_BLUE)}")
-            print(f"  {colorize('Interaction ID:', Colors.CYAN)} {interaction_id}")
-            print(f"  {colorize('Session ID:', Colors.CYAN)} {session_id}")
-            if metadata.get('created_at'):
-                print(f"  {colorize('Timestamp:', Colors.CYAN)} {metadata['created_at']}")
-            if metadata.get('metadata'):
-                meta = metadata['metadata']
-                if 'provider' in meta:
-                    print(f"  {colorize('Provider:', Colors.CYAN)} {meta['provider']}")
-                if 'model' in meta:
-                    print(f"  {colorize('Model:', Colors.CYAN)} {meta['model']}")
-
-            print(f"  {colorize('Size:', Colors.CYAN)} {len(context):,} characters")
-
-            # EXACT VERBATIM CONTEXT
-            print(f"\n{colorize('🎯 EXACT VERBATIM PAYLOAD SENT TO LLM', Colors.BRIGHT_RED, bold=True)}")
-            print(f"{colorize('─' * 60, Colors.RED)}")
-            print(f"{colorize('⚠️  This is the EXACT content sent to the LLM - no formatting applied', Colors.YELLOW)}")
-            print(f"{colorize('─' * 60, Colors.RED)}")
-
-            # Display the EXACT verbatim context
-            print(context)
-
-            print(f"{colorize('─' * 60, Colors.RED)}")
-            print(f"{colorize('END OF EXACT VERBATIM PAYLOAD', Colors.RED)}")
-
-            # Show additional info
-            if metadata.get('has_facts'):
-                print(f"\n{colorize('💡 Facts available:', Colors.CYAN)} Use {colorize(f'/facts {interaction_id}', Colors.BRIGHT_BLUE)} to view extracted facts")
-
-            react_cycles = store.get_react_cycles_for_interaction(interaction_id)
-            if react_cycles:
-                print(f"{colorize('💡 ReAct cycles:', Colors.CYAN)} {len(react_cycles)} cycle(s) available")
-                for cycle in react_cycles:
-                    print(f"  • Use {colorize(f'/scratch {cycle['react_id']}', Colors.BRIGHT_BLUE)} for scratchpad")
-
-        except Exception as e:
-            display_error(f"Failed to retrieve context: {e}")
-            # Fallback to legacy system
-            context_id = f"cycle_{interaction_id}"
-            self._show_specific_context(context_id)
+        display_error(f"Context not found for interaction ID: {interaction_id}")
+        print(f"\n{colorize('💡 Tip: Use /stats to see available interactions', Colors.DIM)}")
 
     def _cmd_facts_unified(self, args: List[str]) -> None:
         """Show extracted facts for a specific interaction."""
@@ -2053,7 +2024,46 @@ class CommandProcessor:
 
         react_id = args[0]
 
-        # Try LanceDB first
+        # Strategy 1: Try ScratchpadManager files in cache first
+        if hasattr(self.session, 'scratchpad') and self.session.scratchpad:
+            try:
+                # Check if this cycle exists in the scratchpad entries
+                for entry in self.session.scratchpad.entries:
+                    if entry.cycle_id == react_id or entry.cycle_id == f"cycle_{react_id}":
+                        # Found matching cycle, display from ScratchpadManager
+                        self._display_scratchpad_from_manager(react_id)
+                        return
+            except Exception as e:
+                logger.debug(f"ScratchpadManager lookup failed: {e}")
+
+        # Strategy 2: Search all scratchpad files in cache directories
+        try:
+            cache_base = Path.home() / ".abstractllm" / "sessions"
+            if cache_base.exists():
+                for session_dir in cache_base.iterdir():
+                    if session_dir.is_dir():
+                        scratchpad_dir = session_dir / "scratchpads"
+                        if scratchpad_dir.exists():
+                            for scratchpad_file in scratchpad_dir.glob("scratchpad_*.json"):
+                                try:
+                                    with open(scratchpad_file, 'r') as f:
+                                        data = json.load(f)
+                                    # Check if this file contains our cycle
+                                    for entry in data.get('entries', []):
+                                        entry_cycle_id = entry.get('cycle_id', '')
+                                        # Try multiple forms: react_id, cycle_react_id, and stripped versions
+                                        if (entry_cycle_id == react_id or 
+                                            entry_cycle_id == f"cycle_{react_id}" or
+                                            entry_cycle_id.replace('cycle_', '') == react_id or
+                                            entry_cycle_id.replace('cycle_', '') == react_id.replace('cycle_', '')):
+                                            self._display_scratchpad_from_file(scratchpad_file, entry_cycle_id)
+                                            return
+                                except Exception as e:
+                                    logger.debug(f"Failed to check scratchpad file {scratchpad_file}: {e}")
+        except Exception as e:
+            logger.debug(f"Cache directory search failed: {e}")
+
+        # Strategy 3: Try LanceDB
         if hasattr(self.session, 'lance_store') and self.session.lance_store:
             try:
                 # First try react_cycles table
@@ -2128,6 +2138,70 @@ class CommandProcessor:
                 logger.debug(f"LanceDB scratchpad lookup failed: {e}")
 
         display_error(f"Scratchpad not found for ReAct cycle: {react_id}")
+
+    def _display_scratchpad_from_manager(self, react_id: str) -> None:
+        """Display scratchpad from ScratchpadManager entries."""
+        try:
+            # Get complete trace for the cycle
+            trace = self.session.scratchpad.get_complete_trace(react_id)
+            if trace:
+                print(f"\n{colorize(f'{Symbols.BRAIN} ReAct Scratchpad', Colors.BRIGHT_CYAN, bold=True)} - {colorize(react_id[:8], Colors.WHITE)}")
+                print(create_divider(60, "─", Colors.CYAN))
+                print(trace)
+            else:
+                display_error(f"No trace found for ReAct cycle: {react_id}")
+        except Exception as e:
+            logger.debug(f"Failed to display scratchpad from manager: {e}")
+            display_error(f"Error displaying scratchpad for cycle: {react_id}")
+
+    def _display_scratchpad_from_file(self, scratchpad_file: Path, react_id: str) -> None:
+        """Display scratchpad from cached file."""
+        try:
+            with open(scratchpad_file, 'r') as f:
+                data = json.load(f)
+            
+            print(f"\n{colorize(f'{Symbols.BRAIN} ReAct Scratchpad', Colors.BRIGHT_CYAN, bold=True)} - {colorize(react_id[:8], Colors.WHITE)}")
+            print(create_divider(60, "─", Colors.CYAN))
+            
+            # Filter entries for this cycle (flexible matching)
+            cycle_entries = []
+            for entry in data.get('entries', []):
+                entry_cycle_id = entry.get('cycle_id', '')
+                if (entry_cycle_id == react_id or 
+                    entry_cycle_id == f"cycle_{react_id}" or
+                    entry_cycle_id.replace('cycle_', '') == react_id or
+                    entry_cycle_id.replace('cycle_', '') == react_id.replace('cycle_', '')):
+                    cycle_entries.append(entry)
+            
+            if not cycle_entries:
+                display_error(f"No entries found for cycle {react_id} in scratchpad file")
+                return
+                
+            # Display entries in chronological order
+            for entry in sorted(cycle_entries, key=lambda x: x.get('timestamp', '')):
+                phase = entry.get('phase', 'unknown')
+                content = entry.get('content', '')
+                timestamp = entry.get('timestamp', '')
+                iteration = entry.get('iteration', 0)
+                
+                # Format phase display
+                phase_icon = {
+                    'cycle_start': '🚀',
+                    'thinking': '💭', 
+                    'acting': '🔧',
+                    'observing': '👁️',
+                    'final_answer': '✅',
+                    'cycle_complete': '🏁',
+                    'error': '❌'
+                }.get(phase, '📝')
+                
+                print(f"\n{colorize(f'{phase_icon} {phase.upper()}', Colors.BRIGHT_BLUE)} (Iteration {iteration})")
+                print(f"{colorize(timestamp, Colors.DIM)}")
+                print(f"{Colors.WHITE}{content}{Colors.RESET}")
+                
+        except Exception as e:
+            logger.debug(f"Failed to display scratchpad from file: {e}")
+            display_error(f"Error reading scratchpad file for cycle: {react_id}")
 
     def _extract_react_reasoning(self, context: str) -> List[Dict[str, Any]]:
         """Extract ReAct reasoning steps from context verbatim."""

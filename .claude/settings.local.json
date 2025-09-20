@@ -56,7 +56,10 @@
       "Read(///**)",
       "Bash(ABSTRACTLLM_LOG_LEVEL=DEBUG python abstractllm/cli.py --provider ollama --model qwen3-coder:30b --stream --prompt \"list the files in the current directory\")",
       "Read(//opt/anaconda3/bin/**)",
-      "WebFetch(domain:www.promptingguide.ai)"
+      "WebFetch(domain:www.promptingguide.ai)",
+      "WebFetch(domain:arxiv.org)",
+      "WebFetch(domain:react-lm.github.io)",
+      "Bash(tee:*)"
     ],
     "deny": []
   },

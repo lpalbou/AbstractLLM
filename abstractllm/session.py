@@ -1101,7 +1101,7 @@ class Session:
                     try:
                         # Generate interaction ID
                         import uuid
-                        interaction_id = f"cycle_{str(uuid.uuid4())[:8]}"
+                        interaction_id = f"interaction_{str(uuid.uuid4())[:8]}"
 
                         # Capture the complete verbatim context
                         full_context = self._capture_verbatim_context()
@@ -2051,10 +2051,20 @@ class Session:
         try:
             # Always generate a proper interaction ID
             import uuid
-            if hasattr(response, 'react_cycle_id') and response.react_cycle_id:
+            # Use the unified interaction ID if available  
+            if hasattr(self, '_current_interaction_id') and self._current_interaction_id:
+                interaction_id = self._current_interaction_id
+                if hasattr(response, '__dict__'):
+                    response.react_cycle_id = interaction_id
+            elif hasattr(response, 'react_cycle_id') and response.react_cycle_id:
                 interaction_id = response.react_cycle_id
+            elif self.current_cycle and self.current_cycle.cycle_id:
+                # Use the actual memory cycle ID instead of generating random UUID
+                interaction_id = self.current_cycle.cycle_id
+                if hasattr(response, '__dict__'):
+                    response.react_cycle_id = interaction_id
             else:
-                interaction_id = f"cycle_{str(uuid.uuid4())[:8]}"
+                interaction_id = f"interaction_{str(uuid.uuid4())[:8]}"
                 if hasattr(response, '__dict__'):
                     response.react_cycle_id = interaction_id
 
@@ -2743,19 +2753,28 @@ class Session:
         if self.enable_memory:
             self.facts_before_generation = len(self.memory.knowledge_graph.facts) if self.memory else 0
         
-        # SOTA Enhancement: Start ReAct cycle if enabled
+        # SOTA Enhancement: Generate unified interaction ID for complete observability
+        self._current_interaction_id = None
         if self.enable_memory and create_react_cycle and prompt:
+            # Generate interaction ID that will be used across ALL observability systems
+            import uuid
+            self._current_interaction_id = f"interaction_{str(uuid.uuid4())[:8]}"
+
             self.current_cycle = self.memory.start_react_cycle(
                 query=prompt,
                 max_iterations=max_tool_calls
             )
+            # Keep the original cycle ID for proper ReAct tracking
+            # The current_cycle.cycle_id represents the ReAct reasoning session ID
+            self.memory.react_cycles[self.current_cycle.cycle_id] = self.current_cycle
+            
             # Add initial thought
             self.current_cycle.add_thought(
                 f"Processing query with {provider_name} provider",
                 confidence=1.0
             )
             
-            # Start scratchpad cycle with complete observability
+            # Start scratchpad cycle with the proper ReAct cycle ID
             if self.scratchpad:
                 self.scratchpad.start_cycle(self.current_cycle.cycle_id, prompt)
                 self.scratchpad.add_thought(
@@ -2967,12 +2986,22 @@ class Session:
 
                 # Capture context for observability
                 try:
-                    if hasattr(response, 'react_cycle_id'):
+                    # Use the unified interaction ID if available
+                    if hasattr(self, '_current_interaction_id') and self._current_interaction_id:
+                        interaction_id = self._current_interaction_id
+                        if hasattr(response, '__dict__'):
+                            response.react_cycle_id = interaction_id
+                    elif hasattr(response, 'react_cycle_id') and response.react_cycle_id:
                         interaction_id = response.react_cycle_id
+                    elif self.current_cycle and self.current_cycle.cycle_id:
+                        # Use the actual memory cycle ID instead of generating random UUID
+                        interaction_id = self.current_cycle.cycle_id
+                        if hasattr(response, '__dict__'):
+                            response.react_cycle_id = interaction_id
                     else:
                         # Generate interaction ID from response metadata or UUID
                         import uuid
-                        interaction_id = f"cycle_{str(uuid.uuid4())[:8]}"
+                        interaction_id = f"interaction_{str(uuid.uuid4())[:8]}"
                         if hasattr(response, '__dict__'):
                             response.react_cycle_id = interaction_id
 
@@ -3079,9 +3108,10 @@ class Session:
         else:
             enhanced_response = response
         
-        # Clear current cycle after building response
+        # Clear current cycle and interaction ID after building response
         if self.current_cycle:
             self.current_cycle = None
+        self._current_interaction_id = None
 
         # Store complete interaction data in LanceDB
         self._store_completed_interaction(enhanced_response)
@@ -3550,16 +3580,34 @@ class Session:
         """
         logger = logging.getLogger("abstractllm.session")
 
+        # Create unified interaction ID for this session (SOTA-compliant ReAct)
+        import time, uuid
+        if not hasattr(self, '_current_interaction_id') or not self._current_interaction_id:
+            self._current_interaction_id = f"interaction_{str(uuid.uuid4())[:8]}"
+
+        interaction_id = self._current_interaction_id
+        logger.info(f"Starting ReAct streaming session with interaction ID: {interaction_id}")
+
+        # Generate ReAct cycle ID for this reasoning session
+        cycle_id = f"cycle_{str(uuid.uuid4())[:8]}"
+        logger.debug(f"Generated ReAct cycle ID: {cycle_id} for interaction: {interaction_id}")
+
         # ReAct cycle tracking
         cycle_count = 0
         original_prompt = prompt
+
+        # Initialize scratchpad once at the start
+        if hasattr(self, 'scratchpad') and self.scratchpad:
+            self.scratchpad.start_cycle(cycle_id, original_prompt)
+            logger.debug(f"Initialized scratchpad for cycle: {cycle_id} in interaction: {interaction_id}")
 
         # Initial yield to show thinking has started
         yield GenerateResponse(
             content="",
             raw_response={"type": "react_phase", "phase": "thinking", "cycle": cycle_count},
             model=None,
-            usage=None
+            usage=None,
+            react_cycle_id=interaction_id
         )
 
         while cycle_count < max_tool_calls:
@@ -3571,11 +3619,8 @@ class Session:
 
             logger.info(f"ReAct Cycle {cycle_count}: Starting generation phase")
 
-            # Initialize scratchpad for this cycle
-            if cycle_count == 1 and hasattr(self, 'scratchpad') and self.scratchpad:
-                import time
-                cycle_id = f"cycle_{int(time.time())}_{cycle_count}"
-                self.scratchpad.start_cycle(cycle_id, original_prompt)
+            # Use the cycle ID for ReAct reasoning
+            current_cycle_id = cycle_id
 
             # Generate response (Think/Act phase)
             raw_stream = provider_instance.generate(
@@ -3630,7 +3675,8 @@ class Session:
                             content=display_content,
                             raw_response={"type": "react_phase", "phase": "thinking", "cycle": cycle_count},
                             model=getattr(chunk, 'model', None) if hasattr(chunk, 'model') else None,
-                            usage=getattr(chunk, 'usage', None) if hasattr(chunk, 'usage') else None
+                            usage=getattr(chunk, 'usage', None) if hasattr(chunk, 'usage') else None,
+                            react_cycle_id=interaction_id  # Store interaction_id for backward compatibility
                         )
 
             # Add assistant message for this cycle
@@ -3703,8 +3749,9 @@ class Session:
                 )
 
                 # Record action in scratchpad (ACT phase)
+                scratchpad_action_id = None
                 if hasattr(self, 'scratchpad') and self.scratchpad:
-                    action_id = self.scratchpad.add_action(
+                    scratchpad_action_id = self.scratchpad.add_action(
                         tool_name=tool_call.name,
                         tool_args=getattr(tool_call, 'arguments', {}),
                         reasoning=f"Executing {tool_call.name} to gather information",
@@ -3728,9 +3775,9 @@ class Session:
                     tool_output = tool_result.get('output', '')
                     if tool_output:
                         # Add complete tool result to scratchpad (OBSERVE phase - verbatim)
-                        if hasattr(self, 'scratchpad') and self.scratchpad:
+                        if hasattr(self, 'scratchpad') and self.scratchpad and scratchpad_action_id:
                             self.scratchpad.add_observation(
-                                action_id=getattr(tool_call, 'id', f"action_{cycle_count}"),
+                                action_id=scratchpad_action_id,
                                 result=tool_output,  # Complete verbatim result
                                 success=tool_result.get('success', True),
                                 execution_time=tool_result.get('execution_time', 0.0)
@@ -3754,7 +3801,8 @@ class Session:
                             content=" ✓\n",
                             raw_response={"type": "tool_completed", "tool": tool_call.name, "cycle": cycle_count, "success": True},
                             model=None,
-                            usage=None
+                            usage=None,
+                            react_cycle_id=interaction_id  # Store interaction_id for backward compatibility
                         )
 
                 except Exception as e:
@@ -3762,9 +3810,9 @@ class Session:
                     error_msg = f"Tool execution failed: {str(e)}"
 
                     # Store complete error in scratchpad (verbatim)
-                    if hasattr(self, 'scratchpad') and self.scratchpad:
+                    if hasattr(self, 'scratchpad') and self.scratchpad and scratchpad_action_id:
                         self.scratchpad.add_observation(
-                            action_id=getattr(tool_call, 'id', f"action_{cycle_count}"),
+                            action_id=scratchpad_action_id,
                             result=error_msg,  # Complete error details
                             success=False,
                             execution_time=0.0
@@ -3775,7 +3823,8 @@ class Session:
                         content=" ❌\n",
                         raw_response={"type": "tool_error", "tool": tool_call.name, "cycle": cycle_count, "success": False},
                         model=None,
-                        usage=None
+                        usage=None,
+                        react_cycle_id=cycle_id  # Use unified interaction ID
                     )
 
             # Prepare for next cycle (if any)
@@ -3784,7 +3833,8 @@ class Session:
                     content="\nThinking about next steps...\n",
                     raw_response={"type": "react_phase", "phase": "observing", "cycle": cycle_count},
                     model=None,
-                    usage=None
+                    usage=None,
+                    react_cycle_id=cycle_id  # Use unified interaction ID
                 )
 
         # Handle max iterations reached
@@ -3794,7 +3844,8 @@ class Session:
                 content="\n⚠️ Maximum reasoning cycles reached. Providing current analysis...\n",
                 raw_response={"type": "react_limit", "cycles": cycle_count},
                 model=None,
-                usage=None
+                usage=None,
+                react_cycle_id=interaction_id
             )
 
     def _should_use_lance_features(self) -> bool:
