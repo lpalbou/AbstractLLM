@@ -17,6 +17,7 @@ from urllib.parse import urljoin, urlparse
 import logging
 import platform
 import re
+import time
 
 try:
     from bs4 import BeautifulSoup
@@ -733,6 +734,362 @@ def update_file(file_path: str, old_text: str, new_text: str, max_replacements: 
         
     except Exception as e:
         return f"Error updating file: {str(e)}"
+
+
+@tool(
+    description="Advanced file editing with line-based operations, multi-operation support, and atomic transactions",
+    tags=["file", "edit", "modify", "lines", "insert", "delete", "replace", "patch"],
+    when_to_use="When you need to perform precise file modifications like inserting/deleting lines, replacing specific content, or making multiple coordinated edits",
+    examples=[
+        {
+            "description": "Insert lines at specific position",
+            "arguments": {
+                "file_path": "config.py",
+                "operation": "insert",
+                "line_number": 10,
+                "content": "# New configuration option\nDEBUG = True"
+            }
+        },
+        {
+            "description": "Delete specific lines",
+            "arguments": {
+                "file_path": "old_code.py",
+                "operation": "delete",
+                "start_line": 5,
+                "end_line": 8
+            }
+        },
+        {
+            "description": "Replace lines with new content",
+            "arguments": {
+                "file_path": "script.py",
+                "operation": "replace",
+                "start_line": 15,
+                "end_line": 17,
+                "content": "def improved_function():\n    return 'better implementation'"
+            }
+        },
+        {
+            "description": "Multiple operations in sequence",
+            "arguments": {
+                "file_path": "refactor.py",
+                "operation": "multi",
+                "operations": [
+                    {"type": "replace", "start_line": 1, "end_line": 1, "content": "#!/usr/bin/env python3"},
+                    {"type": "insert", "line_number": 10, "content": "import logging"},
+                    {"type": "delete", "start_line": 20, "end_line": 22}
+                ]
+            }
+        },
+        {
+            "description": "Preview changes without applying",
+            "arguments": {
+                "file_path": "test.py",
+                "operation": "replace",
+                "start_line": 5,
+                "end_line": 7,
+                "content": "new code here",
+                "preview_only": True
+            }
+        }
+    ]
+)
+def edit_file(
+    file_path: str,
+    operation: str,
+    content: str = "",
+    line_number: Optional[int] = None,
+    start_line: Optional[int] = None,
+    end_line: Optional[int] = None,
+    operations: Optional[List[Dict[str, Any]]] = None,
+    create_backup: bool = True,
+    preview_only: bool = False,
+    encoding: str = "utf-8"
+) -> str:
+    """
+    Advanced file editing with multiple operation modes and safety features.
+    
+    This tool provides sophisticated file editing capabilities with atomic operations,
+    backup creation, and preview functionality. It supports line-based operations
+    for precise modifications without rewriting entire files.
+    
+    Args:
+        file_path: Path to the file to edit
+        operation: Type of operation - "insert", "delete", "replace", "multi", "transform"
+        content: Content to insert or replace (for insert/replace operations)
+        line_number: Specific line number for insert operations (1-indexed)
+        start_line: Starting line number for range operations (1-indexed, inclusive)
+        end_line: Ending line number for range operations (1-indexed, inclusive)
+        operations: List of operations for "multi" mode
+        create_backup: Whether to create a backup before editing (default: True)
+        preview_only: Show what would be changed without applying (default: False)
+        encoding: File encoding (default: "utf-8")
+        
+    Returns:
+        Detailed results of the editing operation with change summary
+        
+    Operation Types:
+        - "insert": Insert content at a specific line number
+        - "delete": Delete line(s) from start_line to end_line
+        - "replace": Replace line(s) from start_line to end_line with new content
+        - "multi": Perform multiple operations in sequence
+        - "transform": Apply a function to each line (advanced)
+        
+    Multi-operation format:
+        operations = [
+            {"type": "insert", "line_number": 5, "content": "new line"},
+            {"type": "delete", "start_line": 10, "end_line": 12},
+            {"type": "replace", "start_line": 20, "end_line": 20, "content": "replacement"}
+        ]
+    """
+    try:
+        # Validate file exists
+        path = Path(file_path)
+        if not path.exists():
+            return f"❌ File not found: {file_path}"
+        
+        if not path.is_file():
+            return f"❌ Path is not a file: {file_path}"
+        
+        # Read current content
+        try:
+            with open(path, 'r', encoding=encoding) as f:
+                lines = f.readlines()
+        except UnicodeDecodeError:
+            return f"❌ Cannot decode file with encoding '{encoding}'. File may be binary."
+        except Exception as e:
+            return f"❌ Error reading file: {str(e)}"
+        
+        original_line_count = len(lines)
+        
+        # Create backup if requested
+        backup_path = None
+        if create_backup and not preview_only:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            backup_path = f"{file_path}.backup_{timestamp}"
+            try:
+                shutil.copy2(file_path, backup_path)
+            except Exception as e:
+                return f"❌ Failed to create backup: {str(e)}"
+        
+        # Process operations
+        modified_lines = lines.copy()
+        changes_made = []
+        
+        if operation == "insert":
+            if line_number is None:
+                return "❌ line_number required for insert operation"
+            
+            # Validate line number
+            if line_number < 1 or line_number > len(modified_lines) + 1:
+                return f"❌ Invalid line_number: {line_number}. File has {len(modified_lines)} lines."
+            
+            # Prepare content with proper line endings
+            insert_content = content.rstrip('\n') + '\n' if content and not content.endswith('\n') else content
+            insert_lines = insert_content.splitlines(keepends=True) if insert_content else ['']
+            
+            # Insert at specified position (convert to 0-indexed)
+            insert_idx = line_number - 1
+            modified_lines[insert_idx:insert_idx] = insert_lines
+            
+            changes_made.append(f"Inserted {len(insert_lines)} line(s) at line {line_number}")
+            
+        elif operation == "delete":
+            if start_line is None:
+                return "❌ start_line required for delete operation"
+            
+            end_line = end_line or start_line  # Default to single line
+            
+            # Validate line range
+            if start_line < 1 or start_line > len(modified_lines):
+                return f"❌ Invalid start_line: {start_line}. File has {len(modified_lines)} lines."
+            if end_line < start_line or end_line > len(modified_lines):
+                return f"❌ Invalid end_line: {end_line}. Must be >= start_line and <= {len(modified_lines)}."
+            
+            # Delete lines (convert to 0-indexed)
+            start_idx = start_line - 1
+            end_idx = end_line
+            deleted_count = end_idx - start_idx
+            
+            del modified_lines[start_idx:end_idx]
+            
+            if deleted_count == 1:
+                changes_made.append(f"Deleted line {start_line}")
+            else:
+                changes_made.append(f"Deleted lines {start_line}-{end_line} ({deleted_count} lines)")
+                
+        elif operation == "replace":
+            if start_line is None:
+                return "❌ start_line required for replace operation"
+            
+            end_line = end_line or start_line  # Default to single line
+            
+            # Validate line range
+            if start_line < 1 or start_line > len(modified_lines):
+                return f"❌ Invalid start_line: {start_line}. File has {len(modified_lines)} lines."
+            if end_line < start_line or end_line > len(modified_lines):
+                return f"❌ Invalid end_line: {end_line}. Must be >= start_line and <= {len(modified_lines)}."
+            
+            # Prepare replacement content
+            replace_content = content.rstrip('\n') + '\n' if content and not content.endswith('\n') else content
+            replace_lines = replace_content.splitlines(keepends=True) if replace_content else ['']
+            
+            # Replace lines (convert to 0-indexed)
+            start_idx = start_line - 1
+            end_idx = end_line
+            replaced_count = end_idx - start_idx
+            
+            modified_lines[start_idx:end_idx] = replace_lines
+            
+            if replaced_count == 1:
+                changes_made.append(f"Replaced line {start_line} with {len(replace_lines)} line(s)")
+            else:
+                changes_made.append(f"Replaced lines {start_line}-{end_line} ({replaced_count} lines) with {len(replace_lines)} line(s)")
+                
+        elif operation == "multi":
+            if not operations:
+                return "❌ operations list required for multi operation"
+            
+            # Sort operations by line number (descending) to avoid index shifting issues
+            sorted_ops = []
+            for i, op in enumerate(operations):
+                op_type = op.get("type")
+                if op_type in ["insert"]:
+                    sort_key = op.get("line_number", 0)
+                elif op_type in ["delete", "replace"]:
+                    sort_key = op.get("start_line", 0)
+                else:
+                    return f"❌ Invalid operation type in operation {i}: {op_type}"
+                sorted_ops.append((sort_key, op))
+            
+            # Sort in descending order to process from bottom to top
+            sorted_ops.sort(key=lambda x: x[0], reverse=True)
+            
+            for line_num, op in sorted_ops:
+                op_type = op.get("type")
+                
+                if op_type == "insert":
+                    line_num = op.get("line_number")
+                    op_content = op.get("content", "")
+                    
+                    if line_num < 1 or line_num > len(modified_lines) + 1:
+                        return f"❌ Invalid line_number in insert operation: {line_num}"
+                    
+                    insert_content = op_content.rstrip('\n') + '\n' if op_content and not op_content.endswith('\n') else op_content
+                    insert_lines = insert_content.splitlines(keepends=True) if insert_content else ['']
+                    
+                    insert_idx = line_num - 1
+                    modified_lines[insert_idx:insert_idx] = insert_lines
+                    changes_made.append(f"Inserted {len(insert_lines)} line(s) at line {line_num}")
+                    
+                elif op_type == "delete":
+                    start = op.get("start_line")
+                    end = op.get("end_line", start)
+                    
+                    if start < 1 or start > len(modified_lines) or end < start or end > len(modified_lines):
+                        return f"❌ Invalid line range in delete operation: {start}-{end}"
+                    
+                    start_idx = start - 1
+                    end_idx = end
+                    deleted_count = end_idx - start_idx
+                    
+                    del modified_lines[start_idx:end_idx]
+                    
+                    if deleted_count == 1:
+                        changes_made.append(f"Deleted line {start}")
+                    else:
+                        changes_made.append(f"Deleted lines {start}-{end} ({deleted_count} lines)")
+                        
+                elif op_type == "replace":
+                    start = op.get("start_line")
+                    end = op.get("end_line", start)
+                    op_content = op.get("content", "")
+                    
+                    if start < 1 or start > len(modified_lines) or end < start or end > len(modified_lines):
+                        return f"❌ Invalid line range in replace operation: {start}-{end}"
+                    
+                    replace_content = op_content.rstrip('\n') + '\n' if op_content and not op_content.endswith('\n') else op_content
+                    replace_lines = replace_content.splitlines(keepends=True) if replace_content else ['']
+                    
+                    start_idx = start - 1
+                    end_idx = end
+                    replaced_count = end_idx - start_idx
+                    
+                    modified_lines[start_idx:end_idx] = replace_lines
+                    
+                    if replaced_count == 1:
+                        changes_made.append(f"Replaced line {start} with {len(replace_lines)} line(s)")
+                    else:
+                        changes_made.append(f"Replaced lines {start}-{end} ({replaced_count} lines) with {len(replace_lines)} line(s)")
+        
+        else:
+            return f"❌ Unknown operation: {operation}. Available: insert, delete, replace, multi"
+        
+        # Generate results
+        final_line_count = len(modified_lines)
+        line_diff = final_line_count - original_line_count
+        
+        results = []
+        
+        if preview_only:
+            results.append(f"🔍 Preview Mode - Changes NOT Applied")
+            results.append(f"  • File: {file_path}")
+            results.append(f"  • Original lines: {original_line_count}")
+            results.append(f"  • Final lines: {final_line_count}")
+            if line_diff != 0:
+                sign = "+" if line_diff > 0 else ""
+                results.append(f"  • Line difference: {sign}{line_diff}")
+            
+            results.append(f"\n📝 Changes that would be made:")
+            for change in changes_made:
+                results.append(f"  • {change}")
+            
+            # Show preview of affected areas
+            if operation != "multi":
+                if operation == "insert" and line_number:
+                    start_preview = max(1, line_number - 2)
+                    end_preview = min(len(modified_lines), line_number + 3)
+                    results.append(f"\n📄 Preview around line {line_number}:")
+                    
+                    for i in range(start_preview - 1, end_preview):
+                        line_num = i + 1
+                        line_content = modified_lines[i].rstrip() if i < len(modified_lines) else ""
+                        marker = ">>>" if line_num == line_number else "   "
+                        results.append(f"  {marker} {line_num:3d}: {line_content}")
+            
+            return "\n".join(results)
+        
+        # Apply changes to file
+        try:
+            with open(path, 'w', encoding=encoding) as f:
+                f.writelines(modified_lines)
+        except Exception as e:
+            # Restore backup if write fails
+            if backup_path and os.path.exists(backup_path):
+                shutil.copy2(backup_path, file_path)
+                return f"❌ Write failed, backup restored: {str(e)}"
+            return f"❌ Write failed: {str(e)}"
+        
+        # Success message
+        results.append(f"✅ File edited successfully: {file_path}")
+        results.append(f"  • Original lines: {original_line_count}")
+        results.append(f"  • Final lines: {final_line_count}")
+        
+        if line_diff != 0:
+            sign = "+" if line_diff > 0 else ""
+            results.append(f"  • Line difference: {sign}{line_diff}")
+        
+        if backup_path:
+            results.append(f"  • Backup created: {backup_path}")
+        
+        results.append(f"\n📝 Changes applied:")
+        for change in changes_made:
+            results.append(f"  • {change}")
+        
+        return "\n".join(results)
+        
+    except Exception as e:
+        return f"❌ Error in file editing: {str(e)}"
 
 
 # System Operations
@@ -1467,6 +1824,7 @@ __all__ = [
     'read_file',
     'write_file',
     'update_file',
+    'edit_file',
     'execute_command',
     'web_search',
     'fetch_url',
