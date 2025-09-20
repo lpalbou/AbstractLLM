@@ -522,11 +522,13 @@ class Session:
         if self._lance_available:
             logger.debug("LanceDB available, will initialize on first use")
 
-        # SOTA Scratchpad Manager with complete observability (if available)
-        if SOTA_FEATURES_AVAILABLE and persist_memory:
+        # SOTA Scratchpad Manager with complete observability (ALWAYS enabled)
+        if SOTA_FEATURES_AVAILABLE:
             try:
-                memory_folder = persist_memory.parent if persist_memory else Path("./memory")
+                # Use the standard .abstractllm cache directory like other components
+                base_dir = Path.home() / ".abstractllm"
                 session_id = self.memory.session_id if self.memory else f"session_{self.id[:8]}"
+                memory_folder = base_dir / "sessions" / session_id / "scratchpads"
                 self.scratchpad = get_scratchpad_manager(session_id, memory_folder)
                 logger.debug("Scratchpad manager initialized")
             except Exception as e:

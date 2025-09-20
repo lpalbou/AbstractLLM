@@ -324,4 +324,484 @@ class Coordinator:
             enhanced_prompt = f"""Context from memory:
 {context}
 
+User: {prompt}"""
+        else:
+            enhanced_prompt = prompt
+
+        # Generate response
+        response = self.agent.llm.generate(
+            prompt=enhanced_prompt,
+            messages=self.agent.session.get_messages()
+        )
+
+        return response.content if hasattr(response, 'content') else str(response)
+
+    def execute_with_tools(self, prompt: str,
+                           context: Optional[str] = None,
+                           tools: Any = None) -> str:
+        """Execute generation with tool support"""
+
+        # Build context-enhanced prompt
+        enhanced_prompt = prompt
+        if context:
+            enhanced_prompt = f"Context: {context}\n\n{prompt}"
+
+        # Generate with tools
+        response = self.agent.llm.generate(
+            prompt=enhanced_prompt,
+            messages=self.agent.session.get_messages(),
+            tools=tools.get_definitions() if tools else []
+        )
+
+        # Execute tool calls if present
+        if hasattr(response, 'tool_calls') and response.tool_calls:
+            tool_results = []
+            for tool_call in response.tool_calls:
+                result = tools.execute(
+                    tool_call.name,
+                    tool_call.arguments
+                )
+                tool_results.append(result)
+
+            # Generate final response with tool results
+            follow_up = f"Tool results:\n{tool_results}\n\nNow respond to: {prompt}"
+            final_response = self.agent.llm.generate(
+                prompt=follow_up,
+                messages=self.agent.session.get_messages()
+            )
+            return final_response.content if hasattr(final_response, 'content') else str(final_response)
+
+        return response.content if hasattr(response, 'content') else str(response)
+```
+
+### 4. Implement ReAct Orchestrator (45 min)
+
+Create `abstractagent/reasoning/react.py`:
+```python
+"""
+ReAct reasoning implementation.
+Based on SOTA research: Think -> Act -> Observe -> Repeat
+"""
+
+from typing import Optional, Any, List
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class ReActOrchestrator:
+    """
+    Implements ReAct reasoning cycles.
+    This is NOT memory - it's orchestration.
+    """
+
+    def __init__(self, agent):
+        self.agent = agent
+        self.max_iterations = 5
+
+    def execute(self, prompt: str,
+                context: Optional[str] = None,
+                tools: Optional[Any] = None,
+                max_iterations: int = 5) -> str:
+        """
+        Execute ReAct reasoning cycle.
+
+        Pattern:
+        1. Think about the problem
+        2. Act (use tool or respond)
+        3. Observe the result
+        4. Repeat until solution found
+        """
+        self.max_iterations = max_iterations
+
+        # Initialize cycle tracking
+        thoughts = []
+        actions = []
+        observations = []
+
+        current_prompt = prompt
+        if context:
+            current_prompt = f"Context: {context}\n\n{prompt}"
+
+        for iteration in range(max_iterations):
+            # THINK: Reason about the problem
+            thought = self.agent.think(current_prompt)
+            thoughts.append(thought)
+            logger.debug(f"Iteration {iteration} - Thought: {thought[:100]}...")
+
+            # ACT: Decide on action
+            action = self.agent.act(thought, tools.get_tools() if tools else None)
+            actions.append(action)
+
+            if action['action'] == 'tool' and tools:
+                # Execute tool
+                tool_result = tools.execute(
+                    action['tool'],
+                    action.get('arguments', {})
+                )
+
+                # OBSERVE: Process tool result
+                observation = self.agent.observe(tool_result)
+                observations.append(observation)
+
+                # Update prompt for next iteration
+                current_prompt = f"{prompt}\nObservation: {observation}"
+
+            elif action['action'] == 'respond':
+                # Final answer reached
+                return action['content']
+
+            # Safety check for max iterations
+            if iteration == max_iterations - 1:
+                # Force a response on last iteration
+                summary = self._summarize_reasoning(thoughts, actions, observations)
+                return f"After {max_iterations} iterations of reasoning:\n{summary}"
+
+        return "Unable to complete reasoning within iteration limit."
+
+    def _summarize_reasoning(self, thoughts: List[str],
+                            actions: List[dict],
+                            observations: List[str]) -> str:
+        """Summarize the reasoning process"""
+        summary = []
+
+        for i, (thought, action) in enumerate(zip(thoughts, actions)):
+            summary.append(f"Step {i+1}: {thought[:100]}...")
+            if action['action'] == 'tool':
+                summary.append(f"  Used tool: {action['tool']}")
+                if i < len(observations):
+                    summary.append(f"  Observed: {observations[i][:100]}...")
+
+        return "\n".join(summary)
+```
+
+### 5. Implement Tool Registry (30 min)
+
+Create `abstractagent/tools/registry.py`:
+```python
+"""
+Tool registry for agent-specific advanced tools.
+Note: Basic tools are in AbstractLLM. These are agent-level tools.
+"""
+
+from typing import Dict, List, Any, Callable
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class ToolRegistry:
+    """
+    Registry for agent-specific tools.
+    Extends beyond basic AbstractLLM tools.
+    """
+
+    def __init__(self):
+        self.tools: Dict[str, Callable] = {}
+        self.definitions: List[Dict[str, Any]] = []
+
+    def register(self, tool: Any):
+        """Register a tool"""
+
+        if callable(tool):
+            # Function-based tool
+            name = tool.__name__
+            self.tools[name] = tool
+
+            # Create definition from function
+            definition = {
+                'name': name,
+                'description': tool.__doc__ or 'No description',
+                'parameters': self._extract_parameters(tool)
+            }
+            self.definitions.append(definition)
+
+        elif isinstance(tool, dict):
+            # Definition-based tool
+            name = tool['name']
+            self.definitions.append(tool)
+            # Note: Implementation should be provided separately
+
+        logger.info(f"Registered tool: {name}")
+
+    def execute(self, name: str, arguments: Dict[str, Any]) -> Any:
+        """Execute a tool by name"""
+
+        if name not in self.tools:
+            return {'error': f'Tool {name} not found'}
+
+        try:
+            result = self.tools[name](**arguments)
+            return {'output': result}
+        except Exception as e:
+            logger.error(f"Tool execution failed: {e}")
+            return {'error': str(e)}
+
+    def get_definitions(self) -> List[Dict[str, Any]]:
+        """Get all tool definitions"""
+        return self.definitions
+
+    def get_tools(self) -> List[Any]:
+        """Get tool objects for reasoning"""
+        return [{'name': name, 'function': func}
+                for name, func in self.tools.items()]
+
+    def has_tools(self) -> bool:
+        """Check if any tools are registered"""
+        return len(self.tools) > 0
+
+    def _extract_parameters(self, func: Callable) -> Dict[str, Any]:
+        """Extract parameters from function signature"""
+        import inspect
+
+        sig = inspect.signature(func)
+        params = {}
+
+        for name, param in sig.parameters.items():
+            if name == 'self':
+                continue
+
+            param_info = {'type': 'string'}  # Default type
+
+            if param.annotation != param.empty:
+                # Try to infer type from annotation
+                if param.annotation == int:
+                    param_info['type'] = 'integer'
+                elif param.annotation == float:
+                    param_info['type'] = 'number'
+                elif param.annotation == bool:
+                    param_info['type'] = 'boolean'
+
+            if param.default != param.empty:
+                param_info['default'] = param.default
+
+            params[name] = param_info
+
+        return params
+```
+
+### 6. Implement CLI (30 min)
+
+Create `abstractagent/cli/alma.py`:
+```python
+"""
+ALMA CLI - The intelligent agent interface.
+This replaces the monolithic CLI in abstractllm.
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+from abstractagent import Agent
+from abstractllm import create_llm
+
+
+def create_agent_from_args(args) -> Agent:
+    """Create agent from CLI arguments"""
+
+    # LLM configuration
+    llm_config = {
+        'provider': args.provider,
+        'model': args.model
+    }
+
+    # Memory configuration
+    memory_config = None
+    if args.memory:
+        memory_config = {
+            'persist_path': Path(args.memory),
+            'temporal': True
+        }
+
+    # Create agent
+    agent = Agent(
+        llm_config=llm_config,
+        memory_config=memory_config,
+        enable_reasoning=not args.no_reasoning,
+        enable_retry=not args.no_retry
+    )
+
+    # Load tools if specified
+    if args.tools:
+        from abstractagent.tools import load_tool_suite
+        tools = load_tool_suite(args.tools)
+        for tool in tools:
+            agent.tool_registry.register(tool)
+
+    return agent
+
+
+def interactive_mode(agent: Agent):
+    """Run interactive chat"""
+
+    print("ALMA - Intelligent Agent")
+    print("Type 'exit' to quit, 'help' for commands")
+    print("-" * 40)
+
+    while True:
+        try:
+            user_input = input("\nUser: ")
+
+            if user_input.lower() == 'exit':
+                break
+            elif user_input.lower() == 'help':
+                print_help()
+                continue
+
+            # Process input
+            response = agent.chat(
+                prompt=user_input,
+                use_reasoning=True,
+                use_tools=True
+            )
+
+            print(f"\nAgent: {response}")
+
+        except KeyboardInterrupt:
+            print("\nGoodbye!")
+            break
+        except Exception as e:
+            print(f"Error: {e}")
+
+
+def print_help():
+    """Print help message"""
+    print("""
+Commands:
+  exit     - Quit the application
+  help     - Show this message
+  /memory  - Show memory statistics
+  /tools   - List available tools
+  /reasoning on|off - Toggle reasoning
+    """)
+
+
+def main():
+    """Main entry point"""
+
+    parser = argparse.ArgumentParser(
+        description="ALMA - Intelligent Agent powered by AbstractLLM"
+    )
+
+    parser.add_argument(
+        '--provider',
+        default='ollama',
+        help='LLM provider to use'
+    )
+
+    parser.add_argument(
+        '--model',
+        default='llama2',
+        help='Model to use'
+    )
+
+    parser.add_argument(
+        '--memory',
+        help='Path to persist memory'
+    )
+
+    parser.add_argument(
+        '--tools',
+        help='Tool suite to load'
+    )
+
+    parser.add_argument(
+        '--no-reasoning',
+        action='store_true',
+        help='Disable ReAct reasoning'
+    )
+
+    parser.add_argument(
+        '--no-retry',
+        action='store_true',
+        help='Disable retry strategies'
+    )
+
+    parser.add_argument(
+        '--prompt',
+        help='Single prompt to execute'
+    )
+
+    args = parser.parse_args()
+
+    # Create agent
+    agent = create_agent_from_args(args)
+
+    # Execute or run interactive
+    if args.prompt:
+        response = agent.chat(args.prompt)
+        print(response)
+    else:
+        interactive_mode(agent)
+
+
+if __name__ == '__main__':
+    main()
+```
+
+## Validation
+
+### Test agent functionality
+```bash
+cd /Users/albou/projects/abstractagent
+
+# Test basic agent
+python -c "
+from abstractagent import Agent
+
+agent = Agent(
+    llm_config={'provider': 'ollama', 'model': 'llama2'},
+    memory_config={'temporal': True}
+)
+
+response = agent.chat('Hello')
+print(f'Response: {response}')
+"
+
+# Test with reasoning
+python -c "
+from abstractagent import Agent
+
+agent = Agent(
+    llm_config={'provider': 'ollama', 'model': 'llama2'},
+    enable_reasoning=True
+)
+
+response = agent.chat(
+    'What is 2+2?',
+    use_reasoning=True
+)
+print(f'With reasoning: {response}')
+"
+```
+
+### Test CLI
+```bash
+# Install in development mode
+pip install -e .
+
+# Test CLI
+alma --help
+
+# Interactive mode
+alma --provider ollama --model llama2
+
+# Single prompt
+alma --prompt "Hello" --provider openai
+```
+
+## Success Criteria
+
+- [ ] Agent class < 300 lines (core orchestration)
+- [ ] Coordinator handles LLM + memory integration
+- [ ] ReAct reasoning works independently
+- [ ] Tool registry extensible
+- [ ] CLI provides good UX
+- [ ] All components properly separated
+
+## Next Task
+
+Proceed to Task 05: Testing and Integration
+
 User: {prompt}
