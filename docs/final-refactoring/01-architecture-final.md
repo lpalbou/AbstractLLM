@@ -53,11 +53,12 @@ abstractllm/
 │   └── tabular.py          # CSV/TSV support
 │
 ├── session.py              # BasicSession - 500 lines MAX
-│                           # ONLY: add_message, get_messages, generate
+│                           # Core: add_message, get_messages, generate_with_tools
+│                           # Executes single tool calls, emits events for observability
 │
 ├── events/                 # Extensibility without coupling
 │   ├── bus.py             # EventBus implementation
-│   └── types.py           # Event type definitions
+│   └── types.py           # Event type definitions (includes tool execution events)
 │
 └── utils/
     ├── logging.py         # Telemetry with verbatim capture
@@ -198,12 +199,17 @@ abstractagent/
     └── display.py        # Terminal UI components
 ```
 
-### Why ReAct Goes Here (Not in Memory)
+### Why ReAct Goes Here (Not in Core or Memory)
 
 **SOTA Evidence**:
 - LangChain: ReAct is an agent behavior, implements in agent layer
 - LlamaIndex: ReActAgent separate from memory components
 - Research papers: ReAct is orchestration pattern
+
+**Separation of Concerns**:
+- **AbstractLLM Core**: Executes single tool calls, emits events for observability
+- **AbstractAgent**: Orchestrates multiple LLM calls in ReAct cycles, handles complex retry/fallback logic
+- **AbstractMemory**: Stores persistent facts and experiences
 
 **Technical Reason**: ReAct generates reasoning traces (temporary), Memory stores facts (persistent)
 

@@ -324,10 +324,12 @@ sequenceDiagram
     Agent->>Session: generate_with_tools()
     Session->>Provider: generate(tools=[search])
     Provider-->>Session: ToolCallResponse
+    Session->>EventBus: emit(BEFORE_TOOL_EXECUTION)
     Session->>ToolHandler: execute_tool_call()
     ToolHandler->>Tool: search("Python tutorials")
     Tool-->>ToolHandler: results
     ToolHandler-->>Session: tool_results
+    Session->>EventBus: emit(AFTER_TOOL_EXECUTION)
     Session->>Provider: generate(with tool_results)
     Provider-->>Session: final_response
     Session-->>Agent: response
