@@ -5,6 +5,100 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2025-09-22
+
+### BREAKING CHANGE NOTICE
+**⚠️ Important: This may be the last version before a major architectural refactoring.**
+The next major version will split AbstractLLM into separate, focused packages:
+- **AbstractLLM**: Core lightweight LLM abstraction (tools, media, streaming, async)
+- **AbstractMemory**: Advanced hierarchical memory management and serialization
+- **AbstractAgent**: Autonomous agent capabilities and orchestration
+- **AbstractSwarm**: Multi-agent coordination (future)
+
+This separation will enable better modularity, focused evolution, and lighter dependencies for users who only need basic LLM functionality.
+
+### Added
+#### Enhanced Agent Capabilities
+- **Advanced Tools System**: Complete rewrite with SOTA autonomous agent capabilities
+- **Tool Catalog & Discovery**: Intelligent tool categorization and recommendation system
+- **Advanced File Operations**: Line-based editing with atomic transactions and multi-operation support
+- **Enhanced File Search**: Case-insensitive pattern matching with multiple pattern support using "|" separator
+- **Comprehensive Tool Registry**: Organized tool discovery with complexity levels and usage examples
+
+#### New Advanced Tools
+- **Edit File Tool**: Precise line-based file modifications with insert/delete/replace operations
+- **Code Intelligence**: Professional-grade code analysis and manipulation tools
+- **System Operations**: Enhanced system monitoring and resource management
+- **Network Intelligence**: Advanced networking and web operations
+- **Data Processing**: Sophisticated data manipulation and analysis capabilities
+
+#### Documentation & Planning
+- **Comprehensive Refactoring Documentation**: Detailed architectural analysis and implementation plans
+- **Migration Strategy**: Complete separation roadmap with task breakdown
+- **Architectural Evolution Analysis**: In-depth analysis of current limitations and future improvements
+- **Implementation Guides**: Step-by-step refactoring documentation
+
+### Changed
+#### Tool System Improvements
+- **Case-Insensitive File Operations**: All file search operations now support case-insensitive matching
+- **Multiple Pattern Support**: Use "|" separator to search for multiple file patterns simultaneously
+- **Enhanced Tool Examples**: Comprehensive examples and usage documentation for all tools
+- **Improved Tool Organization**: Better categorization with complexity levels and dependency tracking
+
+#### File Operations Enhancement
+- **Pattern Matching**: `list_files()` and `search_files()` now support patterns like "*.py|*.js|*.md"
+- **Case Insensitivity**: File searches now work with patterns like "*TEST*" finding both "test" and "TEST" files
+- **Better Documentation**: Enhanced examples showing complex pattern usage and multiple search scenarios
+
+#### Agent Architecture
+- **Improved ReAct Capabilities**: Enhanced reasoning and action cycles with better tool integration
+- **SOTA Tool Support**: Tools designed for complex multi-step autonomous operations
+- **Safety & Observability**: Enhanced error handling and operation monitoring
+
+### Fixed
+- **Tool Discovery**: Improved tool availability detection and error handling
+- **File Pattern Matching**: More robust pattern matching with better edge case handling
+- **System Integration**: Enhanced compatibility across different operating systems
+
+### Technical Details
+#### Files Added
+- `abstractllm/tools/advanced_tools.py` - SOTA autonomous agent tools (1594+ lines)
+- `abstractllm/tools/tool_catalog.py` - Comprehensive tool discovery and categorization system (504+ lines)
+- `docs/final-refactoring/` - Complete architectural refactoring documentation
+- `docs/refactoring/` - Detailed analysis and implementation guides
+
+#### Files Enhanced
+- `abstractllm/tools/common_tools.py` - Enhanced with edit_file tool and improved pattern matching
+- `abstractllm/tools/__init__.py` - Updated tool imports and organization
+
+#### Architecture Documentation
+- **Separation Analysis**: Detailed breakdown of how to split the monolithic structure
+- **Task Breakdown**: Specific implementation steps for modular architecture
+- **Migration Strategy**: Clear path for users during the transition
+- **Benefits Analysis**: Performance and maintainability improvements from separation
+
+### Migration Notes
+- All existing APIs remain backward compatible
+- New tools are additive and optional
+- Enhanced file operations maintain existing parameter compatibility
+- Tool catalog provides discovery without breaking existing workflows
+
+### Future Roadmap
+This version sets the foundation for the architectural split:
+1. **Phase 1**: Extract AbstractMemory (hierarchical memory, serialization)
+2. **Phase 2**: Extract AbstractAgent (autonomous capabilities, orchestration)
+3. **Phase 3**: Create AbstractSwarm (multi-agent coordination)
+4. **Phase 4**: Optimize AbstractLLM core (lightweight, focused)
+
+The goal is to provide users with exactly what they need - from simple LLM calls to complex autonomous agent orchestration - without forcing unnecessary dependencies.
+
+### Validation
+#### Tested Configurations
+- **Enhanced Tools**: All advanced tools tested across different environments ✅
+- **File Operations**: Case-insensitive and multi-pattern matching validated ✅
+- **Tool Discovery**: Catalog system tested with various tool combinations ✅
+- **Backward Compatibility**: All existing functionality preserved ✅
+
 ## [1.0.5] - 2025-09-17
 
 ### Added
