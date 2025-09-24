@@ -61,7 +61,9 @@
       "WebFetch(domain:react-lm.github.io)",
       "Bash(tee:*)",
       "Read(//Users/albou/projects/abstractllm_core/abstractllm//**)",
-      "Read(//Users/albou/projects/abstractllm_core/abstractllm/**)"
+      "Read(//Users/albou/projects/abstractllm_core/abstractllm/**)",
+      "Read(//Users/albou/projects/abstractllm_core/**)",
+      "Read(//Users/albou/projects/**)"
     ],
     "deny": []
   },

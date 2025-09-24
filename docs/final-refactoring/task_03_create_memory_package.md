@@ -5,10 +5,26 @@
 **Dependencies**: Task 02 completed
 
 ## Objectives
-- Create AbstractMemory package structure
-- Implement temporal knowledge graph
-- Integrate cognitive enhancements
-- Set up storage backends
+- Create AbstractMemory package with **two-tier strategy** for different agent types
+- Implement **ScratchpadMemory** for simple task agents (summarizers, extractors, ReAct)
+- Implement **TemporalMemory** with full three-tier architecture for autonomous agents
+- Provide clean, efficient memory selection based on agent purpose
+- Avoid over-engineering: use BasicSession when sufficient
+
+## SOTA Research Foundation
+Based on 2024 research, **memory should match agent purpose**:
+
+### Simple Agents (Task-Specific)
+- **Use Cases**: Summarizers, extractors, ReAct agents, single-task tools
+- **Memory Need**: Temporary scratchpad, no persistence required
+- **Solution**: ScratchpadMemory or BasicSession from AbstractLLM Core
+- **Example**: A summarizer just needs input text + working space
+
+### Complex Agents (Autonomous)
+- **Use Cases**: Personal assistants, learning agents, multi-session agents
+- **Memory Need**: Persistence, user profiles, knowledge accumulation
+- **Solution**: Full TemporalMemory with three tiers (Core → Working → Episodic)
+- **Example**: A personal assistant that remembers user preferences across sessions
 
 ## Steps
 
@@ -128,7 +144,164 @@ class IStorage(ABC):
         pass
 ```
 
-### 3. Implement Temporal Anchoring (45 min)
+### 3. Implement Simple Memory for Task Agents (30 min)
+
+Create `abstractmemory/simple.py`:
+```python
+"""
+Simple, efficient memory for task-specific agents.
+No over-engineering - just what's needed for the job.
+"""
+
+from typing import List, Optional, Dict, Any
+from collections import deque
+from datetime import datetime
+
+
+class ScratchpadMemory:
+    """
+    Lightweight memory for ReAct agents and single-task tools.
+
+    Use this for:
+    - ReAct agent thought-action-observation cycles
+    - Summarizer working memory
+    - Extractor temporary context
+    - Any agent that doesn't need persistence
+
+    Example:
+        # For a ReAct agent
+        scratchpad = ScratchpadMemory(max_entries=20)
+        scratchpad.add_thought("Need to search for Python tutorials")
+        scratchpad.add_action("search", {"query": "Python basics"})
+        scratchpad.add_observation("Found 10 relevant tutorials")
+
+        # Get full context for next iteration
+        context = scratchpad.get_context()
+    """
+
+    def __init__(self, max_entries: int = 100):
+        """Initialize scratchpad with bounded size"""
+        self.entries: deque = deque(maxlen=max_entries)
+        self.thoughts: List[str] = []
+        self.actions: List[Dict[str, Any]] = []
+        self.observations: List[str] = []
+
+    def add(self, content: str, entry_type: str = "note"):
+        """Add any entry to scratchpad"""
+        entry = {
+            "type": entry_type,
+            "content": content,
+            "timestamp": datetime.now().isoformat()
+        }
+        self.entries.append(entry)
+
+    def add_thought(self, thought: str):
+        """Add a thought (for ReAct pattern)"""
+        self.thoughts.append(thought)
+        self.add(thought, "thought")
+
+    def add_action(self, action: str, params: Optional[Dict] = None):
+        """Add an action (for ReAct pattern)"""
+        action_entry = {"action": action, "params": params or {}}
+        self.actions.append(action_entry)
+        self.add(f"Action: {action} with {params}", "action")
+
+    def add_observation(self, observation: str):
+        """Add an observation (for ReAct pattern)"""
+        self.observations.append(observation)
+        self.add(observation, "observation")
+
+    def get_context(self, last_n: Optional[int] = None) -> str:
+        """Get scratchpad context as string"""
+        entries_to_use = list(self.entries)
+        if last_n:
+            entries_to_use = entries_to_use[-last_n:]
+
+        context_lines = []
+        for entry in entries_to_use:
+            if entry["type"] == "thought":
+                context_lines.append(f"Thought: {entry['content']}")
+            elif entry["type"] == "action":
+                context_lines.append(f"Action: {entry['content']}")
+            elif entry["type"] == "observation":
+                context_lines.append(f"Observation: {entry['content']}")
+            else:
+                context_lines.append(entry['content'])
+
+        return "\n".join(context_lines)
+
+    def get_react_history(self) -> Dict[str, List]:
+        """Get structured ReAct history"""
+        return {
+            "thoughts": self.thoughts,
+            "actions": self.actions,
+            "observations": self.observations
+        }
+
+    def clear(self):
+        """Clear the scratchpad"""
+        self.entries.clear()
+        self.thoughts.clear()
+        self.actions.clear()
+        self.observations.clear()
+
+    def __len__(self) -> int:
+        return len(self.entries)
+
+    def __str__(self) -> str:
+        return f"ScratchpadMemory({len(self.entries)} entries)"
+
+
+class BufferMemory:
+    """
+    Simple conversation buffer (wrapper around BasicSession).
+
+    Use this when BasicSession from AbstractLLM Core is sufficient.
+    This is just a thin adapter for compatibility.
+
+    Example:
+        # For a simple chatbot
+        memory = BufferMemory(max_messages=50)
+        memory.add_message("user", "What's the weather?")
+        memory.add_message("assistant", "I don't have weather data")
+        context = memory.get_context()
+    """
+
+    def __init__(self, max_messages: int = 100):
+        """Initialize buffer with size limit"""
+        self.messages: deque = deque(maxlen=max_messages)
+
+    def add_message(self, role: str, content: str):
+        """Add a message to the buffer"""
+        self.messages.append({
+            "role": role,
+            "content": content,
+            "timestamp": datetime.now().isoformat()
+        })
+
+    def get_messages(self) -> List[Dict[str, str]]:
+        """Get messages for LLM context"""
+        return [{"role": m["role"], "content": m["content"]}
+                for m in self.messages]
+
+    def get_context(self, last_n: Optional[int] = None) -> str:
+        """Get conversation as formatted string"""
+        messages = list(self.messages)
+        if last_n:
+            messages = messages[-last_n:]
+
+        lines = []
+        for msg in messages:
+            lines.append(f"{msg['role']}: {msg['content']}")
+
+        return "\n".join(lines)
+
+    def clear(self):
+        """Clear the buffer"""
+        self.messages.clear()
+```
+
+### 4. Implement Temporal Anchoring for Complex Memory (45 min)
 
 Create `abstractmemory/core/temporal.py`:
 ```python
@@ -150,13 +323,28 @@ class TemporalSpan:
 
 
 @dataclass
-class TemporalAnchor:
-    """Bi-temporal anchor for facts and events"""
+class RelationalContext:
+    """Who is involved in this memory"""
+    user_id: str                     # Primary user/speaker
+    agent_id: Optional[str] = None   # Which agent persona
+    relationship: Optional[str] = None  # "owner", "colleague", "stranger"
+    session_id: Optional[str] = None   # Conversation session
+
+@dataclass
+class GroundingAnchor:
+    """Multi-dimensional grounding for experiential memory"""
+    # Temporal grounding (when)
     event_time: datetime        # When it happened
     ingestion_time: datetime    # When we learned about it
     validity_span: TemporalSpan # When it was/is valid
+
+    # Relational grounding (who)
+    relational: RelationalContext  # Who is involved
+
+    # Additional grounding
     confidence: float = 1.0
     source: Optional[str] = None
+    location: Optional[str] = None  # Where (optional)
 
 
 class TemporalIndex:
@@ -219,7 +407,126 @@ class TemporalIndex:
         return sorted(changes)
 ```
 
-### 4. Implement Memory Components (45 min)
+### 5. Implement Memory Components for Complex Agents (60 min)
+
+**For Autonomous Agents Only - SOTA Three-Tier Architecture**: Core → Working → Episodic
+
+Create `abstractmemory/components/core.py`:
+```python
+"""
+Core memory - always-accessible foundational facts (MemGPT/Letta pattern).
+"""
+
+from typing import Dict, Optional
+from datetime import datetime
+from dataclasses import dataclass
+
+from abstractmemory.core.interfaces import IMemoryComponent, MemoryItem
+
+
+@dataclass
+class CoreMemoryBlock:
+    """A block of core memory (always in context)"""
+    block_id: str
+    label: str           # "persona" or "user_info"
+    content: str         # Max ~200 tokens
+    last_updated: datetime
+    edit_count: int = 0
+
+    def update(self, new_content: str, agent_reasoning: str):
+        """Agent can self-edit this block"""
+        self.content = new_content
+        self.last_updated = datetime.now()
+        self.edit_count += 1
+        # In production: log agent_reasoning for transparency
+
+
+class CoreMemory(IMemoryComponent):
+    """
+    Always-accessible core memory for fundamental facts.
+    Based on MemGPT/Letta research - stores agent persona + user information.
+    """
+
+    def __init__(self, max_blocks: int = 10, max_tokens_per_block: int = 200):
+        self.blocks: Dict[str, CoreMemoryBlock] = {}
+        self.max_blocks = max_blocks
+        self.max_tokens_per_block = max_tokens_per_block
+
+        # Initialize default blocks (MemGPT pattern)
+        self.blocks["persona"] = CoreMemoryBlock(
+            block_id="persona",
+            label="persona",
+            content="I am an AI assistant with persistent memory capabilities.",
+            last_updated=datetime.now()
+        )
+        self.blocks["user_info"] = CoreMemoryBlock(
+            block_id="user_info",
+            label="user_info",
+            content="User information will be learned over time.",
+            last_updated=datetime.now()
+        )
+
+    def get_context(self) -> str:
+        """Get all core memory as context string (always included in prompts)"""
+        context_parts = []
+        for block in self.blocks.values():
+            context_parts.append(f"[{block.label}] {block.content}")
+        return "\n".join(context_parts)
+
+    def update_block(self, block_id: str, content: str, reasoning: str = "") -> bool:
+        """Agent updates a core memory block (self-editing capability)"""
+        if block_id in self.blocks:
+            if len(content) <= self.max_tokens_per_block * 4:  # Rough token estimate
+                self.blocks[block_id].update(content, reasoning)
+                return True
+        return False
+
+    def add_block(self, label: str, content: str) -> Optional[str]:
+        """Add new core memory block if space available"""
+        if len(self.blocks) < self.max_blocks:
+            block_id = f"core_{len(self.blocks)}"
+            self.blocks[block_id] = CoreMemoryBlock(
+                block_id=block_id,
+                label=label,
+                content=content,
+                last_updated=datetime.now()
+            )
+            return block_id
+        return None
+
+    # IMemoryComponent interface implementation
+    def add(self, item: MemoryItem) -> str:
+        """Add important fact to core memory"""
+        # Convert MemoryItem to core memory block
+        content = str(item.content)
+        if "user" in content.lower():
+            return self.update_block("user_info", content) and "user_info" or ""
+        elif "persona" in content.lower() or "agent" in content.lower():
+            return self.update_block("persona", content) and "persona" or ""
+        else:
+            return self.add_block("general", content) or ""
+
+    def retrieve(self, query: str, limit: int = 10) -> list[MemoryItem]:
+        """Retrieve core memory blocks matching query"""
+        results = []
+        query_lower = query.lower()
+
+        for block in self.blocks.values():
+            if query_lower in block.content.lower() or query_lower in block.label.lower():
+                results.append(MemoryItem(
+                    content={"label": block.label, "content": block.content},
+                    event_time=block.last_updated,
+                    ingestion_time=block.last_updated,
+                    confidence=1.0,  # Core memory is always high confidence
+                    metadata={"block_id": block.block_id, "edit_count": block.edit_count}
+                ))
+
+        return results[:limit]
+
+    def consolidate(self) -> int:
+        """Core memory doesn't consolidate - it's manually curated"""
+        return 0
+```
 
 Create `abstractmemory/components/working.py`:
 ```python
@@ -276,6 +583,104 @@ class WorkingMemory(IMemoryComponent):
     def get_context_window(self) -> List[MemoryItem]:
         """Get current context window"""
         return [item for _, item in self.items]
+```
+
+Create `abstractmemory/components/semantic.py`:
+```python
+"""
+Semantic memory for facts, concepts, and learned knowledge.
+Separate from Core (identity) and Episodic (events).
+"""
+
+from typing import List, Dict, Set
+from datetime import datetime
+from collections import defaultdict
+
+from abstractmemory.core.interfaces import IMemoryComponent, MemoryItem
+
+
+class SemanticMemory(IMemoryComponent):
+    """
+    Long-term storage of facts and concepts learned over time.
+    Only stores validated, recurring knowledge.
+    """
+
+    def __init__(self, validation_threshold: int = 3):
+        """
+        Args:
+            validation_threshold: How many times a fact must be observed to be stored
+        """
+        self.facts: Dict[str, Dict] = {}  # Validated facts
+        self.concepts: Dict[str, Set[str]] = {}  # Concept relationships
+        self.pending_facts: defaultdict = defaultdict(int)  # Counting occurrences
+        self.validation_threshold = validation_threshold
+
+    def add(self, item: MemoryItem) -> str:
+        """Add potential fact - only stored after validation"""
+        fact_key = str(item.content).lower()
+
+        # Count occurrence
+        self.pending_facts[fact_key] += 1
+
+        # Promote to validated facts if threshold met
+        if self.pending_facts[fact_key] >= self.validation_threshold:
+            fact_id = f"fact_{len(self.facts)}_{datetime.now().timestamp()}"
+            self.facts[fact_id] = {
+                'content': item.content,
+                'confidence': min(1.0, self.pending_facts[fact_key] / 10),  # Confidence grows with repetition
+                'first_seen': item.event_time,
+                'validated_at': datetime.now(),
+                'occurrence_count': self.pending_facts[fact_key]
+            }
+            # Clear from pending
+            del self.pending_facts[fact_key]
+            return fact_id
+
+        return ""  # Not yet validated
+
+    def retrieve(self, query: str, limit: int = 10) -> List[MemoryItem]:
+        """Retrieve validated facts matching query"""
+        results = []
+        query_lower = query.lower()
+
+        for fact_id, fact in self.facts.items():
+            if query_lower in str(fact['content']).lower():
+                results.append(MemoryItem(
+                    content=fact['content'],
+                    event_time=fact['first_seen'],
+                    ingestion_time=fact['validated_at'],
+                    confidence=fact['confidence'],
+                    metadata={'occurrence_count': fact['occurrence_count']}
+                ))
+                if len(results) >= limit:
+                    break
+
+        # Sort by confidence
+        return sorted(results, key=lambda x: x.confidence, reverse=True)[:limit]
+
+    def consolidate(self) -> int:
+        """Link related facts into concepts"""
+        consolidated = 0
+        # Group facts by common terms
+        for fact_id, fact in self.facts.items():
+            words = str(fact['content']).lower().split()
+            for word in words:
+                if len(word) > 3:  # Skip short words
+                    if word not in self.concepts:
+                        self.concepts[word] = set()
+                    self.concepts[word].add(fact_id)
+                    consolidated += 1
+        return consolidated
+
+    def get_concept_network(self, concept: str) -> Dict[str, Set[str]]:
+        """Get related facts for a concept"""
+        if concept.lower() in self.concepts:
+            fact_ids = self.concepts[concept.lower()]
+            return {
+                'concept': concept,
+                'facts': [self.facts[fid]['content'] for fid in fact_ids if fid in self.facts]
+            }
+        return {'concept': concept, 'facts': []}
 ```
 
 Create `abstractmemory/components/episodic.py`:
@@ -532,61 +937,171 @@ class TemporalKnowledgeGraph:
         return sorted(evolution, key=lambda x: x['time'])
 ```
 
-### 6. Create Main Memory Class (30 min)
+### 7. Create Memory Factory and Main Classes (30 min)
 
 Create `abstractmemory/__init__.py`:
 ```python
 """
-AbstractMemory - Temporal knowledge graph memory for LLM agents.
+AbstractMemory - Two-tier memory strategy for different agent types.
+
+Simple agents use ScratchpadMemory or BufferMemory.
+Complex agents use full TemporalMemory.
 """
 
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union, Literal
 from datetime import datetime
+import uuid
 
+from .simple import ScratchpadMemory, BufferMemory
 from .core.interfaces import MemoryItem
+from .components.core import CoreMemory
 from .components.working import WorkingMemory
+from .components.semantic import SemanticMemory
 from .components.episodic import EpisodicMemory
 from .graph.knowledge_graph import TemporalKnowledgeGraph
 
 
-class TemporalMemory:
+def create_memory(
+    memory_type: Literal["scratchpad", "buffer", "grounded"] = "scratchpad",
+    **kwargs
+) -> Union[ScratchpadMemory, BufferMemory, 'GroundedMemory']:
     """
-    Main memory system combining all components.
+    Factory function to create appropriate memory for agent type.
+
+    Args:
+        memory_type: Type of memory to create
+            - "scratchpad": For ReAct agents and task tools
+            - "buffer": For simple chatbots
+            - "grounded": For autonomous agents (multi-dimensional memory)
+
+    Examples:
+        # For a ReAct agent
+        memory = create_memory("scratchpad", max_entries=50)
+
+        # For a simple chatbot
+        memory = create_memory("buffer", max_messages=100)
+
+        # For an autonomous assistant with user tracking
+        memory = create_memory("grounded", working_capacity=10, enable_kg=True)
+        memory.set_current_user("alice", relationship="owner")
+    """
+    if memory_type == "scratchpad":
+        return ScratchpadMemory(**kwargs)
+    elif memory_type == "buffer":
+        return BufferMemory(**kwargs)
+    elif memory_type == "grounded":
+        return GroundedMemory(**kwargs)
+    else:
+        raise ValueError(f"Unknown memory type: {memory_type}")
+
+
+class GroundedMemory:
+    """
+    Multi-dimensionally grounded memory for autonomous agents.
+    Grounds memory in WHO (relational), WHEN (temporal), and WHERE (spatial).
+
+    Memory Architecture:
+    - Core: Agent identity and persona (rarely changes)
+    - Semantic: Validated facts and concepts (requires recurrence)
+    - Working: Current context (transient)
+    - Episodic: Event archive (long-term)
     """
 
     def __init__(self,
                  working_capacity: int = 10,
                  enable_kg: bool = True,
-                 storage_backend: Optional[str] = None):
-        """Initialize temporal memory system"""
+                 storage_backend: Optional[str] = None,
+                 default_user_id: str = "default",
+                 semantic_threshold: int = 3):
+        """Initialize grounded memory system"""
 
-        # Initialize components
-        self.working = WorkingMemory(capacity=working_capacity)
-        self.episodic = EpisodicMemory()
+        # Initialize memory components (Four-tier architecture)
+        self.core = CoreMemory()  # Agent identity (rarely updated)
+        self.semantic = SemanticMemory(validation_threshold=semantic_threshold)  # Validated facts
+        self.working = WorkingMemory(capacity=working_capacity)  # Transient context
+        self.episodic = EpisodicMemory()  # Event archive
 
         # Initialize knowledge graph if enabled
         self.kg = TemporalKnowledgeGraph() if enable_kg else None
 
+        # Relational tracking
+        self.current_user = default_user_id
+        self.user_profiles: Dict[str, Dict] = {}  # User-specific profiles
+        self.user_memories: Dict[str, List] = {}  # User-specific memory indices
+
+        # Learning tracking
+        self.failure_patterns: Dict[str, int] = {}  # Track repeated failures
+        self.success_patterns: Dict[str, int] = {}  # Track successful patterns
+
+        # Core memory update tracking
+        self.core_update_candidates: Dict[str, int] = {}  # Track potential core updates
+        self.core_update_threshold = 5  # Require 5 occurrences before core update
+
         # Storage backend
         self.storage = self._init_storage(storage_backend)
 
-    def add_interaction(self, user_input: str, agent_response: str):
-        """Add user-agent interaction to memory"""
+    def set_current_user(self, user_id: str, relationship: Optional[str] = None):
+        """Set the current user for relational context"""
+        self.current_user = user_id
+
+        # Initialize user profile if new
+        if user_id not in self.user_profiles:
+            self.user_profiles[user_id] = {
+                "first_seen": datetime.now(),
+                "relationship": relationship or "unknown",
+                "interaction_count": 0,
+                "preferences": {},
+                "facts": []
+            }
+            self.user_memories[user_id] = []
+
+    def add_interaction(self, user_input: str, agent_response: str,
+                       user_id: Optional[str] = None):
+        """Add user-agent interaction with relational grounding"""
         now = datetime.now()
+        user_id = user_id or self.current_user
 
-        # Add to working memory
-        user_item = MemoryItem(
-            content={'role': 'user', 'text': user_input},
-            event_time=now,
-            ingestion_time=now
+        # Create relational context
+        relational = RelationalContext(
+            user_id=user_id,
+            agent_id="main",
+            relationship=self.user_profiles.get(user_id, {}).get("relationship"),
+            session_id=str(uuid.uuid4())[:8]
         )
-        self.working.add(user_item)
 
-        # Add to episodic memory
-        episode = MemoryItem(
-            content={'interaction': {'user': user_input, 'agent': agent_response}},
+        # Add to working memory with relational context
+        user_item = MemoryItem(
+            content={
+                'role': 'user',
+                'text': user_input,
+                'user_id': user_id  # Track who said it
+            },
             event_time=now,
-            ingestion_time=now
+            ingestion_time=now,
+            metadata={'relational': relational.__dict__}
+        )
+        item_id = self.working.add(user_item)
+
+        # Track in user-specific memory index
+        if user_id in self.user_memories:
+            self.user_memories[user_id].append(item_id)
+
+        # Update user profile
+        if user_id in self.user_profiles:
+            self.user_profiles[user_id]["interaction_count"] += 1
+
+        # Add to episodic memory with full context
+        episode = MemoryItem(
+            content={
+                'interaction': {
+                    'user': user_input,
+                    'agent': agent_response,
+                    'user_id': user_id
+                }
+            },
+            event_time=now,
+            ingestion_time=now,
+            metadata={'relational': relational.__dict__}
         )
         self.episodic.add(episode)
 
@@ -617,22 +1132,52 @@ class TemporalMemory:
                         event_time=event_time
                     )
 
-    def retrieve_context(self, query: str, max_items: int = 5) -> str:
-        """Retrieve relevant context for query"""
+    def get_full_context(self, query: str, max_items: int = 5,
+                        user_id: Optional[str] = None) -> str:
+        """Get user-specific context through relational lens"""
+        user_id = user_id or self.current_user
         context_parts = []
 
-        # Get from working memory
+        # Include user profile if known
+        if user_id in self.user_profiles:
+            profile = self.user_profiles[user_id]
+            context_parts.append(f"=== User Profile: {user_id} ===")
+            context_parts.append(f"Relationship: {profile['relationship']}")
+            context_parts.append(f"Known for: {profile['interaction_count']} interactions")
+            if profile.get('facts'):
+                context_parts.append(f"Known facts: {', '.join(profile['facts'][:3])}")
+
+        # Always include core memory (agent identity)
+        core_context = self.core.get_context()
+        if core_context:
+            context_parts.append("\n=== Core Memory (Identity) ===")
+            context_parts.append(core_context)
+
+        # Include relevant semantic memory (validated facts)
+        semantic_facts = self.semantic.retrieve(query, limit=max_items//2)
+        if semantic_facts:
+            context_parts.append("\n=== Learned Facts ===")
+            for fact in semantic_facts:
+                context_parts.append(f"- {fact.content} (confidence: {fact.confidence:.2f})")
+
+        # Check for learned failures/successes relevant to query
+        for pattern, count in self.failure_patterns.items():
+            if query.lower() in pattern.lower() and count >= 2:
+                context_parts.append(f"\n⚠️ Warning: Previous failures with similar action ({count} times)")
+                break
+
+        # Get from working memory (recent context)
         working_items = self.working.retrieve(query, limit=max_items)
         if working_items:
-            context_parts.append("Recent context:")
+            context_parts.append("\n=== Recent Context ===")
             for item in working_items:
                 if isinstance(item.content, dict):
                     context_parts.append(f"- {item.content.get('text', str(item.content))}")
 
-        # Get from episodic memory
+        # Get from episodic memory (retrieved as needed)
         episodes = self.episodic.retrieve(query, limit=max_items)
         if episodes:
-            context_parts.append("\nRelevant episodes:")
+            context_parts.append("\n=== Relevant Episodes ===")
             for episode in episodes:
                 context_parts.append(f"- {str(episode.content)[:100]}...")
 
@@ -640,13 +1185,17 @@ class TemporalMemory:
         if self.kg:
             facts = self.kg.query_at_time(query, datetime.now())
             if facts:
-                context_parts.append("\nKnown facts:")
+                context_parts.append("\n=== Known Facts ===")
                 for fact in facts[:max_items]:
                     context_parts.append(
                         f"- {fact['subject']} {fact['predicate']} {fact['object']}"
                     )
 
-        return "\n".join(context_parts) if context_parts else "No relevant context found."
+        return "\n\n".join(context_parts) if context_parts else "No relevant context found."
+
+    def retrieve_context(self, query: str, max_items: int = 5) -> str:
+        """Backward compatibility wrapper"""
+        return self.get_full_context(query, max_items)
 
     def _init_storage(self, backend: Optional[str]):
         """Initialize storage backend"""
@@ -661,7 +1210,8 @@ class TemporalMemory:
     def save(self, path: str):
         """Save memory to disk"""
         if self.storage:
-            # Save each component
+            # Save each component (three-tier architecture)
+            self.storage.save(f"{path}/core", self.core)
             self.storage.save(f"{path}/working", self.working)
             self.storage.save(f"{path}/episodic", self.episodic)
             if self.kg:
@@ -670,15 +1220,119 @@ class TemporalMemory:
     def load(self, path: str):
         """Load memory from disk"""
         if self.storage and self.storage.exists(path):
-            # Load components
+            # Load components (three-tier architecture)
+            if self.storage.exists(f"{path}/core"):
+                self.core = self.storage.load(f"{path}/core")
             self.working = self.storage.load(f"{path}/working")
             self.episodic = self.storage.load(f"{path}/episodic")
             if self.storage.exists(f"{path}/kg"):
                 self.kg = self.storage.load(f"{path}/kg")
 
+    def learn_about_user(self, fact: str, user_id: Optional[str] = None):
+        """Learn and remember a fact about a specific user"""
+        user_id = user_id or self.current_user
 
-# Export main classes
-__all__ = ['TemporalMemory', 'MemoryItem', 'TemporalKnowledgeGraph']
+        if user_id in self.user_profiles:
+            # Add to user's facts
+            if 'facts' not in self.user_profiles[user_id]:
+                self.user_profiles[user_id]['facts'] = []
+
+            # Avoid duplicates
+            if fact not in self.user_profiles[user_id]['facts']:
+                self.user_profiles[user_id]['facts'].append(fact)
+
+                # Track for potential core memory update (requires recurrence)
+                core_key = f"user:{user_id}:{fact}"
+                self.core_update_candidates[core_key] = self.core_update_candidates.get(core_key, 0) + 1
+
+                # Only update core memory after threshold met
+                if self.core_update_candidates[core_key] >= self.core_update_threshold:
+                    if user_id == self.current_user:
+                        current_info = self.core.blocks.get("user_info").content
+                        updated_info = f"{current_info}\n- {fact}"
+                        self.core.update_block("user_info", updated_info,
+                                             f"Validated through recurrence: {fact}")
+                        del self.core_update_candidates[core_key]
+
+    def track_failure(self, action: str, context: str):
+        """Track a failed action to learn from mistakes"""
+        failure_key = f"{action}:{context}"
+        self.failure_patterns[failure_key] = self.failure_patterns.get(failure_key, 0) + 1
+
+        # After repeated failures, add to semantic memory as a learned constraint
+        if self.failure_patterns[failure_key] >= 3:
+            fact = f"Action '{action}' tends to fail in context: {context}"
+            self.semantic.add(MemoryItem(
+                content=fact,
+                event_time=datetime.now(),
+                ingestion_time=datetime.now(),
+                confidence=0.9,
+                metadata={'type': 'learned_constraint', 'failure_count': self.failure_patterns[failure_key]}
+            ))
+
+    def track_success(self, action: str, context: str):
+        """Track a successful action to reinforce patterns"""
+        success_key = f"{action}:{context}"
+        self.success_patterns[success_key] = self.success_patterns.get(success_key, 0) + 1
+
+        # After repeated successes, add to semantic memory as a learned strategy
+        if self.success_patterns[success_key] >= 3:
+            fact = f"Action '{action}' works well in context: {context}"
+            self.semantic.add(MemoryItem(
+                content=fact,
+                event_time=datetime.now(),
+                ingestion_time=datetime.now(),
+                confidence=0.9,
+                metadata={'type': 'learned_strategy', 'success_count': self.success_patterns[success_key]}
+            ))
+
+    def consolidate_memories(self):
+        """Consolidate working memory to semantic/episodic based on importance"""
+        # Get items from working memory
+        working_items = self.working.get_context_window()
+
+        for item in working_items:
+            # Extract potential facts for semantic memory
+            if isinstance(item.content, dict):
+                content_text = item.content.get('text', '')
+                # Simple heuristic: statements with "is", "are", "means" are potential facts
+                if any(word in content_text.lower() for word in ['is', 'are', 'means', 'equals']):
+                    self.semantic.add(item)
+
+            # Important items go to episodic memory
+            if item.confidence > 0.7 or (item.metadata and item.metadata.get('important')):
+                self.episodic.add(item)
+
+        # Consolidate semantic memory concepts
+        self.semantic.consolidate()
+
+    def get_user_context(self, user_id: str) -> Optional[Dict]:
+        """Get everything we know about a specific user"""
+        return self.user_profiles.get(user_id)
+
+    def update_core_memory(self, block_id: str, content: str, reasoning: str = "") -> bool:
+        """Agent can update core memory blocks (self-editing capability)"""
+        return self.core.update_block(block_id, content, reasoning)
+
+    def get_core_memory_context(self) -> str:
+        """Get core memory context for always-accessible facts"""
+        return self.core.get_context()
+
+
+# Export main classes and factory
+__all__ = [
+    'create_memory',  # Factory function
+    'ScratchpadMemory',  # Simple memory for task agents
+    'BufferMemory',  # Simple buffer for chatbots
+    'GroundedMemory',  # Multi-dimensional memory for autonomous agents
+    'MemoryItem',  # Data structure
+    'CoreMemory',  # Core memory component (identity)
+    'SemanticMemory',  # Semantic memory component (validated facts)
+    'WorkingMemory',  # Working memory component (transient)
+    'EpisodicMemory',  # Episodic memory component (events)
+    'TemporalKnowledgeGraph',  # Knowledge graph
+    'RelationalContext'  # For tracking who
+]
 ```
 
 ## Validation
@@ -690,43 +1344,148 @@ cd /Users/albou/projects/abstractmemory
 # Install in development mode
 pip install -e .
 
-# Test basic functionality
+# Test two-tier memory strategy
 python << 'EOF'
-from abstractmemory import TemporalMemory
+from abstractmemory import create_memory
 from datetime import datetime
 
-# Create memory
-memory = TemporalMemory(working_capacity=5)
+print("=== Testing Two-Tier Memory Strategy ===")
 
-# Add interaction
-memory.add_interaction(
-    "What is Python?",
-    "Python is a programming language. Python has dynamic typing."
+# Test 1: Simple ScratchpadMemory for ReAct Agent
+print("\n1. Testing ScratchpadMemory (for ReAct agents):")
+scratchpad = create_memory("scratchpad", max_entries=10)
+
+# Simulate ReAct cycle
+scratchpad.add_thought("User wants to know about Python memory management")
+scratchpad.add_action("search", {"query": "Python garbage collection"})
+scratchpad.add_observation("Found information about reference counting and gc module")
+scratchpad.add_thought("Should explain both reference counting and cyclic GC")
+
+print(f"Scratchpad has {len(scratchpad)} entries")
+print("Recent context:")
+print(scratchpad.get_context(last_n=3))
+
+# Test 2: BufferMemory for Simple Chatbot
+print("\n2. Testing BufferMemory (for simple chatbots):")
+buffer = create_memory("buffer", max_messages=50)
+
+buffer.add_message("user", "What is Python?")
+buffer.add_message("assistant", "Python is a high-level programming language")
+buffer.add_message("user", "What makes it popular?")
+buffer.add_message("assistant", "Python is popular for its simplicity and versatility")
+
+print(f"Buffer has {len(buffer.messages)} messages")
+print("Conversation context:")
+print(buffer.get_context(last_n=2))
+
+# Test 3: GroundedMemory for Autonomous Agent with User Tracking
+print("\n3. Testing GroundedMemory (for autonomous agents):")
+grounded = create_memory("grounded", working_capacity=5)
+
+# Set up user context - this is crucial for personalization
+print("\n3a. Testing Relational Grounding (WHO):")
+grounded.set_current_user("alice", relationship="owner")
+
+# First interaction with Alice
+grounded.add_interaction(
+    "My name is Alice and I love Python",
+    "Nice to meet you, Alice! Python is a great language.",
+    user_id="alice"
 )
+grounded.learn_about_user("loves Python programming", user_id="alice")
 
-# Retrieve context
-context = memory.retrieve_context("Python")
-print("Retrieved context:")
-print(context)
+# Switch to different user
+grounded.set_current_user("bob", relationship="colleague")
+grounded.add_interaction(
+    "I prefer Java over Python",
+    "Java is indeed powerful for enterprise applications.",
+    user_id="bob"
+)
+grounded.learn_about_user("prefers Java", user_id="bob")
 
-# Check knowledge graph
+# Get user-specific context for Alice
+print("\nContext when talking to Alice:")
+alice_context = grounded.get_full_context("programming language", user_id="alice")
+print(alice_context)
+
+# Get user-specific context for Bob
+print("\nContext when talking to Bob:")
+bob_context = grounded.get_full_context("programming language", user_id="bob")
+print(bob_context)
+
+# Show how the agent adapts based on who it's talking to
+print("\n3b. User Profiles:")
+print(f"Alice profile: {grounded.get_user_context('alice')}")
+print(f"Bob profile: {grounded.get_user_context('bob')}")
+
+# Test 4: Knowledge Graph Integration
+print("\n4. Testing Knowledge Graph:")
 if memory.kg:
     facts = memory.kg.query_at_time("is", datetime.now())
-    print(f"\nExtracted {len(facts)} facts")
+    print(f"Extracted {len(facts)} facts:")
     for fact in facts:
-        print(f"  - {fact}")
+        print(f"  - {fact['subject']} {fact['predicate']} {fact['object']}")
+
+# Test 4: Learning from Failures
+print("\n4. Testing Learning from Failures:")
+# Track some failures
+grounded.track_failure("search", "no internet connection")
+grounded.track_failure("search", "no internet connection")
+grounded.track_failure("search", "no internet connection")
+# After 3 failures, it should be in semantic memory
+
+# Track some successes
+grounded.track_success("calculate", "math problem")
+grounded.track_success("calculate", "math problem")
+grounded.track_success("calculate", "math problem")
+
+# Check if learned
+learned_facts = grounded.semantic.retrieve("search", limit=5)
+print(f"Learned {len(learned_facts)} facts about failures/successes")
+
+# Test 5: Memory Consolidation
+print("\n5. Testing Memory Consolidation:")
+grounded.consolidate_memories()
+print(f"✓ Semantic facts after consolidation: {len(grounded.semantic.facts)}")
+
+# Test 6: Memory Hierarchy Validation
+print("\n6. Validating Four-Tier Architecture:")
+print(f"✓ Core Memory: {len(grounded.core.blocks)} blocks (identity)")
+print(f"✓ Semantic Memory: {len(grounded.semantic.facts)} validated facts")
+print(f"✓ Working Memory: {len(grounded.working.items)} transient items")
+print(f"✓ Episodic Memory: {len(grounded.episodic.episodes)} events")
+if grounded.kg:
+    print(f"✓ Knowledge Graph: {grounded.kg.graph.number_of_nodes()} entities")
+
+print("\n=== Grounded Memory Test Complete ===")
 EOF
 ```
 
 ## Success Criteria
 
-- [ ] Package structure created
-- [ ] Temporal anchoring implemented
-- [ ] Working memory functional
-- [ ] Episodic memory functional
-- [ ] Knowledge graph with bi-temporal model
-- [ ] Basic fact extraction working
-- [ ] Context retrieval working
+### Two-Tier Memory Strategy Validation
+- [ ] **Simple Memory Types** implemented and tested:
+  - [ ] ScratchpadMemory for ReAct agents (thought-action-observation)
+  - [ ] BufferMemory for simple chatbots (conversation history)
+  - [ ] Clean, efficient, no over-engineering
+- [ ] **Complex Memory (TemporalMemory)** for autonomous agents:
+  - [ ] Core Memory with self-editing capability
+  - [ ] Working Memory with sliding window
+  - [ ] Episodic Memory with temporal anchoring
+  - [ ] Knowledge Graph with bi-temporal model
+- [ ] **Memory Factory** (`create_memory`) correctly instantiates based on agent type
+
+### Performance Validation
+- [ ] Simple memory operations < 1ms
+- [ ] Complex memory retrieval < 100ms for 10k facts
+- [ ] Memory selection appropriate to agent purpose
+- [ ] No unnecessary overhead for simple agents
+
+### Integration Tests
+- [ ] ReAct agent using ScratchpadMemory efficiently
+- [ ] Simple chatbot using BufferMemory or BasicSession
+- [ ] Autonomous agent using full TemporalMemory
+- [ ] Memory type selection based on use case works correctly
 
 ## Next Task
 

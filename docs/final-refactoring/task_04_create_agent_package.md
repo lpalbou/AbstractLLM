@@ -6,9 +6,16 @@
 
 ## Objectives
 - Create AbstractAgent package structure
-- Implement main Agent class
-- Set up ReAct reasoning
+- Implement main Agent class with smart memory selection
+- Set up ReAct reasoning with learning from failures
 - Integrate with AbstractLLM and AbstractMemory
+- Leverage BasicSession from AbstractLLM(core) for conversation tracking
+
+## Key Design Principles
+- **Leverage AbstractLLM(core)**: Use BasicSession for all conversation tracking
+- **Memory as a Lens**: Different users get different responses
+- **Learn from Failures**: Track and learn from failed actions
+- **No Over-engineering**: Simple agents use simple memory
 
 ## Steps
 
@@ -64,22 +71,22 @@ touch abstractagent/tools/__init__.py
 touch abstractagent/cli/__init__.py
 ```
 
-### 2. Implement Main Agent Class (45 min)
+### 2. Implement Main Agent Class with Smart Memory Selection (45 min)
 
 Create `abstractagent/agent.py`:
 ```python
 """
 Main Agent class - orchestrates LLM + Memory for autonomous behavior.
-This replaces the complex Session class.
+Smart memory selection based on agent purpose.
 """
 
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, Literal
 from datetime import datetime
 import logging
 
 from abstractllm import create_llm, BasicSession
 from abstractllm.types import GenerateResponse
-from abstractmemory import TemporalMemory
+from abstractmemory import create_memory, ScratchpadMemory, BufferMemory, GroundedMemory
 
 from .orchestration.coordinator import Coordinator
 from .reasoning.react import ReActOrchestrator
@@ -91,37 +98,84 @@ logger = logging.getLogger(__name__)
 
 class Agent:
     """
-    Autonomous agent with LLM + Memory + Reasoning.
-    Replaces the monolithic Session class with clean separation.
+    Intelligent agent with appropriate memory for its purpose.
+
+    Examples:
+        # Simple task agent with scratchpad
+        agent = Agent(
+            llm_config={"provider": "openai", "model": "gpt-4"},
+            memory_type="scratchpad",
+            purpose="task"
+        )
+
+        # Autonomous assistant with full memory
+        agent = Agent(
+            llm_config={"provider": "openai", "model": "gpt-4"},
+            memory_type="temporal",
+            purpose="assistant"
+        )
     """
 
     def __init__(self,
                  llm_config: Dict[str, Any],
+                 memory_type: Literal["none", "session", "scratchpad", "buffer", "grounded"] = "session",
                  memory_config: Optional[Dict[str, Any]] = None,
+                 purpose: Literal["task", "chat", "assistant"] = "task",
                  tools: Optional[List[Any]] = None,
                  enable_reasoning: bool = True,
-                 enable_retry: bool = True):
+                 enable_retry: bool = True,
+                 default_user: str = "default"):
         """
-        Initialize agent with components.
+        Initialize agent with appropriate memory for its purpose.
 
         Args:
             llm_config: Configuration for LLM provider
-            memory_config: Configuration for memory system
+            memory_type: Type of memory to use:
+                - "none": No memory beyond basic session
+                - "session": Use BasicSession from AbstractLLM (default)
+                - "scratchpad": For ReAct and task agents
+                - "buffer": For simple chatbots
+                - "grounded": For autonomous agents with user tracking
+            memory_config: Additional config for memory
+            purpose: Agent purpose (helps select memory if not specified)
             tools: List of tools available to agent
             enable_reasoning: Enable ReAct reasoning
             enable_retry: Enable retry strategies
+            default_user: Default user ID for grounded memory
         """
 
         # Initialize LLM
         self.llm = create_llm(**llm_config)
 
-        # Initialize basic session for conversation tracking
+        # Initialize basic session (always present for conversation tracking)
         self.session = BasicSession(self.llm)
 
-        # Initialize memory if configured
+        # Auto-select memory based on purpose if not specified
+        if memory_type == "session" and purpose != "task":
+            if purpose == "chat":
+                memory_type = "buffer"
+            elif purpose == "assistant":
+                memory_type = "grounded"  # Use grounded for autonomous agents
+
+        # Initialize appropriate memory
         self.memory = None
-        if memory_config:
-            self.memory = TemporalMemory(**memory_config)
+        self.current_user = default_user
+
+        if memory_type != "none" and memory_type != "session":
+            config = memory_config or {}
+
+            # Set sensible defaults based on memory type
+            if memory_type == "scratchpad":
+                config.setdefault("max_entries", 100)
+            elif memory_type == "buffer":
+                config.setdefault("max_messages", 100)
+            elif memory_type == "grounded":
+                config.setdefault("working_capacity", 10)
+                config.setdefault("enable_kg", True)
+                config.setdefault("default_user_id", default_user)
+
+            self.memory = create_memory(memory_type, **config)
+            logger.info(f"Initialized {memory_type} memory for {purpose} agent")
 
         # Initialize coordinator
         self.coordinator = Coordinator(self)
@@ -146,32 +200,58 @@ class Agent:
         self.interaction_count = 0
         self.total_tokens = 0
 
+    def set_user(self, user_id: str, relationship: Optional[str] = None):
+        """Set the current user for personalized interactions"""
+        self.current_user = user_id
+
+        # Update grounded memory if available
+        if isinstance(self.memory, GroundedMemory):
+            self.memory.set_current_user(user_id, relationship)
+            logger.info(f"Set current user to {user_id} ({relationship or 'unknown'})")
+
     def chat(self, prompt: str,
             use_reasoning: bool = False,
             use_tools: bool = False,
-            max_iterations: int = 5) -> str:
+            max_iterations: int = 5,
+            user_id: Optional[str] = None) -> str:
         """
-        Main interaction method.
+        Main interaction method with user-aware memory.
 
         Args:
             prompt: User input
             use_reasoning: Use ReAct reasoning
             use_tools: Enable tool usage
             max_iterations: Max reasoning iterations
+            user_id: Optional user ID for personalized interaction
 
         Returns:
             Agent's response
         """
         self.interaction_count += 1
 
-        # Get memory context if available
+        # Set user if provided
+        if user_id:
+            self.set_user(user_id)
+
+        # Get appropriate context based on memory type
         context = None
         if self.memory:
-            context = self.memory.retrieve_context(prompt)
+            if isinstance(self.memory, ScratchpadMemory):
+                # For ReAct agents, get recent cycle history
+                context = self.memory.get_context(last_n=10)
+            elif isinstance(self.memory, BufferMemory):
+                # For chatbots, get conversation history
+                context = self.memory.get_context(last_n=5)
+            elif isinstance(self.memory, GroundedMemory):
+                # For autonomous agents, get user-specific context
+                context = self.memory.get_full_context(prompt[:50], user_id=user_id or self.current_user)
+            elif hasattr(self.memory, 'get_full_context'):
+                # Fallback for other memory types
+                context = self.memory.get_full_context(prompt[:50])
 
         # Determine execution path
         if use_reasoning and self.reasoner:
-            # Use ReAct reasoning
+            # Use ReAct reasoning (typically with ScratchpadMemory)
             response = self.reasoner.execute(
                 prompt=prompt,
                 context=context,
@@ -192,13 +272,32 @@ class Agent:
                 context=context
             )
 
-        # Update memory if available
+        # Update memory based on type
         if self.memory:
-            self.memory.add_interaction(prompt, response)
+            if isinstance(self.memory, ScratchpadMemory):
+                # Track the exchange for task agents
+                self.memory.add(f"User: {prompt[:100]}", "exchange")
+                self.memory.add(f"Assistant: {response[:100]}", "exchange")
+            elif isinstance(self.memory, BufferMemory):
+                # Track full conversation for chatbots
+                self.memory.add_message('user', prompt)
+                self.memory.add_message('assistant', response)
+            elif isinstance(self.memory, GroundedMemory):
+                # Full memory update with user tracking
+                self.memory.add_interaction(prompt, response, user_id=user_id or self.current_user)
+            elif hasattr(self.memory, 'add_interaction'):
+                # Fallback for other memory types
+                self.memory.add_interaction(prompt, response)
 
-        # Update session history
+        # Update session history (leveraging BasicSession from AbstractLLM Core)
         self.session.add_message('user', prompt)
         self.session.add_message('assistant', response)
+
+        # Trigger memory consolidation for grounded memory
+        if isinstance(self.memory, GroundedMemory):
+            # Consolidate every 10 interactions
+            if self.interaction_count % 10 == 0:
+                self.memory.consolidate_memories()
 
         return response
 
@@ -232,15 +331,21 @@ class Agent:
 
         return {'action': 'respond', 'content': thought}
 
-    def observe(self, action_result: Any) -> str:
+    def observe(self, action_result: Any, action_context: Optional[str] = None) -> str:
         """
-        Process action result into observation.
+        Process action result into observation and track outcomes.
         Used by reasoning components.
         """
         if isinstance(action_result, dict):
             if action_result.get('error'):
+                # Track failure for learning
+                if isinstance(self.memory, GroundedMemory) and action_context:
+                    self.memory.track_failure(action_context, action_result['error'])
                 return f"Error: {action_result['error']}"
             if action_result.get('output'):
+                # Track success for reinforcement
+                if isinstance(self.memory, GroundedMemory) and action_context:
+                    self.memory.track_success(action_context, str(action_result['output'])[:50])
                 return f"Result: {action_result['output']}"
 
         return f"Observation: {action_result}"
@@ -391,8 +496,20 @@ logger = logging.getLogger(__name__)
 
 class ReActOrchestrator:
     """
-    Implements ReAct reasoning cycles.
-    This is NOT memory - it's orchestration.
+    Implements ReAct reasoning cycles with scratchpad memory.
+
+    Example usage:
+        # Agent with scratchpad for ReAct
+        agent = Agent(
+            llm_config={"provider": "openai"},
+            memory_type="scratchpad",
+            purpose="task"
+        )
+        result = agent.chat(
+            "Find the latest Python version",
+            use_reasoning=True,
+            use_tools=True
+        )
     """
 
     def __init__(self, agent):
@@ -404,7 +521,7 @@ class ReActOrchestrator:
                 tools: Optional[Any] = None,
                 max_iterations: int = 5) -> str:
         """
-        Execute ReAct reasoning cycle.
+        Execute ReAct reasoning cycle with scratchpad tracking.
 
         Pattern:
         1. Think about the problem
@@ -414,10 +531,12 @@ class ReActOrchestrator:
         """
         self.max_iterations = max_iterations
 
-        # Initialize cycle tracking
-        thoughts = []
-        actions = []
-        observations = []
+        # Use scratchpad if available for tracking
+        scratchpad = None
+        if self.agent.memory and isinstance(self.agent.memory, ScratchpadMemory):
+            scratchpad = self.agent.memory
+            # Clear scratchpad for new reasoning cycle
+            scratchpad.clear()
 
         current_prompt = prompt
         if context:
@@ -426,12 +545,14 @@ class ReActOrchestrator:
         for iteration in range(max_iterations):
             # THINK: Reason about the problem
             thought = self.agent.think(current_prompt)
-            thoughts.append(thought)
+            if scratchpad:
+                scratchpad.add_thought(thought)
             logger.debug(f"Iteration {iteration} - Thought: {thought[:100]}...")
 
             # ACT: Decide on action
             action = self.agent.act(thought, tools.get_tools() if tools else None)
-            actions.append(action)
+            if scratchpad and action.get('action') == 'tool':
+                scratchpad.add_action(action['tool'], action.get('arguments', {}))
 
             if action['action'] == 'tool' and tools:
                 # Execute tool
@@ -440,9 +561,13 @@ class ReActOrchestrator:
                     action.get('arguments', {})
                 )
 
-                # OBSERVE: Process tool result
-                observation = self.agent.observe(tool_result)
-                observations.append(observation)
+                # OBSERVE: Process tool result with context for learning
+                observation = self.agent.observe(
+                    tool_result,
+                    action_context=f"{action['tool']} in iteration {iteration}"
+                )
+                if scratchpad:
+                    scratchpad.add_observation(observation)
 
                 # Update prompt for next iteration
                 current_prompt = f"{prompt}\nObservation: {observation}"
@@ -738,6 +863,129 @@ def main():
 
 if __name__ == '__main__':
     main()
+```
+
+## Usage Examples
+
+### Example 1: Simple Task Agent with Scratchpad
+```python
+from abstractagent import Agent
+
+# Create a task agent with scratchpad memory
+agent = Agent(
+    llm_config={
+        "provider": "openai",
+        "model": "gpt-4"
+    },
+    memory_type="scratchpad",  # Lightweight memory for ReAct
+    purpose="task",
+    enable_reasoning=True
+)
+
+# Execute a task with reasoning
+result = agent.chat(
+    "Find information about Python async programming",
+    use_reasoning=True,
+    use_tools=True
+)
+
+# The scratchpad automatically tracks thought-action-observation cycles
+# No complex memory overhead for this simple task
+```
+
+### Example 2: Chatbot with Buffer Memory
+```python
+from abstractagent import Agent
+
+# Create a chatbot with simple buffer memory
+chatbot = Agent(
+    llm_config={
+        "provider": "openai",
+        "model": "gpt-3.5-turbo"
+    },
+    memory_type="buffer",  # Simple conversation history
+    memory_config={"max_messages": 50},
+    purpose="chat"
+)
+
+# Have a conversation
+response1 = chatbot.chat("What's the weather like?")
+response2 = chatbot.chat("What did I just ask about?")
+# Buffer memory maintains conversation context efficiently
+```
+
+### Example 3: Autonomous Assistant with Grounded Memory (User-Aware)
+```python
+from abstractagent import Agent
+
+# Create an autonomous assistant with multi-dimensional grounded memory
+assistant = Agent(
+    llm_config={
+        "provider": "openai",
+        "model": "gpt-4"
+    },
+    memory_type="grounded",  # Multi-dimensional memory with WHO, WHEN, WHERE
+    memory_config={
+        "working_capacity": 10,
+        "enable_kg": True  # Knowledge graph for relationships
+    },
+    purpose="assistant"
+)
+
+# Interaction with Alice
+assistant.set_user("alice", relationship="owner")
+response = assistant.chat(
+    "My name is Alice and I love Python. I work at TechCorp",
+    user_id="alice"
+)
+# Memory learns: Alice loves Python, works at TechCorp
+
+# Later interaction with Bob
+assistant.set_user("bob", relationship="colleague")
+response = assistant.chat(
+    "I prefer Java and work at StartupInc",
+    user_id="bob"
+)
+# Memory learns: Bob prefers Java, works at StartupInc
+
+# When Alice returns
+response = assistant.chat(
+    "What programming language should I use for my project?",
+    user_id="alice"
+)
+# Agent knows Alice loves Python and responds accordingly
+
+# When Bob asks the same question
+response = assistant.chat(
+    "What programming language should I use for my project?",
+    user_id="bob"
+)
+# Agent knows Bob prefers Java and responds differently
+
+# The agent provides personalized responses based on WHO is asking
+```
+
+### Example 4: Tool-only Agent (No Extra Memory)
+```python
+from abstractagent import Agent
+
+# Create a tool agent that just uses BasicSession
+tool_agent = Agent(
+    llm_config={
+        "provider": "openai",
+        "model": "gpt-3.5-turbo"
+    },
+    memory_type="session",  # Just BasicSession from AbstractLLM
+    purpose="task",
+    tools=[calculator_tool, search_tool]
+)
+
+# Execute tool calls without memory overhead
+result = tool_agent.chat(
+    "Calculate 15% of 2500",
+    use_tools=True
+)
+# No unnecessary memory for this simple calculation
 ```
 
 ## Validation
